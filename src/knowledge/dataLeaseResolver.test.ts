@@ -51,6 +51,21 @@ describe("cross-case data lease resolution", () => {
     })).toBeUndefined();
   });
 
+  it("does not select the first of multiple matching direct leases", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const current = executableCase("case-current", "intent-edit");
+    repository.executableCases.push(current);
+    repository.testDataLeases.push(
+      { ...dataLease(current.id), id: "lease-current-a" },
+      { ...dataLease(current.id), id: "lease-current-b" }
+    );
+
+    expect(findActiveTestDataLease(repository, current, "system-hr", {
+      profileId: "profile-employee",
+      reference: "employee:001"
+    })).toBeUndefined();
+  });
+
   it("does not resolve a SuiteRun dependency from a lease owned by another run", () => {
     const repository = new InMemoryBrainCreatorRepository();
     const producer = executableCase("case-producer", "intent-create");

@@ -17,7 +17,7 @@ export function findActiveTestDataLease(
   operation: Pick<ExecutableCaseDataOperation, "profileId" | "reference" | "entityReference">,
   requirementSuiteRunId?: string
 ): TestDataLease | undefined {
-  const direct = repository.testDataLeases.find(
+  const direct = repository.testDataLeases.filter(
     (lease) =>
       lease.knowledgeProjectId === executableCase.knowledgeProjectId &&
       lease.systemId === systemId &&
@@ -28,7 +28,8 @@ export function findActiveTestDataLease(
       (!requirementSuiteRunId || lease.requirementSuiteRunId === requirementSuiteRunId) &&
       lease.status === "active"
   );
-  if (direct) return direct;
+  if (direct.length === 1) return direct[0];
+  if (direct.length > 1) return undefined;
   if (!operation.entityReference) return undefined;
 
   const producerIntentIds = new Set(
