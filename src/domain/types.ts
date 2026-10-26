@@ -1346,6 +1346,7 @@ export type TestDataTask = {
   reconciliationSourceRefs?: string[];
   reconciliationContextRefs?: string[];
   reconciliationVerification?: {
+    status: "absent" | "present";
     provider: string;
     query: string;
     evidenceRefs: string[];

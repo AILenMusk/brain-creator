@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { randomInt } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,11 +20,25 @@ import type {
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import { BrainCreatorService } from "../domain/service.js";
 import { KnowledgeService } from "../knowledge/service.js";
+import { InMemoryTestDataProvider, type TestDataProviderRequest } from "../brain/testdata.js";
 import { RequirementSuiteRunService } from "../knowledge/requirementSuiteRun.js";
 import { summarizeStabilityRuns } from "../mcp/handlers.js";
 import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "../mcp/handlers.js";
 
 const tempDirs: string[] = [];
+
+class EvidenceBackedRegressionProvider extends InMemoryTestDataProvider {
+  override async lookup(input: Parameters<InMemoryTestDataProvider["lookup"]>[0]) {
+    const result = await super.lookup(input);
+    if (!result) return result;
+    const matches = Array.isArray(result) ? result : [result];
+    const evidenced = matches.map((match) => ({
+      ...match,
+      sourceRefs: [`regression-target-query:${match.reference}`]
+    }));
+    return Array.isArray(result) ? evidenced : evidenced[0];
+  }
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -100,9 +114,43 @@ describe("real system regression samples", () => {
     try {
       const workDir = await tempDir("brain-regression-auth-");
       let refreshCount = 0;
+      const targetDataProvider = new EvidenceBackedRegressionProvider("regression-target-provider");
       const context = createBrainCreatorMcpContext({
         workDir,
         dataFilePath: join(workDir, "assets.json"),
+        testDataProviders: [targetDataProvider],
+        testDataNoEffectVerifier: async ({ task, system, query }) => {
+          const observed = await targetDataProvider.lookup({
+            systemId: system.id,
+            reference: query,
+            sourceRefs: []
+          });
+          const matches = Array.isArray(observed) ? observed : observed ? [observed] : [];
+          const result = matches.length === 0 ? "absent" as const : "present" as const;
+          const checkedAt = new Date().toISOString();
+          const evidencePath = `.brain-creator/testdata-reconciliation/${task.id}.json`;
+          const contents = JSON.stringify({
+            schemaVersion: 1,
+            type: "testdata-no-effect-observation",
+            systemId: system.id,
+            query,
+            result,
+            matchCount: matches.length,
+            ...(matches.length === 1 ? { reference: matches[0]!.reference } : {}),
+            provider: targetDataProvider.name,
+            checkedAt
+          });
+          await mkdir(join(workDir, ".brain-creator", "testdata-reconciliation"), { recursive: true });
+          await writeFile(join(workDir, evidencePath), contents, "utf8");
+          return {
+            status: result,
+            provider: targetDataProvider.name,
+            query,
+            evidenceRefs: [`regression-target-query:${query}:${result}`],
+            evidenceArtifacts: [{ path: evidencePath.slice(".brain-creator/".length), sha256: createHash("sha256").update(contents).digest("hex") }],
+            checkedAt
+          };
+        },
         authStateMaterializer: async ({ authProfile }) => {
           const path = `.brain-creator/auth/${authProfile.id}/expired.json`;
           await writeStorageState(join(workDir, path), fixture.host, "expired");
@@ -210,7 +258,15 @@ describe("real system regression samples", () => {
       });
       expect(prepared.status).toBe("needs-agent-execution");
       context.testDataProvider.markSent(prepared.task!.id);
-      const created = context.testDataProvider.submit({
+      await targetDataProvider.create({
+        systemId: system.id,
+        knowledgeProjectId: project.id,
+        entityType: "demand",
+        reference: "demand:regression-001",
+        values: { Demand: "Regression demand" },
+        sourceRefs: ["browser:fixture/create-demand.json"]
+      } satisfies TestDataProviderRequest);
+      const created = await context.testDataProvider.submit({
         taskId: prepared.task!.id,
         status: "succeeded",
         decision: "create",
@@ -248,12 +304,17 @@ describe("real system regression samples", () => {
       expect(cleanupNotice.message).toContain("demand:regression-001");
       context.testDataProvider.acknowledgeCleanupNotice(cleanup.task!.id, cleanupNotice.sha256);
       context.testDataProvider.markSent(cleanup.task!.id);
-      const released = context.testDataProvider.submit({
-        taskId: cleanup.task!.id,
-        status: "succeeded",
+      await targetDataProvider.cleanup({
+        systemId: system.id,
+        knowledgeProjectId: project.id,
+        reference: "demand:regression-001",
         sourceRefs: ["browser:fixture/delete-demand.json"]
       });
-      expect(released.lease?.status).toBe("released");
+      await context.testDataProvider.reconcileNotApplied(
+        cleanup.task!.id,
+        ["browser:fixture/delete-demand.json"]
+      );
+      expect(context.repository.testDataLeases[0]?.status).toBe("released");
       expect(context.repository.testDataLeases.every((lease) => lease.status === "released")).toBe(true);
     } finally {
       await fixture.close();

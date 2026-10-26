@@ -12,10 +12,24 @@ import type {
   TestIntent
 } from "../domain/types.js";
 import type { EvaluationTrial } from "../brain/types.js";
+import { InMemoryTestDataProvider, type TestDataProviderRequest } from "../brain/testdata.js";
 import type { TestDataNoEffectVerifier } from "../knowledge/testDataProvider.js";
 import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "./handlers.js";
 
 const tempDirs: string[] = [];
+
+class EvidenceBackedFlowProvider extends InMemoryTestDataProvider {
+  override async lookup(input: Parameters<InMemoryTestDataProvider["lookup"]>[0]) {
+    const result = await super.lookup(input);
+    if (!result) return result;
+    const matches = Array.isArray(result) ? result : [result];
+    const evidenced = matches.map((match) => ({
+      ...match,
+      sourceRefs: [`flow-target-query:${match.reference}`]
+    }));
+    return Array.isArray(result) ? evidenced : evidenced[0];
+  }
+}
 
 function fixtureNoEffectVerifier(
   workDir: string,
@@ -46,6 +60,40 @@ function fixtureNoEffectVerifier(
       provider: "fixture-target-query",
       query,
       evidenceRefs: [`system-query:${task.id}:not-found`],
+      evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
+      checkedAt
+    };
+  };
+}
+
+function targetStateVerifier(
+  workDir: string,
+  provider: EvidenceBackedFlowProvider
+): TestDataNoEffectVerifier {
+  return async ({ task, system, query }) => {
+    const observed = await provider.lookup({ systemId: system.id, reference: query, sourceRefs: [] });
+    const matches = Array.isArray(observed) ? observed : observed ? [observed] : [];
+    const result = matches.length === 0 ? "absent" as const : "present" as const;
+    const checkedAt = new Date().toISOString();
+    const evidencePath = `target-state/${task.id}.json`;
+    const contents = JSON.stringify({
+      schemaVersion: 1,
+      type: "testdata-no-effect-observation",
+      systemId: system.id,
+      query,
+      result,
+      matchCount: matches.length,
+      ...(matches.length === 1 ? { reference: matches[0]!.reference } : {}),
+      provider: provider.name,
+      checkedAt
+    });
+    await mkdir(join(workDir, ".brain-creator", "target-state"), { recursive: true });
+    await writeFile(join(workDir, ".brain-creator", evidencePath), contents, "utf8");
+    return {
+      status: result,
+      provider: provider.name,
+      query,
+      evidenceRefs: [`flow-target-query:${query}:${result}`],
       evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
       checkedAt
     };
@@ -1265,9 +1313,11 @@ describe("Brain Creator requirement-first facade", () => {
 
   it("prepares and submits test data through the requirement Facade", async () => {
     const workDir = await tempDir();
+    const targetDataProvider = new EvidenceBackedFlowProvider("facade-target-provider");
     const context = createBrainCreatorMcpContext({
       workDir,
       dataFilePath: join(workDir, "assets.json"),
+      testDataProviders: [targetDataProvider],
       testDataNoEffectVerifier: fixtureNoEffectVerifier(workDir)
     });
     const system = context.service.createSystemProfile({
@@ -1434,6 +1484,14 @@ describe("Brain Creator requirement-first facade", () => {
       action: "mark-test-data-sent",
       taskId: prepared.task.id
     }));
+    await targetDataProvider.create({
+      knowledgeProjectId: project.id,
+      systemId: system.id,
+      entityType: "customer",
+      reference: "customer:new-42",
+      values: { Customer: "New Customer" },
+      sourceRefs: ["fixture-create:customer-new-42"]
+    } satisfies TestDataProviderRequest);
 
     const submitted = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
@@ -2382,6 +2440,7 @@ describe("Brain Creator requirement-first facade", () => {
 
   it("prepares and cleans created test data inside a requirement suite", async () => {
     const workDir = await tempDir();
+    const targetDataProvider = new EvidenceBackedFlowProvider("suite-target-provider");
     const bridge = Object.assign(
       async () => ({ exitCode: 0, stdout: "ok", stderr: "" }),
       { provider: "host-agent", preflight: async () => ({ ok: true }) }
@@ -2389,7 +2448,8 @@ describe("Brain Creator requirement-first facade", () => {
     const context = createBrainCreatorMcpContext({
       workDir,
       dataFilePath: join(workDir, "assets.json"),
-      testDataNoEffectVerifier: fixtureNoEffectVerifier(workDir, ["present", "absent"]),
+      testDataProviders: [targetDataProvider],
+      testDataNoEffectVerifier: targetStateVerifier(workDir, targetDataProvider),
       agentBridge: bridge,
       runner: async () => ({
         exitCode: 0,
@@ -2612,6 +2672,14 @@ describe("Brain Creator requirement-first facade", () => {
       action: "mark-test-data-sent",
       taskId: prepared.task.id
     }));
+    await targetDataProvider.create({
+      knowledgeProjectId: "knowledge-data-suite",
+      systemId: "system-data-suite",
+      entityType: "customer",
+      reference: "customer:new-1",
+      values: { Customer: "Suite Customer" },
+      sourceRefs: ["fixture-create:customer-new-1"]
+    } satisfies TestDataProviderRequest);
 
     const secondDataPreparation = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
@@ -2634,6 +2702,14 @@ describe("Brain Creator requirement-first facade", () => {
       action: "mark-test-data-sent",
       taskId: secondDataPreparation.task.id
     }));
+    await targetDataProvider.create({
+      knowledgeProjectId: "knowledge-data-suite",
+      systemId: "system-data-suite",
+      entityType: "order",
+      reference: "order:new-1",
+      values: { Order: "New order" },
+      sourceRefs: ["fixture-create:order-new-1"]
+    } satisfies TestDataProviderRequest);
     const generated = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
       action: "submit-test-data",
       taskId: secondDataPreparation.task.id,
@@ -2769,6 +2845,14 @@ describe("Brain Creator requirement-first facade", () => {
       action: "mark-test-data-sent",
       taskId: cleanupRetry.task.id
     }));
+    const retryLease = context.repository.testDataLeases.find((lease) => lease.id === cleanupRetry.task.leaseId);
+    expect(retryLease).toBeDefined();
+    await targetDataProvider.cleanup({
+      knowledgeProjectId: "knowledge-data-suite",
+      systemId: "system-data-suite",
+      reference: retryLease!.reference,
+      sourceRefs: [`fixture-cleanup:${retryLease!.reference}`]
+    });
 
     const nextCleanup = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
@@ -2797,11 +2881,18 @@ describe("Brain Creator requirement-first facade", () => {
       action: "mark-test-data-sent",
       taskId: nextCleanup.task.id
     }));
+    const finalCleanupLease = context.repository.testDataLeases.find((lease) => lease.id === nextCleanup.task.leaseId);
+    expect(finalCleanupLease).toBeDefined();
+    await targetDataProvider.cleanup({
+      knowledgeProjectId: "knowledge-data-suite",
+      systemId: "system-data-suite",
+      reference: finalCleanupLease!.reference,
+      sourceRefs: [`fixture-cleanup:${finalCleanupLease!.reference}`]
+    });
     const completed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
-      action: "submit-test-data",
+      action: "reconcile-test-data-no-effect",
       taskId: nextCleanup.task.id,
-      taskStatus: "succeeded",
-      sourceRefs: ["browser:cleanup/order-new-1.json"]
+      sourceRefs: [`query:cleanup/${finalCleanupLease!.reference}-absent`]
     }));
 
     expect(completed.requirementSuiteRun).toEqual(

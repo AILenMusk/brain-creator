@@ -264,6 +264,29 @@ export class TestDataBrainService {
     return { ...enriched, entityId };
   }
 
+  async lookupVerified(input: Omit<TestDataProviderRequest, "sourceRefs"> & { sourceRefs?: string[] }) {
+    const normalized = { ...input, sourceRefs: input.sourceRefs ?? [] };
+    const provider = this.provider(normalized);
+    const startedAt = new Date().toISOString();
+    const lookupResult = await provider.lookup(normalized);
+    const matches = Array.isArray(lookupResult) ? lookupResult : lookupResult ? [lookupResult] : [];
+    if (matches.length !== 1) {
+      throw new Error(`Target test data verification returned ${matches.length} matches; exactly one entity is required`);
+    }
+    const result = matches[0]!;
+    validateProviderResult(normalized, result, "found");
+    if (Object.entries(input.expected ?? {}).some(([key, value]) => result.values?.[key] !== value)) {
+      throw new Error("Target test data verification did not return the expected business values");
+    }
+    const evidenceRefs = unique(result.sourceRefs.map((item) => item.trim()).filter(Boolean));
+    if (evidenceRefs.length === 0) {
+      throw new Error("Target test data verification requires provider-owned evidence references");
+    }
+    const enriched = { ...result, sourceRefs: evidenceRefs, provider: result.provider ?? provider.name };
+    const entityId = this.upsertEntity(normalized, enriched, "lookup", startedAt);
+    return { ...enriched, entityId };
+  }
+
   async create(input: Omit<TestDataProviderRequest, "sourceRefs"> & { sourceRefs?: string[] }) {
     const normalized = { ...input, sourceRefs: input.sourceRefs ?? [] };
     const provider = this.provider(normalized);

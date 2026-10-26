@@ -229,7 +229,7 @@ export class TestDataProviderService {
     };
   }
 
-  submit(input: SubmitInput): TestDataSubmitResult {
+  async submit(input: SubmitInput): Promise<TestDataSubmitResult> {
     const task = this.repository.testDataTasks.find((item) => item.id === input.taskId);
     if (!task) throw new Error("Test data task not found");
     const executableCase = this.repository.executableCases.find(
@@ -296,18 +296,23 @@ export class TestDataProviderService {
     if (task.action === "cleanup") {
       if (!task.leaseId) throw new Error("Cleanup task has no data lease");
       const lease = this.getLease(task.leaseId);
+      const verification = task.reconciliationVerification;
+      if (verification?.status !== "absent" || verification.query !== lease.reference || verification.artifactHashes.length === 0) {
+        throw new Error("Successful cleanup requires target-backed evidence that the exact leased entity is absent");
+      }
+      const cleanupSourceRefs = unique([...sourceRefs, ...verification.evidenceRefs]);
       const now = timestamp();
       task.operationPhase = "reconciled-applied";
       lease.status = "released";
       lease.releasedAt = now;
       lease.updatedAt = now;
-      lease.sourceRefs = unique([...lease.sourceRefs, ...sourceRefs]);
-      this.completeTask(task, sourceRefs, now);
+      lease.sourceRefs = unique([...lease.sourceRefs, ...cleanupSourceRefs]);
+      this.completeTask(task, cleanupSourceRefs, now);
       this.testDataBrain?.releaseExternal({
         knowledgeProjectId: task.knowledgeProjectId,
         systemId: task.systemId,
         reference: lease.reference,
-        sourceRefs
+        sourceRefs: cleanupSourceRefs
       });
       this.resolveCleanupGaps(lease.id, now);
       this.repository.persist();
@@ -326,6 +331,25 @@ export class TestDataProviderService {
     if (input.decision === "create" && task.cleanup === "none") {
       throw new Error("Created test data requires an explicit cleanup policy");
     }
+
+    this.assertDependencyLeases(executableCase, task);
+    if (!this.testDataBrain) {
+      throw new Error("Successful test data resolution requires a target-backed Testdata provider");
+    }
+    const verification = await this.testDataBrain.lookupVerified({
+      knowledgeProjectId: task.knowledgeProjectId,
+      systemId: task.systemId,
+      entityType: entityTypeFromReference(input.reference.trim()) ?? task.field,
+      reference: input.reference.trim(),
+      ...(task.entityReference ? { entityReference: task.entityReference } : {}),
+      ...(input.value?.trim() ? { expected: { [task.field]: input.value.trim() } } : {}),
+      sourceRefs: []
+    });
+    const verifiedSourceRefs = cleanSourceRefs(verification.sourceRefs);
+    if (!verification.provider?.trim() || verifiedSourceRefs.length === 0) {
+      throw new Error("Target test data verification is missing its provider or evidence references");
+    }
+    const resultSourceRefs = unique([...sourceRefs, ...verifiedSourceRefs]);
 
     const resolved = this.knowledgeService.resolveExecutableCaseTestData({
       executableCaseId: executableCase.id,
@@ -358,13 +382,13 @@ export class TestDataProviderService {
       decision: input.decision,
       reference: input.reference.trim(),
       value: input.value?.trim() || undefined,
-      sourceRefs,
+      sourceRefs: resultSourceRefs,
       now,
       ...(reusedFromLease ? { reusedFromLeaseId: reusedFromLease.id } : {})
     });
-    this.recordExternalData(resolved.executableCase, task, lease, sourceRefs);
+    this.linkDataDependencies(resolved.executableCase, task, lease, resultSourceRefs);
     task.leaseId = lease.id;
-    this.completeTask(task, sourceRefs, now);
+    this.completeTask(task, resultSourceRefs, now);
     this.repository.persist();
     return { task, executableCase: resolved.executableCase, lease };
   }
@@ -509,6 +533,7 @@ export class TestDataProviderService {
       task.cleanupNoticeAcknowledgedAt = undefined;
     }
     task.reconciliationVerification = {
+      status: verification.status,
       provider: verification.provider.trim(),
       query,
       evidenceRefs: verifiedRefs,
@@ -522,7 +547,7 @@ export class TestDataProviderService {
     ]);
     task.updatedAt = now;
     if (alreadyApplied) {
-      this.submit({
+      await this.submit({
         taskId: task.id,
         status: "succeeded",
         sourceRefs: unique([...verifiedRefs, ...cleanSourceRefs(sourceRefs)])
@@ -745,7 +770,7 @@ export class TestDataProviderService {
         task.cleanupNoticeSha256 ? `Cleanup notice SHA-256: ${task.cleanupNoticeSha256}` : "",
         "Do not modify unrelated business data.",
         ...recovery,
-        "Return source evidence that proves the cleanup result."
+        "After cleanup, verify by a read-only query that this exact leased entity is absent, then call bc_prepare action=reconcile-test-data-no-effect with the verification evidence. Do not report cleanup as complete from the write response alone."
       ].join("\n");
     }
     return [
@@ -913,24 +938,13 @@ export class TestDataProviderService {
     });
   }
 
-  private recordExternalData(
+  private linkDataDependencies(
     executableCase: ExecutableCase,
     task: TestDataTask,
     lease: TestDataLease,
     sourceRefs: string[]
   ) {
     if (!this.testDataBrain) return;
-    this.testDataBrain.recordExternal({
-      knowledgeProjectId: task.knowledgeProjectId,
-      systemId: task.systemId,
-      entityType: entityTypeFromReference(lease.reference) ?? task.field,
-      reference: lease.reference,
-      entityReference: task.entityReference,
-      values: task.field && lease.value !== undefined
-        ? { [task.field]: lease.value }
-        : undefined,
-      sourceRefs: [...task.sourceRefs, ...sourceRefs]
-    });
     const operation = executableCase.dataPlan?.operations.find(
       (candidate) => candidate.profileId === task.profileId
     );

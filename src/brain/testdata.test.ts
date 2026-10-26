@@ -89,6 +89,57 @@ describe("Testdata Brain", () => {
     expect(repository.businessEntityInstances).toHaveLength(1);
   });
 
+  it("records only a unique target lookup that includes provider-owned evidence", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      entityReference: "order:approved-target",
+      values: { status: "pending" },
+      sourceRefs: ["target-query:orders/order-1"]
+    });
+
+    await expect(service.lookupVerified({
+      systemId: "system-orders",
+      knowledgeProjectId: "project-orders",
+      entityType: "order",
+      reference: "system-orders:order:1",
+      entityReference: "order:approved-target",
+      sourceRefs: []
+    })).resolves.toEqual(expect.objectContaining({
+      reference: "system-orders:order:1",
+      provider: "fixture-provider",
+      sourceRefs: ["target-query:orders/order-1"]
+    }));
+    expect(repository.businessEntityInstances).toEqual([
+      expect.objectContaining({
+        entityKey: "system-orders:order:1",
+        sourceRefs: ["target-query:orders/order-1"],
+        lifecycleEvents: [expect.objectContaining({ operation: "lookup" })]
+      })
+    ]);
+  });
+
+  it("does not record an unverified target lookup without provider evidence", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      sourceRefs: []
+    });
+
+    await expect(service.lookupVerified({
+      systemId: "system-orders",
+      reference: "system-orders:order:1",
+      sourceRefs: []
+    })).rejects.toThrow("provider-owned evidence references");
+    expect(repository.businessEntityInstances).toEqual([]);
+  });
+
   it("does not release an entity when cleanup returns another entity or only a lookup result", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");

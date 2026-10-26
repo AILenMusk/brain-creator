@@ -16,12 +16,30 @@ import type {
 } from "../domain/types.js";
 import {
   InMemoryTestDataProvider,
-  TestDataBrainService
+  TestDataBrainService,
+  type TestDataProviderRequest
 } from "../brain/testdata.js";
 import { KnowledgeService } from "./service.js";
-import { TestDataProviderService, type TestDataNoEffectVerifier } from "./testDataProvider.js";
+import {
+  TestDataProviderService,
+  type TestDataNoEffectVerifier,
+  type TestDataSubmitResult
+} from "./testDataProvider.js";
 
 const tempDirs: string[] = [];
+
+class EvidenceBackedFixtureProvider extends InMemoryTestDataProvider {
+  override async lookup(input: Parameters<InMemoryTestDataProvider["lookup"]>[0]) {
+    const result = await super.lookup(input);
+    if (!result) return result;
+    const matches = Array.isArray(result) ? result : [result];
+    const evidenced = matches.map((match) => ({
+      ...match,
+      sourceRefs: [`fixture-target-query:${match.reference}`]
+    }));
+    return Array.isArray(result) ? evidenced : evidenced[0];
+  }
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -300,7 +318,7 @@ describe("TestDataProviderService", () => {
       task: expect.objectContaining({ action: "cleanup", leaseId: producerLease.id })
     }));
     expect(secondConsumerLease?.status).toBe("released");
-    submitDataTask(fixture, {
+    await submitDataTask(fixture, {
       taskId: cleanup.task!.id,
       status: "succeeded",
       sourceRefs: ["api:cleanup/employee-001"]
@@ -496,12 +514,12 @@ describe("TestDataProviderService", () => {
     expect(() => fixture.provider.markSent(task.id)).toThrow(/reconcile/i);
     const resumed = await fixture.provider.prepare(input);
     expect(resumed).toMatchObject({ status: "reconciliation-required", task: { id: task.id } });
-    expect(() => fixture.provider.submit({
+    await expect(fixture.provider.submit({
       taskId: task.id,
       status: "failed",
       error: "The response was lost",
       sourceRefs: ["provider:timeout"]
-    })).toThrow(/read-only evidence/i);
+    })).rejects.toThrow(/read-only evidence/i);
 
     await fixture.provider.reconcileNotApplied(task.id, ["operator-note:lookup-attempt"]);
     expect(task.reconciliationVerification).toEqual(expect.objectContaining({
@@ -517,8 +535,7 @@ describe("TestDataProviderService", () => {
     expect(task.reconciliationContextRefs).toEqual(["operator-note:lookup-attempt"]);
     const retry = await fixture.provider.prepare(input);
     expect(retry).toMatchObject({ status: "needs-agent-execution", task: { id: task.id } });
-    fixture.provider.markSent(task.id);
-    const submitted = fixture.provider.submit({
+    const submitted = await submitDataTask(fixture, {
       taskId: task.id,
       status: "succeeded",
       decision: "create",
@@ -528,10 +545,11 @@ describe("TestDataProviderService", () => {
 
     expect(fixture.repository.testDataTasks).toHaveLength(1);
     expect(submitted.task.operationPhase).toBe("reconciled-applied");
-    expect(submitted.task.outputSourceRefs).toEqual([
+    expect(submitted.task.outputSourceRefs).toEqual(expect.arrayContaining([
       "system-query:customer-not-found",
-      "system-query:customer-created"
-    ]);
+      "system-query:customer-created",
+      "fixture-target-query:customer:retried-once"
+    ]));
   });
 
   it("reconciles an already-applied cleanup without dispatching a second cleanup", async () => {
@@ -571,7 +589,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const created = submitDataTask(fixture, {
+    const created = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -767,7 +785,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
 
-    expect(() =>
+    await expect(
       submitDataTask(fixture, {
         taskId: prepared.task!.id,
         status: "succeeded",
@@ -776,7 +794,7 @@ describe("TestDataProviderService", () => {
         value: "New Customer",
         sourceRefs: ["browser:evidence/customer-new-1.json"]
       })
-    ).toThrow("not allowed");
+    ).rejects.toThrow("not allowed");
   });
 
   it("resolves the executable case from a reused data reference and records a lease", async () => {
@@ -788,7 +806,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
 
-    const result = submitDataTask(fixture, {
+    const result = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -804,7 +822,10 @@ describe("TestDataProviderService", () => {
         reference: "customer:42",
         cleanup: "none",
         status: "active",
-        sourceRefs: ["api:customers/42"]
+        sourceRefs: expect.arrayContaining([
+          "api:customers/42",
+          "fixture-target-query:customer:42"
+        ])
       })
     );
     expect(result.executableCase.dataPlan).toEqual(
@@ -849,6 +870,88 @@ describe("TestDataProviderService", () => {
     );
   });
 
+  it("does not create a ready lease from host references without a unique target lookup", async () => {
+    const fixture = await providerFixture();
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true
+    });
+    fixture.provider.markSent(prepared.task!.id);
+
+    await expect(fixture.provider.submit({
+      taskId: prepared.task!.id,
+      status: "succeeded",
+      decision: "reuse",
+      reference: "customer:not-present",
+      sourceRefs: ["host-assertion:customer-not-present"]
+    })).rejects.toThrow("exactly one entity is required");
+
+    expect(fixture.repository.testDataLeases).toEqual([]);
+    expect(fixture.executableCase.status).toBe("blocked");
+    expect(fixture.repository.businessEntityInstances).toEqual([]);
+  });
+
+  it("does not choose the first entity when target verification returns multiple matches", async () => {
+    const fixture = await providerFixture();
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true
+    });
+    fixture.provider.markSent(prepared.task!.id);
+    fixture.targetProvider.lookup = async () => [
+      { status: "found", reference: "customer:match-1", sourceRefs: ["target-query:customers"] },
+      { status: "found", reference: "customer:match-2", sourceRefs: ["target-query:customers"] }
+    ];
+
+    await expect(fixture.provider.submit({
+      taskId: prepared.task!.id,
+      status: "succeeded",
+      decision: "reuse",
+      reference: "customer:match-1",
+      sourceRefs: ["host-assertion:customer-match-1"]
+    })).rejects.toThrow("returned 2 matches");
+
+    expect(fixture.repository.testDataLeases).toEqual([]);
+    expect(fixture.executableCase.status).toBe("blocked");
+    expect(fixture.repository.businessEntityInstances).toEqual([]);
+  });
+
+  it("does not lease a target entity whose queried business value differs", async () => {
+    const fixture = await providerFixture();
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true
+    });
+    await fixture.targetProvider.create({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      entityType: "customer",
+      reference: "customer:wrong-value",
+      values: { Customer: "Different Customer" },
+      sourceRefs: ["fixture-seed:wrong-value"]
+    });
+    fixture.provider.markSent(prepared.task!.id);
+
+    await expect(fixture.provider.submit({
+      taskId: prepared.task!.id,
+      status: "succeeded",
+      decision: "reuse",
+      reference: "customer:wrong-value",
+      value: "Expected Customer",
+      sourceRefs: ["host-assertion:expected-customer"]
+    })).rejects.toThrow("expected business values");
+
+    expect(fixture.repository.testDataLeases).toEqual([]);
+    expect(fixture.executableCase.status).toBe("blocked");
+    expect(fixture.repository.businessEntityInstances).toEqual([]);
+  });
+
   it("keeps a case stale after its data is resolved", async () => {
     const fixture = await providerFixture();
     fixture.executableCase.status = "stale";
@@ -862,7 +965,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const result = submitDataTask(fixture, {
+    const result = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -892,7 +995,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    expect(() =>
+    await expect(
       submitDataTask(fixture, {
         taskId: prepared.task!.id,
         status: "succeeded",
@@ -900,7 +1003,7 @@ describe("TestDataProviderService", () => {
         reference: "customer:42",
         sourceRefs: []
       })
-    ).toThrow("source evidence");
+    ).rejects.toThrow("source evidence");
   });
 
   it("creates a provider gap when the host agent cannot prepare data", async () => {
@@ -936,7 +1039,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const recovered = submitDataTask(fixture, {
+    const recovered = await submitDataTask(fixture, {
       taskId: retry.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -957,7 +1060,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const submitted = submitDataTask(fixture, {
+    const submitted = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -996,7 +1099,7 @@ describe("TestDataProviderService", () => {
         status: "pending"
       })
     );
-    const completed = submitDataTask(fixture, {
+    const completed = await submitDataTask(fixture, {
       taskId: cleanup.task!.id,
       status: "succeeded",
       sourceRefs: ["browser:cleanup/customer-new-3.json"]
@@ -1004,6 +1107,47 @@ describe("TestDataProviderService", () => {
     expect(completed.lease).toEqual(
       expect.objectContaining({ status: "released", releasedAt: expect.any(String) })
     );
+  });
+
+  it("does not release a created-data lease from cleanup source references alone", async () => {
+    const fixture = await providerFixture();
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const created = await submitDataTask(fixture, {
+      taskId: prepared.task!.id,
+      status: "succeeded",
+      decision: "create",
+      reference: "customer:cleanup-check",
+      sourceRefs: ["host-write:customer-created"]
+    });
+    fixture.repository.executionEvidence.push(executionEvidence(
+      fixture.executableCase.id,
+      "evidence-cleanup-check",
+      created.lease!.createdAt,
+      new Date(Date.now() + 1000).toISOString()
+    ));
+    const cleanup = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true
+    });
+    acknowledgeCleanupNoticeIfNeeded(fixture, cleanup.task!.id);
+    fixture.provider.markSent(cleanup.task!.id);
+
+    await expect(fixture.provider.submit({
+      taskId: cleanup.task!.id,
+      status: "succeeded",
+      sourceRefs: ["host-write:cleanup-returned-success"]
+    })).rejects.toThrow("target-backed evidence");
+
+    expect(created.lease!.status).toBe("active");
+    expect(cleanup.task!.status).toBe("pending");
   });
 
   it("releases reused data during cleanup without dispatching a new lookup", async () => {
@@ -1014,7 +1158,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const submitted = submitDataTask(fixture, {
+    const submitted = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -1065,7 +1209,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const submitted = submitDataTask(fixture, {
+    const submitted = await submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -1123,7 +1267,7 @@ describe("TestDataProviderService", () => {
     );
     expect(retry.task!.id).not.toBe(cleanup.task!.id);
 
-    submitDataTask(fixture, {
+    await submitDataTask(fixture, {
       taskId: retry.task!.id,
       status: "succeeded",
       sourceRefs: ["api:cleanup/customer-new-4-retry"]
@@ -1188,7 +1332,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const employee = submitDataTask(fixture, {
+    const employee = await submitDataTask(fixture, {
       taskId: first.task!.id,
       status: "succeeded",
       decision: "create",
@@ -1205,7 +1349,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    submitDataTask(fixture, {
+    await submitDataTask(fixture, {
       taskId: second.task!.id,
       status: "succeeded",
       decision: "create",
@@ -1265,13 +1409,13 @@ describe("TestDataProviderService", () => {
       allowCreate: true
     });
 
-    expect(() => submitDataTask(fixture, {
+    await expect(submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
       reference: "offer:missing-parent",
       sourceRefs: ["evidence:offer-created"]
-    })).toThrow("dependency lease");
+    })).rejects.toThrow("dependency lease");
     expect(fixture.repository.testDataLeases).toHaveLength(0);
     expect(fixture.testDataBrain.graph(fixture.system.id).entities).toHaveLength(0);
   });
@@ -1383,8 +1527,10 @@ async function providerFixture(input: {
   repository.gaps.push(gap);
   repository.executableCases.push(executableCase);
   const knowledgeService = new KnowledgeService(repository, join(root, "knowledge"));
+  const cleanupResults = new Map<string, "absent" | "present">();
+  const targetProvider = new EvidenceBackedFixtureProvider("fixture-provider", system.id);
   const testDataBrain = new TestDataBrainService(repository, [
-    new InMemoryTestDataProvider("fixture-provider", system.id)
+    targetProvider
   ]);
   const provider = new TestDataProviderService(
     repository,
@@ -1396,7 +1542,7 @@ async function providerFixture(input: {
       : async ({ task, system, query }) => {
       const evidencePath = `testdata-reconciliation/${task.id}.json`;
       const checkedAt = new Date().toISOString();
-      const result = task.action === "cleanup" ? "present" as const : "absent" as const;
+      const result = task.action === "cleanup" ? cleanupResults.get(task.id) ?? "present" : "absent" as const;
       const contents = JSON.stringify({
         schemaVersion: 1,
         type: "testdata-no-effect-observation",
@@ -1414,24 +1560,61 @@ async function providerFixture(input: {
         status: result,
         provider: "fixture-target-query",
         query,
-        evidenceRefs: [task.action === "cleanup" ? "system-query:cleanup-not-found" : "system-query:customer-not-found"],
+        evidenceRefs: [task.action === "cleanup"
+          ? result === "absent" ? "system-query:cleanup-not-found" : "system-query:cleanup-still-present"
+          : "system-query:customer-not-found"],
         evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
         checkedAt
       };
     }
   );
-  return { repository, project, system, intent, executableCase, provider, testDataBrain, runtimeDir: join(root, "runtime") };
+  return {
+    repository,
+    project,
+    system,
+    intent,
+    executableCase,
+    provider,
+    testDataBrain,
+    targetProvider,
+    setCleanupResult: (taskId: string, result: "absent" | "present") => cleanupResults.set(taskId, result),
+    runtimeDir: join(root, "runtime")
+  };
 }
 
 type ProviderFixture = Awaited<ReturnType<typeof providerFixture>>;
 
-function submitDataTask(
+async function submitDataTask(
   fixture: ProviderFixture,
   input: Parameters<ProviderFixture["provider"]["submit"]>[0]
-) {
+): Promise<TestDataSubmitResult> {
   if (input.status === "failed") throw new Error("Failed submissions require submitFailedDataTask");
   acknowledgeCleanupNoticeIfNeeded(fixture, input.taskId);
-  fixture.provider.markSent(input.taskId);
+  const task = fixture.repository.testDataTasks.find((item) => item.id === input.taskId);
+  if (!task) throw new Error("Fixture test data task not found");
+  if (task.action === "cleanup") {
+    fixture.setCleanupResult(task.id, "absent");
+    fixture.provider.markSent(task.id);
+    const completedTask = await fixture.provider.reconcileNotApplied(task.id, input.sourceRefs);
+    const executableCase = fixture.repository.executableCases.find((item) => item.id === task.executableCaseId);
+    if (!executableCase) throw new Error("Fixture executable case not found");
+    const lease = task.leaseId
+      ? fixture.repository.testDataLeases.find((item) => item.id === task.leaseId)
+      : undefined;
+    return { task: completedTask, executableCase, ...(lease ? { lease } : {}) };
+  }
+  if (!input.reference) throw new Error("Fixture successful test data result requires a reference");
+  const seed: TestDataProviderRequest = {
+    knowledgeProjectId: task.knowledgeProjectId,
+    systemId: task.systemId,
+    entityType: input.reference.split(":")[0] || task.field,
+    reference: input.reference,
+    ...(task.entityReference ? { entityReference: task.entityReference } : {}),
+    values: input.value ? { [task.field]: input.value } : {},
+    sourceRefs: [`fixture-seed:${task.id}`]
+  };
+  await fixture.targetProvider.create(seed);
+  fixture.provider.markSent(task.id);
   return fixture.provider.submit(input);
 }
 

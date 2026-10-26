@@ -2130,7 +2130,7 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
     });
   }
   if (action === "submit-test-data") {
-    const submitted = context.testDataProvider.submit({
+    const submitted = await context.testDataProvider.submit({
       taskId: stringArg(input, "taskId"),
       status: testDataTaskResultStatusArg(input, "taskStatus"),
       decision: optionalTestDataProviderDecisionArg(input, "dataDecision"),
