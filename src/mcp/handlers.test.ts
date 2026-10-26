@@ -19,6 +19,13 @@ import type {
 
 const tempDirs: string[] = [];
 
+function readyTestAgentBridge() {
+  return Object.assign(
+    async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    { preflight: async () => ({ ok: true }) }
+  );
+}
+
 function structuredFailureReport(title = "document assertion") {
   return JSON.stringify({
     stats: { expected: 1, unexpected: 1, skipped: 0 },
@@ -2748,7 +2755,8 @@ describe("handleBrainCreatorTool", () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
       dataFilePath: join(workDir, "assets.json"),
-      workDir
+      workDir,
+      agentBridge: readyTestAgentBridge()
     });
     const system = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
       target: "system",
@@ -2779,7 +2787,8 @@ describe("handleBrainCreatorTool", () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
       dataFilePath: join(workDir, "assets.json"),
-      workDir
+      workDir,
+      agentBridge: readyTestAgentBridge()
     });
     const system = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
       target: "system",

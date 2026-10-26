@@ -1,7 +1,12 @@
 {
   "mcpServers": {
     "brain-creator": {
-      "command": "brain-creator-mcp",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--package=brain-creator",
+        "brain-creator-mcp"
+      ],
       "env": {
         "BRAIN_CREATOR_WORKSPACE": ".",
         "BRAIN_CREATOR_TOOL_PROFILE": "facade",
