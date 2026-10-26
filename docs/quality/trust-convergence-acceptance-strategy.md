@@ -28,7 +28,7 @@
 
 本次验收的实现代码 commit 为 b6e6d9ccb86646c60f67d1810bee71ee09da7532，候选分支为 codex/trust-closure-main；台账基线 origin/main 为 62d7487dded6bb444eb9eb32ef6c4363fa3f3238。候选分支可有仅更新验收记录的后续文档提交，功能测试和运行身份仍须绑定到准确代码 commit。当前工作区未跟踪的 runner-report.json 不属于候选交付证据，不得纳入提交或据此作结论。
 
-现有记录表明，这个候选内容已有全量工程检查、类型检查、构建、文档构建、包内容与新目录安装、订单审批浏览器夹具及宿主入口检查的运行记录。验收时要确认这些记录确实对应目标 commit。已通过 GitHub check diagnostics 核实实现代码 b6e6d9c 的 verify (20)、verify (22) 和 build 均成功，deploy 为 skipped；验收策略与台账的后续文档提交 b53c291 另有一组 CI 正在运行。其他 commit 的绿灯不能代替当前候选验证。
+现有记录表明，这个候选内容已有全量工程检查、类型检查、构建、文档构建、包内容与新目录安装、订单审批浏览器夹具及宿主入口检查的运行记录。验收时要确认这些记录确实对应目标 commit。实现代码 b6e6d9c 的 verify (20)、verify (22) 和 build 均成功，deploy 为 skipped。文档提交 838d161 只调整验收记录；GitHub check diagnostics 确认其 verify (20)、verify (22) 和 build 均成功，deploy 为 skipped。功能检查和运行身份仍绑定 b6e6d9c，文档提交检查用于确认文档包构建未回归。其他 commit 的绿灯不能代替准确候选验证。
 
 ### 本轮候选工程验收结果
 
