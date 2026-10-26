@@ -61,33 +61,33 @@ describe("BrainCreatorService", () => {
     const system = service.createSystemProfile({
       name: "Test5 GHR",
       environment: "test",
-      baseUrl: "https://test5-ghr.eminxing.com/index",
+      baseUrl: "https://ghr.example.test/index",
       defaultLocale: "zh-CN",
-      urlAllowlist: ["https://test5-ghr.eminxing.com"]
+      urlAllowlist: ["https://ghr.example.test"]
     });
 
-    const updated = service.addSystemUrlAllowlistOrigins(system.id, ["https://test-sso.eminxing.com"]);
+    const updated = service.addSystemUrlAllowlistOrigins(system.id, ["https://sso.example.test"]);
     expect(updated).toEqual(expect.objectContaining({
       id: system.id,
-      baseUrl: "https://test5-ghr.eminxing.com/index",
-      urlAllowlist: ["https://test5-ghr.eminxing.com", "https://test-sso.eminxing.com"]
+      baseUrl: "https://ghr.example.test/index",
+      urlAllowlist: ["https://ghr.example.test", "https://sso.example.test"]
     }));
-    expect(service.addSystemUrlAllowlistOrigins(system.id, ["https://test-sso.eminxing.com"]).urlAllowlist)
-      .toEqual(["https://test5-ghr.eminxing.com", "https://test-sso.eminxing.com"]);
+    expect(service.addSystemUrlAllowlistOrigins(system.id, ["https://sso.example.test"]).urlAllowlist)
+      .toEqual(["https://ghr.example.test", "https://sso.example.test"]);
   });
 
   it.each([
-    "http://test-sso.eminxing.com",
-    "https://test-sso.eminxing.com/cas/login",
-    "https://user@test-sso.eminxing.com"
+    "http://sso.example.test",
+    "https://sso.example.test/cas/login",
+    "https://user@sso.example.test"
   ])("rejects non-origin allowlist additions: %s", (origin) => {
     const service = createService();
     const system = service.createSystemProfile({
       name: "Test5 GHR",
       environment: "test",
-      baseUrl: "https://test5-ghr.eminxing.com/index",
+      baseUrl: "https://ghr.example.test/index",
       defaultLocale: "zh-CN",
-      urlAllowlist: ["https://test5-ghr.eminxing.com"]
+      urlAllowlist: ["https://ghr.example.test"]
     });
     const before = { ...system, urlAllowlist: [...system.urlAllowlist] };
 

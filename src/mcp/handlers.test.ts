@@ -169,42 +169,42 @@ describe("handleBrainCreatorTool", () => {
     const system = context.service.createSystemProfile({
       name: "Test5 GHR",
       environment: "test",
-      baseUrl: "https://test5-ghr.eminxing.com/index",
+      baseUrl: "https://ghr.example.test/index",
       defaultLocale: "zh-CN",
-      urlAllowlist: ["https://test5-ghr.eminxing.com"]
+      urlAllowlist: ["https://ghr.example.test"]
     });
 
     const unconfirmed = await handleBrainCreatorTool(context, "bc_configure", {
       target: "system",
       operation: "update",
       systemId: system.id,
-      urlAllowlist: ["https://test-sso.eminxing.com"]
+      urlAllowlist: ["https://sso.example.test"]
     });
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("requires confirm=true")
     });
-    expect(context.service.listSystemProfiles()[0].urlAllowlist).toEqual(["https://test5-ghr.eminxing.com"]);
+    expect(context.service.listSystemProfiles()[0].urlAllowlist).toEqual(["https://ghr.example.test"]);
 
     const updated = await handleBrainCreatorTool(context, "bc_configure", {
       target: "system",
       operation: "update",
       systemId: system.id,
-      urlAllowlist: ["https://test-sso.eminxing.com"],
+      urlAllowlist: ["https://sso.example.test"],
       confirm: true
     });
     expect(JSON.parse((updated.content[0] as { text: string }).text)).toMatchObject({
       success: true,
-      data: { baseUrl: "https://test5-ghr.eminxing.com/index", urlAllowlist: [
-        "https://test5-ghr.eminxing.com",
-        "https://test-sso.eminxing.com"
+      data: { baseUrl: "https://ghr.example.test/index", urlAllowlist: [
+        "https://ghr.example.test",
+        "https://sso.example.test"
       ] }
     });
     expect(context.service.listSystemProfiles()[0]).toEqual(expect.objectContaining({
       id: system.id,
-      baseUrl: "https://test5-ghr.eminxing.com/index",
-      urlAllowlist: ["https://test5-ghr.eminxing.com", "https://test-sso.eminxing.com"]
+      baseUrl: "https://ghr.example.test/index",
+      urlAllowlist: ["https://ghr.example.test", "https://sso.example.test"]
     }));
   });
 

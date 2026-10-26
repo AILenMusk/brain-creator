@@ -17,16 +17,16 @@ afterEach(async () => {
 describe("manual browser auth capture", () => {
   it("stores encrypted state only after allowlist checks and fresh-context verification", async () => {
     const fixture = await createFixture();
-    let currentUrl = "https://test-sso.eminxing.com/cas/login";
+    let currentUrl = "https://sso.example.test/cas/login";
     fixture.page.url.mockImplementation(() => currentUrl);
     fixture.waitForManualLogin.mockImplementation(async () => {
-      currentUrl = "https://test5-ghr.eminxing.com/recruitmentPlatform/demands";
+      currentUrl = "https://ghr.example.test/recruitmentPlatform/demands";
     });
 
     const result = await captureAuthState(fixture.input);
 
     expect(fixture.page.goto).toHaveBeenCalledWith(
-      "https://test5-ghr.eminxing.com/index",
+      "https://ghr.example.test/index",
       { waitUntil: "domcontentloaded", timeout: 30_000 }
     );
     expect(fixture.context.storageState).toHaveBeenCalledOnce();
@@ -67,7 +67,7 @@ describe("manual browser auth capture", () => {
     const fixture = await createFixture({
       verification: {
         status: "expired",
-        finalUrl: "https://test-sso.eminxing.com/cas/login",
+        finalUrl: "https://sso.example.test/cas/login",
         reason: "Stored browser authentication redirected to a login page."
       }
     });
@@ -99,9 +99,9 @@ async function createFixture(options: {
     id: "system_1",
     name: "Test System",
     environment: "test",
-    baseUrl: "https://test5-ghr.eminxing.com/index",
+    baseUrl: "https://ghr.example.test/index",
     defaultLocale: "zh-CN",
-    urlAllowlist: ["https://test-sso.eminxing.com"],
+    urlAllowlist: ["https://sso.example.test"],
     status: "succeeded",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z"
@@ -123,7 +123,7 @@ async function createFixture(options: {
     route: vi.fn(async (_pattern: string, handler: (route: Route) => Promise<void>) => {
       navigationHandler = handler;
     }),
-    goto: vi.fn(async () => { currentUrl = "https://test-sso.eminxing.com/cas/login"; }),
+    goto: vi.fn(async () => { currentUrl = "https://sso.example.test/cas/login"; }),
     url: vi.fn(() => currentUrl),
     context: vi.fn()
   };
@@ -143,7 +143,7 @@ async function createFixture(options: {
   const launchBrowser = vi.fn(async () => browser as unknown as Browser);
   const verifyAuth = vi.fn(async () => options.verification ?? {
     status: "valid" as const,
-    finalUrl: "https://test5-ghr.eminxing.com/recruitmentPlatform/demands",
+    finalUrl: "https://ghr.example.test/recruitmentPlatform/demands",
     title: "HRONE"
   });
   const service = {

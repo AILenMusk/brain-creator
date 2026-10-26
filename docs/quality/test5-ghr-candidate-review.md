@@ -131,7 +131,7 @@ The user has approved the decisions above only. This does not approve the genera
 
 ## 2026-10-23 SSO Allowlist and Login-State Blocker
 
-- With the user's explicit approval for Test5 authentication/read-only exploration only, added the exact HTTPS origin `https://test-sso.eminxing.com` to the existing Test5 system profile through confirmed Facade configuration. The base URL and existing Test5 origin remain unchanged; the SSO origin is additive and verified by read-back.
+- With the user's explicit approval for Test5 authentication/read-only exploration only, added the exact HTTPS origin `https://sso.example.test` to the existing Test5 system profile through confirmed Facade configuration. The base URL and existing Test5 origin remain unchanged; the SSO origin is additive and verified by read-back.
 - A bounded, link-only demand-route exploration now follows the SSO redirect but stops at its login page (`exploration_d4fudh4w`, `gap_1r1317h4`). The existing Chrome Test5 tab is present in browser inventory, yet two CUA connection attempts timed out before inspection. No credentials or browser storage were read or copied, and no business page/record was accessed.
 - This is a supported-login-state/tool-connection blocker, not a failed login or denied permission. Preserve both this new auth Gap and the earlier pre-SSO exploration Gap; neither establishes target workflow behavior. At that point no AuthProfile/session state was present; the later pending profile and failed storage capture are recorded below.
 - No Trial, baseline approval, business write, or cleanup occurred. Candidate scenarios remain blocked, counted, and unexecuted; accepted delivery is **0/6** and real business/autonomy metrics remain **not measured**.
