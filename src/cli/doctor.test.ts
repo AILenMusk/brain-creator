@@ -40,7 +40,7 @@ describe("Brain Creator doctor", () => {
     );
     expect(formatDoctorReport(report)).toContain("Brain Creator doctor: ready");
     expect(formatDoctorReport(report)).toContain("Sharded store:");
-    expect(formatDoctorReport(report)).toContain("npx brain-creator-install-codex-plugin");
+    expect(formatDoctorReport(report)).toContain("npx brain-creator plugin install");
   });
 
   it("fails fast for invalid tool profiles and partial Feishu credentials", () => {

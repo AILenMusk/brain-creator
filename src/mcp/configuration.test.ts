@@ -17,7 +17,8 @@ describe("Brain Creator local integration files", () => {
       }
     });
     expect(mcpConfig.mcpServers["brain-creator"]).toEqual({
-      command: "brain-creator-mcp",
+      command: "npx",
+      args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       env: {
         BRAIN_CREATOR_WORKSPACE: ".",
         BRAIN_CREATOR_TOOL_PROFILE: "facade",
@@ -62,8 +63,12 @@ describe("Brain Creator local integration files", () => {
     expect(packageJson.scripts.prepack).toBe("npm run build");
     expect(packageJson.scripts.mcp).toContain("dist/cli/brainCreatorMcp.js");
     expect(packageJson.scripts["dev:mcp"]).toContain("src/mcp/server.ts");
-    expect(packageJson.scripts["verify:installed-mcp"]).toContain(
-      "scripts/verifyInstalledMcpSmoke.ts"
+    expect(packageJson.scripts["verify:installed-mcp"]).toBe("npm run verify:package-install");
+    expect(packageJson.scripts["verify:source-workspace-isolation"]).toContain(
+      "scripts/verifySourceWorkspaceIsolationSmoke.ts"
+    );
+    expect(packageJson.scripts["verify:source-mcp-identity"]).toContain(
+      "scripts/verifySourceMcpIdentitySmoke.ts"
     );
     expect(packageJson.scripts["verify:package-install"]).toContain(
       "scripts/verifyPackageInstallSmoke.ts"
@@ -117,7 +122,7 @@ describe("Brain Creator local integration files", () => {
     expect(manifest.version).toBe(BRAIN_CREATOR_VERSION);
     expect(manifest.mcpServers["brain-creator"]).toEqual({
       command: "npx",
-      args: ["brain-creator-mcp"],
+      args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       env: {
         BRAIN_CREATOR_WORKSPACE: ".",
         BRAIN_CREATOR_TOOL_PROFILE: "facade",
@@ -162,7 +167,7 @@ describe("Brain Creator local integration files", () => {
 
     expect(pluginMcp.mcpServers["brain-creator"]).toEqual({
       command: "npx",
-      args: ["brain-creator-mcp"],
+      args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       env: {
         BRAIN_CREATOR_WORKSPACE: ".",
         BRAIN_CREATOR_TOOL_PROFILE: "facade",

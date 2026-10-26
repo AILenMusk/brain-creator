@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import AdmZip from "adm-zip";
+import { XMLParser } from "fast-xml-parser";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   AttachmentAnalysis,
@@ -13,6 +14,7 @@ import type {
 import { id } from "../shared/id.js";
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_SPREADSHEET_ANALYSIS_CHARS = 500_000;
 const DOWNLOAD_ATTEMPTS = 3;
 
 export type AttachmentAnalysisDraft = {
@@ -92,6 +94,25 @@ export class RequirementAttachmentPipeline {
         }
       }
       if (!attachment.localPath) continue;
+      if (isSpreadsheetAttachment(attachment.mimeType, attachment)) {
+        attachment.status = "recognizing";
+        attachment.recognitionAttempts = (attachment.recognitionAttempts ?? 0) + 1;
+        this.repository.persist();
+        try {
+          const analysis = await extractSpreadsheetAnalysis(attachment.localPath);
+          analyses.push(this.submit({
+            sourceId: source.id,
+            attachmentId: attachment.id,
+            provider: "adapter",
+            result: analysis
+          }));
+        } catch (error) {
+          attachment.status = "failed";
+          attachment.failureReason = errorMessage(error);
+          gaps.push(this.finalFailureGap(source, attachment, "recognition", attachment.failureReason));
+        }
+        continue;
+      }
       const request = {
         attachmentId: attachment.id,
         name: attachment.name,
@@ -162,8 +183,8 @@ export class RequirementAttachmentPipeline {
         throw new Error(`attachment exceeds ${MAX_ATTACHMENT_BYTES} bytes`);
       }
       const mimeType = download.mimeType ?? attachment.mimeType ?? mimeTypeFromName(attachment.name);
-      if (!isSupportedVisualContent(mimeType, attachment)) {
-        throw new Error("host attachment is not a supported image or PDF");
+      if (!isSupportedRequirementAttachment(mimeType, attachment)) {
+        throw new Error("host attachment is not a supported image, PDF, or XLSX workbook");
       }
       const contentHash = createHash("sha256").update(data).digest("hex");
       if (download.contentHash && download.contentHash !== contentHash) {
@@ -221,14 +242,18 @@ export class RequirementAttachmentPipeline {
     if (!attachment) throw new Error("Requirement attachment not found");
     const attachmentId = attachment.id;
     if (!attachmentId) throw new Error("Requirement attachment is missing its id");
-    if (!attachment.localPath || !["downloaded", "recognizing", "failed"].includes(attachment.status ?? "")) {
-      throw new Error("Requirement attachment must be downloaded before analysis submission");
-    }
-    const result = validateAnalysisDraft(input.result);
-    const now = new Date().toISOString();
     const existing = this.repository.attachmentAnalyses.find(
       (item) => item.sourceId === source.id && item.attachmentId === attachment.id && item.status !== "failed"
     );
+    const revisingDraft = existing?.status === "draft" && attachment.analysisId === existing.id;
+    if (!attachment.localPath) {
+      throw new Error("Requirement attachment must be downloaded before analysis submission");
+    }
+    if (!revisingDraft && !["downloaded", "recognizing", "failed"].includes(attachment.status ?? "")) {
+      throw new Error("Only the linked draft attachment analysis can be revised");
+    }
+    const result = validateAnalysisDraft(input.result);
+    const now = new Date().toISOString();
     const analysis: AttachmentAnalysis = existing ?? {
       id: id("attachmentAnalysis"),
       knowledgeProjectId: source.knowledgeProjectId,
@@ -289,8 +314,8 @@ export class RequirementAttachmentPipeline {
         if (result.data.byteLength > MAX_ATTACHMENT_BYTES) {
           throw new Error(`attachment exceeds ${MAX_ATTACHMENT_BYTES} bytes`);
         }
-        if (!isSupportedVisualContent(result.mimeType ?? attachment.mimeType, attachment)) {
-          throw new Error("attachment is not a supported image or PDF");
+        if (!isSupportedRequirementAttachment(result.mimeType ?? attachment.mimeType, attachment)) {
+          throw new Error("attachment is not a supported image, PDF, or XLSX workbook");
         }
         const directory = join(this.rootDir, "sources", source.id, "attachments");
         await mkdir(directory, { recursive: true });
@@ -361,19 +386,20 @@ async function readAttachment(
   downloader?: RequirementAttachmentDownloader,
   sourceBaseDir = process.cwd()
 ) {
+  if (attachment.containerPath && attachment.containerEntry) {
+    assertLocalAttachmentPath(source, attachment.containerPath, sourceBaseDir);
+    const containerPath = resolve(sourceBaseDir, attachment.containerPath);
+    const entry = new AdmZip(containerPath).getEntry(attachment.containerEntry);
+    if (!entry) throw new Error(`container entry ${attachment.containerEntry} not found`);
+    return { data: entry.getData(), mimeType: attachment.mimeType };
+  }
   if (source.sourceType === "feishu" && attachment.fileToken) {
     if (!downloader) throw new Error("Feishu connector authentication is required to download media");
     return downloader(attachment);
   }
-  if (attachment.containerPath && attachment.containerEntry) {
-    assertLocalAttachmentPath(source, attachment.containerPath, sourceBaseDir);
-    const entry = new AdmZip(attachment.containerPath).getEntry(attachment.containerEntry);
-    if (!entry) throw new Error(`container entry ${attachment.containerEntry} not found`);
-    return { data: entry.getData(), mimeType: attachment.mimeType };
-  }
   if (attachment.containerPath) {
     assertLocalAttachmentPath(source, attachment.containerPath, sourceBaseDir);
-    return { data: await readFile(attachment.containerPath), mimeType: attachment.mimeType };
+    return { data: await readFile(resolve(sourceBaseDir, attachment.containerPath)), mimeType: attachment.mimeType };
   }
   if (!attachment.url) throw new Error("attachment has no downloadable reference");
   if (isAbsolute(attachment.url) || /^[a-z]:[\\/]/i.test(attachment.url)) {
@@ -434,10 +460,14 @@ function assertLocalAttachmentPath(
   candidate: string,
   sourceBaseDir: string
 ) {
-  if (source.sourceType !== "local-file" && source.sourceType !== "obsidian") return;
-  const sourcePath = localSourcePath(source, sourceBaseDir);
+  const workspaceRoot = resolve(sourceBaseDir);
   const candidatePath = resolve(sourceBaseDir, candidate);
-  const pathFromSource = relative(dirname(sourcePath), candidatePath);
+  const pathFromSource = relative(
+    source.sourceType === "local-file" || source.sourceType === "obsidian"
+      ? dirname(localSourcePath(source, sourceBaseDir))
+      : workspaceRoot,
+    candidatePath
+  );
   if (
     pathFromSource === ".." ||
     pathFromSource.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
@@ -468,6 +498,171 @@ function isSupportedVisualContent(
   );
 }
 
+function isSupportedRequirementAttachment(
+  mimeType: string | undefined,
+  attachment: RequirementAttachment
+) {
+  return isSupportedVisualContent(mimeType, attachment) ||
+    isSpreadsheetAttachment(mimeType, attachment);
+}
+
+function isSpreadsheetAttachment(
+  mimeType: string | undefined,
+  attachment: RequirementAttachment
+) {
+  const normalizedMimeType = mimeType?.toLowerCase().split(";", 1)[0];
+  return normalizedMimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    extname(attachment.name).toLowerCase() === ".xlsx";
+}
+
+async function extractSpreadsheetAnalysis(path: string): Promise<AttachmentAnalysisDraft> {
+  const zip = new AdmZip(path);
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: "@_",
+    parseTagValue: false,
+    trimValues: false
+  });
+  const workbookXml = zip.getEntry("xl/workbook.xml")?.getData().toString("utf8");
+  const relationshipsXml = zip.getEntry("xl/_rels/workbook.xml.rels")?.getData().toString("utf8");
+  if (!workbookXml || !relationshipsXml) throw new Error("XLSX workbook metadata is incomplete");
+  const workbook = objectValue(parseXmlObject(parser.parse(workbookXml)).workbook);
+  const relationshipRoot = objectValue(parseXmlObject(parser.parse(relationshipsXml)).Relationships);
+  const workbookSheets = toObjectArray(objectValue(workbook?.sheets)?.sheet);
+  const relationships = toObjectArray(relationshipRoot?.Relationship);
+  if (workbookSheets.length === 0) throw new Error("XLSX workbook contains no worksheets");
+  const relationshipTargets = new Map(
+    relationships.map((relationship) => [stringValue(relationship["@_Id"]), stringValue(relationship["@_Target"])])
+  );
+  const sharedStringsXml = zip.getEntry("xl/sharedStrings.xml")?.getData().toString("utf8");
+  const sharedStringsRoot = sharedStringsXml
+    ? objectValue(parseXmlObject(parser.parse(sharedStringsXml)).sst)
+    : undefined;
+  const sharedStrings = toObjectArray(sharedStringsRoot?.si).map((item) => richText(item));
+  const lines: string[] = [];
+  for (const [sheetIndex, worksheet] of workbookSheets.entries()) {
+    const name = stringValue(worksheet["@_name"]) || `Sheet ${sheetIndex + 1}`;
+    const sheetState = stringValue(worksheet["@_state"]) || "visible";
+    const relationshipId = stringValue(worksheet["@_r:id"] ?? worksheet["@_id"]);
+    const target = relationshipTargets.get(relationshipId);
+    if (!target) throw new Error(`XLSX worksheet relationship not found for ${name}`);
+    const sheetPath = target.startsWith("/")
+      ? target.slice(1)
+      : joinXlsxPath("xl", target);
+    const sheetXml = zip.getEntry(sheetPath)?.getData().toString("utf8");
+    if (!sheetXml) throw new Error(`XLSX worksheet data not found for ${name}`);
+    const sheetRoot = objectValue(parseXmlObject(parser.parse(sheetXml)).worksheet);
+    const sheetData = toObjectArray(objectValue(sheetRoot?.sheetData)?.row);
+    const state = sheetState === "visible" ? "" : ` (${sheetState})`;
+    lines.push(`## ${escapeMarkdownCell(name)}${state}`);
+    const rows: Array<{ number: number; values: string[] }> = [];
+    for (const [rowIndex, row] of sheetData.entries()) {
+      const rowNumber = Number(stringValue(row["@_r"]) || rowIndex + 1);
+      const cellObjects = toObjectArray(row.c);
+      const cells = new Map<number, string>();
+      for (const cell of cellObjects) {
+        const columnNumber = xlsxColumnNumber(stringValue(cell["@_r"]));
+        if (columnNumber === undefined) continue;
+        cells.set(columnNumber, spreadsheetCellValue(cell, sharedStrings));
+      }
+      const columnCount = Math.max(0, ...cells.keys());
+      const values = Array.from({ length: columnCount }, (_, index) => cells.get(index + 1) ?? "");
+      if (values.some((value) => value.length > 0)) rows.push({ number: rowNumber, values });
+    }
+
+    if (rows.length === 0) {
+      lines.push("No populated cells.");
+      continue;
+    }
+
+    const columnCount = Math.max(...rows.map((row) => row.values.length));
+    lines.push(
+      `| Row | ${Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`).join(" | ")} |`,
+      `| --- | ${Array.from({ length: columnCount }, () => "---").join(" | ")} |`
+    );
+    for (const row of rows) {
+      const values = Array.from({ length: columnCount }, (_, index) => escapeMarkdownCell(row.values[index] ?? ""));
+      lines.push(`| ${row.number} | ${values.join(" | ")} |`);
+    }
+    if (lines.join("\n").length > MAX_SPREADSHEET_ANALYSIS_CHARS) {
+      throw new Error(`XLSX extraction exceeds ${MAX_SPREADSHEET_ANALYSIS_CHARS} characters`);
+    }
+  }
+
+  return { kind: "table", markdown: lines.join("\n"), nodes: [], edges: [], confidence: 1 };
+}
+
+function parseXmlObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function toObjectArray(value: unknown): Array<Record<string, unknown>> {
+  if (value === undefined || value === null) return [];
+  return (Array.isArray(value) ? value : [value]).filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)
+  ) as Array<Record<string, unknown>>;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? String(value)
+    : "";
+}
+
+function richText(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(richText).join("");
+  if (!value || typeof value !== "object") return "";
+  const object = value as Record<string, unknown>;
+  if (object["#text"] !== undefined) return richText(object["#text"]);
+  return `${richText(object.t)}${richText(object.r)}`;
+}
+
+function spreadsheetCellValue(cell: Record<string, unknown>, sharedStrings: string[]) {
+  const type = stringValue(cell["@_t"]);
+  if (type === "s") {
+    const index = Number(richText(cell.v));
+    if (!Number.isInteger(index) || index < 0 || index >= sharedStrings.length) {
+      throw new Error("XLSX cell references a missing shared string");
+    }
+    return sharedStrings[index];
+  }
+  if (type === "inlineStr") return richText(cell.is);
+  if (type === "b") return richText(cell.v) === "1" ? "TRUE" : "FALSE";
+  if (cell.v !== undefined) return richText(cell.v);
+  return cell.f !== undefined ? `=${richText(cell.f)}` : "";
+}
+
+function xlsxColumnNumber(reference: string) {
+  const column = /^([A-Z]+)\d+$/i.exec(reference)?.[1]?.toUpperCase();
+  if (!column) return undefined;
+  let number = 0;
+  for (const character of column) number = number * 26 + character.charCodeAt(0) - 64;
+  return number;
+}
+
+function joinXlsxPath(root: string, target: string) {
+  const parts: string[] = [];
+  for (const part of `${root}/${target}`.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function escapeMarkdownCell(value: string) {
+  return value.replace(/\r?\n/g, "<br>").replace(/\|/g, "\\|");
+}
+
 function requiredRequirementSetId(source: RequirementSource) {
   if (!source.latestRequirementSetId) throw new Error("Requirement source has no active requirement set");
   return source.latestRequirementSetId;
@@ -488,6 +683,7 @@ function safeName(value: string) {
 
 function mimeTypeFromName(value: string) {
   return ({
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",

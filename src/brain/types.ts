@@ -437,6 +437,7 @@ export type TestDataLifecycleEvent = {
 
 export type TestDataDependency = {
   id: string;
+  knowledgeProjectId?: string;
   systemId: string;
   fromReference: string;
   toReference: string;
@@ -565,6 +566,8 @@ export type EvaluationExecutionScope = {
   scopeHash?: string;
   approvalScopeRef?: string;
   approvalScopeHash?: string;
+  systemBrainSnapshotId?: string;
+  systemBrainSnapshotHash?: string;
 };
 
 export type EvaluationTrial = {
@@ -584,6 +587,15 @@ export type EvaluationTrial = {
   runtimeVersions: Record<string, string>;
   runtimeBuildIdentity?: string;
   executionScope?: EvaluationExecutionScope;
+  interventionCapture?: {
+    scenarioIds: string[];
+    interventionIds: string[];
+    scopeHash: string;
+    actor: string;
+    evidenceRefs: string[];
+    completedAt: string;
+    integrityTag?: string;
+  };
   latestProjectionManifestId: string;
   status: "active" | "invalidated" | "completed";
   invalidationReasons: string[];
@@ -601,10 +613,12 @@ export type SourceSnapshot = {
   sourceType: string;
   sourceRevision: number;
   contentHash: string;
+  semanticInputHash: string;
   sourceLocatorHash: string;
   blockCount: number;
   attachmentCount: number;
   warningCount: number;
+  integrityTag?: string;
   createdAt: string;
 };
 
@@ -616,6 +630,7 @@ export type ProjectionManifest = {
   projectionHash: string;
   assetCounts: Record<string, number>;
   evidenceRefs: string[];
+  integrityTag?: string;
   status: "current" | "drifted";
   createdAt: string;
 };
@@ -623,6 +638,9 @@ export type ProjectionManifest = {
 export type EvaluationInterventionCategory =
   | "controlled-facade-write"
   | "user-clarification"
+  | "user-authentication"
+  | "manual-evidence-review"
+  | "manual-recovery"
   | "manual-store-write"
   | "source-change"
   | "code-change"
@@ -635,8 +653,11 @@ export type InterventionRecord = {
   actor: string;
   note: string;
   evidenceRefs: string[];
+  businessScenarioIds?: string[];
+  authenticationPhase?: "initial-authorization" | "session-recovery";
   invalidatesTrial: boolean;
   createdAt: string;
+  integrityTag?: string;
 };
 
 export type StageEvalRecord = {
@@ -686,6 +707,7 @@ export type ConformanceResult = {
   expectationRefs: string[];
   observationRefs: string[];
   executionRefs: string[];
+  historicalReviewId?: string;
   reasons: string[];
   createdAt: string;
 };

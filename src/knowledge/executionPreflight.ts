@@ -21,6 +21,7 @@ type PrepareExecutionInput = {
   knowledgeProjectId: string;
   systemId: string;
   executableCaseId: string;
+  requirementSuiteRunId?: string;
   authProfileId?: string;
   actorJourney?: ActorJourneyConfig[];
   confirm: boolean;
@@ -51,7 +52,8 @@ export class ExecutionPreflightService {
       executableCase,
       input.systemId,
       input.authProfileId,
-      input.actorJourney
+      input.actorJourney,
+      input.requirementSuiteRunId
     );
     if (!input.confirm) {
       return { status: "preview", persisted: false, draft };
@@ -103,6 +105,7 @@ export class ExecutionPreflightService {
       knowledgeProjectId: executionPlan.knowledgeProjectId,
       systemId: executionPlan.systemId,
       executableCaseId: executionPlan.executableCaseId,
+      requirementSuiteRunId: executionPlan.requirementSuiteRunId,
       authProfileId: executionPlan.auth?.profileId,
       confirm: false
     });
@@ -110,7 +113,8 @@ export class ExecutionPreflightService {
       executableCase,
       executionPlan.systemId,
       executionPlan.auth?.profileId,
-      executionPlan.actorJourney
+      executionPlan.actorJourney,
+      executionPlan.requirementSuiteRunId
     );
     if (draft.verdict !== "ready") {
       return {
@@ -177,7 +181,8 @@ export class ExecutionPreflightService {
     executableCase: ExecutableCase,
     systemId: string,
     authProfileId?: string,
-    actorJourneyInput?: PrepareExecutionInput["actorJourney"] | ActorJourneyStep[]
+    actorJourneyInput?: PrepareExecutionInput["actorJourney"] | ActorJourneyStep[],
+    requirementSuiteRunId?: string
   ): ExecutionPlanDraft {
     const requirementSet = this.repository.requirementSets.find(
       (item) => item.id === executableCase.requirementSetId
@@ -198,6 +203,7 @@ export class ExecutionPreflightService {
     const terminalEvidence = this.repository.executionEvidence.some(
       (evidence) =>
         evidence.executableCaseId === executableCase.id &&
+        (!requirementSuiteRunId || evidence.requirementSuiteRunId === requirementSuiteRunId) &&
         evidence.status !== "running"
     );
     const cleanupDue = terminalEvidence
@@ -205,6 +211,7 @@ export class ExecutionPreflightService {
           (lease) =>
             lease.executableCaseId === executableCase.id &&
             lease.systemId === systemId &&
+            (!requirementSuiteRunId || lease.requirementSuiteRunId === requirementSuiteRunId) &&
             lease.decision === "create" &&
             lease.cleanup !== "none" &&
             (lease.status === "active" || lease.status === "cleanup-failed")
@@ -283,7 +290,7 @@ export class ExecutionPreflightService {
           : `${pendingTasks.length} test-data task(s) must finish before execution.`,
         pendingTasks.map((task) => `test-data-task:${task.id}`)
       ),
-      this.dataCheck(executableCase, systemId),
+      this.dataCheck(executableCase, systemId, requirementSuiteRunId),
       check(
         "test-data-cleanup",
         cleanupDue.length === 0 ? "pass" : "blocked",
@@ -295,7 +302,7 @@ export class ExecutionPreflightService {
       this.authCheck(systemId, selectedAuthProfileId, authProfile),
       actorJourneyResolution.check
     ];
-    const dataBindings = this.dataBindings(executableCase, systemId);
+    const dataBindings = this.dataBindings(executableCase, systemId, requirementSuiteRunId);
     const retrievedContextPack = buildContextPack(this.repository, {
       knowledgeProjectId: executableCase.knowledgeProjectId,
       systemId,
@@ -336,6 +343,7 @@ export class ExecutionPreflightService {
     ]);
     const snapshot = {
       knowledgeProjectId: executableCase.knowledgeProjectId,
+      requirementSuiteRunId,
       requirementSet: requirementSet
         ? {
             id: requirementSet.id,
@@ -383,6 +391,7 @@ export class ExecutionPreflightService {
       requirementSetId: executableCase.requirementSetId,
       systemId,
       executableCaseId: executableCase.id,
+      ...(requirementSuiteRunId ? { requirementSuiteRunId } : {}),
       title: executableCase.title,
       preconditions: clone(executableCase.preconditions),
       auth:
@@ -519,7 +528,8 @@ export class ExecutionPreflightService {
 
   private dataCheck(
     executableCase: ExecutableCase,
-    systemId: string
+    systemId: string,
+    requirementSuiteRunId?: string
   ): ExecutionPreflightCheck {
     const plan = executableCase.dataPlan;
     if (!plan || plan.verdict === "not-required") {
@@ -552,7 +562,8 @@ export class ExecutionPreflightService {
             this.repository,
             executableCase,
             systemId,
-            operation
+            operation,
+            requirementSuiteRunId
           )) ||
         ((operation.decision === "use-fixed" || operation.decision === "generate") &&
           !operation.value) ||
@@ -572,7 +583,8 @@ export class ExecutionPreflightService {
 
   private dataBindings(
     executableCase: ExecutableCase,
-    systemId: string
+    systemId: string,
+    requirementSuiteRunId?: string
   ): ExecutionDataBinding[] {
     return (executableCase.dataPlan?.operations ?? []).map((operation) => {
       const lease =
@@ -581,7 +593,8 @@ export class ExecutionPreflightService {
               this.repository,
               executableCase,
               systemId,
-              operation
+              operation,
+              requirementSuiteRunId
             )
           : undefined;
       return {

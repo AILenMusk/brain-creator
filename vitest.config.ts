@@ -15,6 +15,7 @@ export default defineConfig({
       "**/outputs/**",
       "tests/e2e/**",
       "tests/generated/**",
+      "**/order-approval-fixture.spec.ts",
       "tests/seed-*.spec.ts"
     ]
   },

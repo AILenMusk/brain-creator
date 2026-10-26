@@ -80,6 +80,31 @@ describe("static document suite report", () => {
     expect(html).toContain('<html lang="zh-CN">');
   });
 
+  it("shows reconciled action evidence without presenting it as conformance", () => {
+    const html = renderStaticDocumentSuiteReport({
+      title: "Order workflow",
+      suite: suite(),
+      cases: [documentCase("TC-001", "Submit order", "Orders")],
+      runs: [],
+      actionEvidence: [{
+        caseId: "TC-001",
+        phase: "reconciled",
+        actionKey: "tc-001:submit",
+        actionSemantic: "Submit order",
+        entityReference: "ORDER-42",
+        postcondition: "Order status is submitted",
+        evidenceRefs: ["target:ORDER-42"],
+        evidenceArtifacts: [{ path: "/tmp/order-observation.json", sha256: "c".repeat(64) }]
+      }]
+    });
+
+    expect(html).toContain("Recovery and write-action evidence");
+    expect(html).toContain("Order status is submitted");
+    expect(html).toContain("target:ORDER-42");
+    expect(html).toContain("c".repeat(64));
+    expect(html).toContain("not by themselves a business conformance verdict");
+  });
+
   it("redacts protected values from execution details", () => {
     const protectedPath = ".brain-creator/auth/refreshed.json";
     const html = renderStaticDocumentSuiteReport({
@@ -107,6 +132,15 @@ describe("static document suite report", () => {
         bugReportIds: [],
         gapIds: [],
         createdAt: "2026-09-14T00:00:00.000Z"
+      }],
+      actionEvidence: [{
+        caseId: "TC-001",
+        phase: "reconciled",
+        actionKey: `action-${protectedPath}`,
+        actionSemantic: `Read ${protectedPath}`,
+        postcondition: `state at ${protectedPath}`,
+        evidenceRefs: [`ref:${protectedPath}`],
+        evidenceArtifacts: [{ path: protectedPath, sha256: "d".repeat(64) }]
       }],
       gaps: [{ id: "gap-1", status: "open", reason: `Retry ${protectedPath}` }],
       protectedSecrets: { storageStatePath: protectedPath }

@@ -93,10 +93,12 @@ describe("execution evidence and scenario trust integration", () => {
 
     const executionEvidence = evidence(project.id);
     await writeFile(join(knowledgeDir, "actual-value"), JSON.stringify({ status: "approved" }));
+    await writeFile(join(knowledgeDir, "reporter.json"), JSON.stringify(executionEvidence.reporterResult));
     repository.executionEvidence.push(executionEvidence);
     const result = await service.completeExecutionEvidence(executionEvidence.id, {
       status: "passed",
-      artifactPaths: [],
+      artifactPaths: ["reporter.json"],
+      reporterPath: "reporter.json",
       reporterResult: executionEvidence.reporterResult,
       evidenceRootDir: knowledgeDir,
       observationMode: "observe"
@@ -108,12 +110,79 @@ describe("execution evidence and scenario trust integration", () => {
       strongRunCount: 1
     }));
     expect(repository.scenarioTrustRecords[0]).toEqual(expect.objectContaining({ status: "verified" }));
+    expect(repository.conformanceResults).toHaveLength(1);
     const report = await readFile(
       join(knowledgeDir, "trust", "reports", "evidence-approval", "summary.md"),
       "utf8"
     );
     expect(report).toContain("Plain-language summary");
     expect(report).toContain("What was understood");
+
+    scenario.status = "draft";
+    const draftEvidence = {
+      ...evidence(project.id),
+      id: "evidence-draft-scenario",
+      testCaseId: "test-draft-scenario"
+    };
+    repository.executionEvidence.push(draftEvidence);
+    await service.completeExecutionEvidence(draftEvidence.id, {
+      status: "passed",
+      artifactPaths: ["reporter.json"],
+      reporterPath: "reporter.json",
+      reporterResult: draftEvidence.reporterResult,
+      evidenceRootDir: knowledgeDir,
+      observationMode: "observe"
+    });
+    expect(repository.conformanceResults).toHaveLength(2);
+    expect(repository.conformanceResults.find((item) => item.executionEvidenceId === draftEvidence.id))
+      .toEqual(expect.objectContaining({
+        verdict: "inconclusive",
+        reasons: expect.arrayContaining(["Business scenario is not approved; conformance cannot be claimed."])
+      }));
+    scenario.status = "approved";
+
+    const unrelatedScenario: BusinessScenario = {
+      ...scenario,
+      id: "scenario-unrelated",
+      title: "Submit request",
+      objective: "Submit a request",
+      testIntentIds: ["intent-submit"]
+    };
+    repository.businessScenarios.push(unrelatedScenario);
+    repository.scenarioTrustRecords.push({
+      ...trust,
+      scenarioId: unrelatedScenario.id,
+      status: "bound"
+    });
+
+    expect(service.recordScenarioEvidenceRun({
+      scenarioId: unrelatedScenario.id,
+      evidence: result,
+      observationMode: "observe"
+    })).toBeUndefined();
+    expect(repository.scenarioTrustRecords.find((record) => record.scenarioId === unrelatedScenario.id))
+      .toEqual(expect.objectContaining({ status: "bound", strongRunCount: 0 }));
+
+    const draftScenario: BusinessScenario = {
+      ...scenario,
+      id: "scenario-draft",
+      title: "Draft approval scenario",
+      status: "draft"
+    };
+    repository.businessScenarios.push(draftScenario);
+    repository.scenarioTrustRecords.push({
+      ...trust,
+      scenarioId: draftScenario.id,
+      status: "bound"
+    });
+
+    expect(service.recordScenarioEvidenceRun({
+      scenarioId: draftScenario.id,
+      evidence: result,
+      observationMode: "observe"
+    })).toBeUndefined();
+    expect(repository.scenarioTrustRecords.find((record) => record.scenarioId === draftScenario.id))
+      .toEqual(expect.objectContaining({ status: "bound", strongRunCount: 0 }));
   });
 });
 
@@ -127,13 +196,14 @@ function evidence(knowledgeProjectId: string): ExecutionEvidence {
     contextPackPath: "context.json",
     status: "passed",
     assuranceLevel: "strong",
+    provenance: "real-system",
     assertionContracts: [{
       id: "assert-approval",
       stepId: "step-approval",
       type: "workflow",
       strength: "strong",
       expected: "approved",
-      oracle: { operator: "equals", expected: "approved", applicable: true, applicabilityRefs: ["requirement:approval"] },
+      oracle: { operator: "equals", expected: "approved", applicability: { mode: "unconditional" }, applicabilityRefs: ["requirement:approval"] },
       requirementRefs: ["requirement:approval"],
       evidenceRequirements: ["actual-value"]
     }],

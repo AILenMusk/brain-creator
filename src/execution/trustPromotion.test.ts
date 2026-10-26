@@ -21,6 +21,11 @@ describe("scenario execution trust promotion", () => {
     expect(result.record.status).not.toBe("verified");
     expect(result.assuranceLevel).toBe("none");
   });
+  it("does not promote a passing run with unknown provenance", () => {
+    const result = evaluateScenarioExecutionTrust(input({ evidence: { ...evidence(), provenance: "unknown" } }));
+    expect(result.record.status).toBe("quarantined");
+    expect(result.assuranceLevel).toBe("none");
+  });
   it("promotes the first strong observed run to verified", () => {
     const result = evaluateScenarioExecutionTrust(input());
 
@@ -107,10 +112,11 @@ function record(): ScenarioTrustRecord {
   };
 }
 
-function evidence(): Pick<ExecutionEvidence, "status" | "artifactValidation" | "assuranceLevel" | "assertionContracts" | "reporterResult" | "evidenceWarnings" | "coverage" | "steps"> {
+function evidence(): Pick<ExecutionEvidence, "status" | "provenance" | "artifactValidation" | "assuranceLevel" | "assertionContracts" | "reporterResult" | "evidenceWarnings" | "coverage" | "steps"> {
   return {
     artifactValidation: { status: "valid", files: ["step-01.png", "trace.zip"].map((path) => ({ path, sha256: "a".repeat(64) })), reasons: [] },
     status: "passed",
+    provenance: "real-system",
     assuranceLevel: "strong",
     assertionContracts: [{
       id: "assert-1",
@@ -118,7 +124,7 @@ function evidence(): Pick<ExecutionEvidence, "status" | "artifactValidation" | "
       type: "workflow",
       strength: "strong",
       expected: "approved",
-      oracle: { operator: "equals", expected: "approved", applicable: true, applicabilityRefs: ["requirement:approval"] },
+      oracle: { operator: "equals", expected: "approved", applicability: { mode: "unconditional" }, applicabilityRefs: ["requirement:approval"] },
       requirementRefs: ["requirement:approval"],
       evidenceRequirements: ["actual-value", "screenshot", "trace"]
     }],

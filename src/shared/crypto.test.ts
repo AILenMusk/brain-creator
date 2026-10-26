@@ -1,17 +1,49 @@
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { decryptSecrets, encryptSecrets, migrateEncryptedSecrets, redactSecrets } from "./crypto.js";
+import {
+  createWorkspaceIntegrityAuthenticator,
+  decryptSecrets,
+  encryptSecrets,
+  migrateEncryptedSecrets,
+  redactSecrets
+} from "./crypto.js";
 
 describe("shared crypto helpers", () => {
-  const originalKey = process.env.BRAIN_CREATOR_SECRET_KEY;
+  const environmentNames = [
+    "BRAIN_CREATOR_SECRET_KEY",
+    "BRAIN_CREATOR_SECRET_KEY_FILE",
+    "BRAIN_CREATOR_INTEGRITY_KEY",
+    "BRAIN_CREATOR_INTEGRITY_KEY_FILE",
+    "BRAIN_CREATOR_INTEGRITY_KEY_ID",
+    "BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS"
+  ];
+  let originalEnvironment = new Map<string, string | undefined>();
+  const temporaryDirectories: string[] = [];
 
   beforeEach(() => {
+    originalEnvironment = new Map(environmentNames.map((name) => [name, process.env[name]]));
     process.env.BRAIN_CREATOR_SECRET_KEY = "crypto-test-key";
+    delete process.env.BRAIN_CREATOR_SECRET_KEY_FILE;
+    delete process.env.BRAIN_CREATOR_INTEGRITY_KEY;
+    delete process.env.BRAIN_CREATOR_INTEGRITY_KEY_FILE;
+    delete process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID;
+    delete process.env.BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS;
   });
 
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.BRAIN_CREATOR_SECRET_KEY;
-    else process.env.BRAIN_CREATOR_SECRET_KEY = originalKey;
+  afterEach(async () => {
+    for (const name of environmentNames) {
+      const value = originalEnvironment.get(name);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
+      recursive: true,
+      force: true
+    })));
   });
 
   it("encrypts secrets and decrypts them back without exposing plain values", () => {
@@ -37,6 +69,79 @@ describe("shared crypto helpers", () => {
       cookie: "[REDACTED]"
     });
   });
+
+  it("uses a separately managed integrity key and key ID", () => {
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY = "managed-integrity-key-material";
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID = "integrity-2026-1";
+    const authenticator = createWorkspaceIntegrityAuthenticator("unused-workspace");
+    const tag = authenticator.sign("frozen evidence snapshot");
+
+    expect(tag).toMatch(/^v1:integrity-2026-1:[a-f0-9]{64}$/);
+    expect(authenticator.verify("frozen evidence snapshot", tag)).toBe(true);
+    expect(authenticator.verify("changed evidence snapshot", tag)).toBe(false);
+  });
+
+  it("loads an external integrity key from an access-controlled file path", async () => {
+    const workspace = createTemporaryDirectory();
+    const keyFile = join(workspace, "managed-integrity.key");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(keyFile, "managed-file-integrity-key");
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_FILE = keyFile;
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID = "integrity-file-1";
+    const authenticator = createWorkspaceIntegrityAuthenticator(workspace);
+    const tag = authenticator.sign("file-backed integrity record");
+
+    expect(tag).toMatch(/^v1:integrity-file-1:/);
+    expect(authenticator.verify("file-backed integrity record", tag)).toBe(true);
+  });
+
+  it("verifies prior-key signatures during rotation and signs only with the active key", () => {
+    const workspace = createTemporaryDirectory();
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY = "previous-integrity-key-material";
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID = "integrity-2026-1";
+    const previousAuthenticator = createWorkspaceIntegrityAuthenticator(workspace);
+    const previousTag = previousAuthenticator.sign("review record");
+
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY = "current-integrity-key-material";
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID = "integrity-2026-2";
+    process.env.BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS = JSON.stringify({
+      "integrity-2026-1": "previous-integrity-key-material"
+    });
+    const rotatedAuthenticator = createWorkspaceIntegrityAuthenticator(workspace);
+    const currentTag = rotatedAuthenticator.sign("review record");
+
+    expect(currentTag).toMatch(/^v1:integrity-2026-2:/);
+    expect(rotatedAuthenticator.verify("review record", previousTag)).toBe(true);
+    expect(rotatedAuthenticator.verify("review record", currentTag)).toBe(true);
+
+    delete process.env.BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS;
+    expect(createWorkspaceIntegrityAuthenticator(workspace).verify("review record", previousTag)).toBe(false);
+  });
+
+  it("keeps verifying legacy untagged workspace HMACs after migration", () => {
+    const workspace = createTemporaryDirectory();
+    const key = createHash("sha256").update("crypto-test-key").digest();
+    const legacyTag = createHmac("sha256", key).update("legacy snapshot").digest("hex");
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY = "new-integrity-key-material";
+    process.env.BRAIN_CREATOR_INTEGRITY_KEY_ID = "integrity-2026-2";
+
+    expect(createWorkspaceIntegrityAuthenticator(workspace).verify("legacy snapshot", legacyTag)).toBe(true);
+  });
+
+  it("does not create a missing workspace key while verifying", () => {
+    const workspace = createTemporaryDirectory();
+    delete process.env.BRAIN_CREATOR_SECRET_KEY;
+    const authenticator = createWorkspaceIntegrityAuthenticator(workspace);
+
+    expect(authenticator.verify("payload", "a".repeat(64))).toBe(false);
+    expect(existsSync(join(workspace, ".brain-creator"))).toBe(false);
+  });
+
+  function createTemporaryDirectory() {
+    const directory = join(tmpdir(), `brain-integrity-${randomBytes(8).toString("hex")}`);
+    temporaryDirectories.push(directory);
+    return directory;
+  }
 });
 
 function encryptLegacy(value: string) {

@@ -69,6 +69,93 @@ describe("review report writer", () => {
     expect(report).toContain("业务流程");
   });
 
+  it("labels host-agent requirement analysis accurately", () => {
+    const analysis = analysisFixture();
+    analysis.provider = "host-agent";
+    const report = renderRequirementAnalysisReport({
+      title: "订单审批需求",
+      setStatus: "draft",
+      analysis,
+      evaluation: evaluationFixture(),
+      evaluationGate: gateFixture(),
+      coverage: { totalClauses: 2, coveredClauseSourceRefs: [], uncoveredClauseSourceRefs: [], intentCount: 0 },
+      workflowModels: [],
+      stateMachineModels: [],
+      businessObjectModels: [],
+      decisionTableModels: [],
+      businessScenarios: [],
+      scenarioAssuranceContracts: [],
+      scenarioTrustRecords: [],
+      intents: []
+    });
+
+    expect(report).toContain("分析来源: 宿主 Agent 协作分析");
+    expect(report).not.toContain("分析来源: Brain Creator 内置分析");
+  });
+
+  it("flags internal evidence labels embedded in business text without guessing their meaning", () => {
+    const analysis = analysisFixture();
+    analysis.clauses[0]!.text = "Demand approval yields EVD-015 or requester withdrawal.";
+    const report = renderRequirementAnalysisReport({
+      title: "订单审批需求",
+      setStatus: "draft",
+      analysis,
+      evaluation: evaluationFixture(),
+      evaluationGate: gateFixture(),
+      coverage: { totalClauses: 2, coveredClauseSourceRefs: [], uncoveredClauseSourceRefs: [], intentCount: 0 },
+      workflowModels: [],
+      stateMachineModels: [],
+      businessObjectModels: [],
+      decisionTableModels: [],
+      businessScenarios: [],
+      scenarioAssuranceContracts: [],
+      scenarioTrustRecords: [],
+      intents: []
+    });
+
+    expect(report).toContain("## 八、风险与待确认事项");
+    expect(report).toContain("### 报告文本完整性");
+    expect(report).toContain("`EVD-015`");
+    expect(report).toContain("不能替代动作或状态预期");
+  });
+
+  it("does not replace business words when a raw evidence reference is a substring", () => {
+    const analysis = analysisFixture();
+    analysis.clauses[0]!.text = "The approval workflow marks an interrupted item voided.";
+    const evidenceCatalog = evidenceCatalogFixture();
+    const collision = {
+      id: "EVD-015",
+      rawRef: "void",
+      sourceType: "workflow",
+      location: "structured model",
+      summary: "workflow transition",
+      relatedAssetIds: [],
+      relatedLabels: []
+    };
+    evidenceCatalog.entries.push(collision);
+    evidenceCatalog.byRawRef.set(collision.rawRef, collision);
+    const report = renderRequirementAnalysisReport({
+      title: "订单审批需求",
+      setStatus: "draft",
+      analysis,
+      evaluation: evaluationFixture(),
+      evaluationGate: gateFixture(),
+      coverage: { totalClauses: 2, coveredClauseSourceRefs: [], uncoveredClauseSourceRefs: [], intentCount: 0 },
+      workflowModels: [],
+      stateMachineModels: [],
+      businessObjectModels: [],
+      decisionTableModels: [],
+      businessScenarios: [],
+      scenarioAssuranceContracts: [],
+      scenarioTrustRecords: [],
+      intents: [],
+      evidenceCatalog
+    });
+
+    expect(report).toContain("The approval workflow marks an interrupted item voided.");
+    expect(report).not.toContain("[EVD-015]ed");
+  });
+
   it("falls back to a readable module title when source title is corrupted", () => {
     const report = renderRequirementAnalysisReport({
       title: "HRone-�\u0006乱码",

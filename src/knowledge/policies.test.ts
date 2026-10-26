@@ -178,6 +178,37 @@ describe("built-in knowledge policies", () => {
     );
   });
 
+  it("accepts secondary source references explicitly declared by a requirement clause", () => {
+    const analysis = analyzeRequirement({
+      requirementSetId: "requirement_1",
+      title: "Approval form",
+      content: "The approval field is visible.",
+      sourceRef: "source_1#line:1"
+    });
+    const secondarySourceRef = "source_1#line:2";
+    analysis.clauses[0]!.sourceRefs.push(secondarySourceRef);
+    analysis.nodes.find((node) => node.type === "field")!.sourceRefs.push(secondarySourceRef);
+
+    expect(evaluatePolicyOutput(analysis).unsupportedClaims).toEqual([]);
+  });
+
+  it("continues to block source references not declared by any requirement clause", () => {
+    const analysis = analyzeRequirement({
+      requirementSetId: "requirement_1",
+      title: "Approval form",
+      content: "The approval field is visible.",
+      sourceRef: "source_1#line:1"
+    });
+    analysis.nodes.find((node) => node.type === "field")!.sourceRefs.push("source_1#line:untrusted");
+
+    expect(evaluatePolicyOutput(analysis)).toEqual(
+      expect.objectContaining({
+        verdict: "blocked",
+        unsupportedClaims: [expect.stringContaining("source_1#line:untrusted")]
+      })
+    );
+  });
+
   it("normalizes host Skill output without allowing it to bypass source validation", () => {
     const analysis = normalizeHostSkillAnalysis(
       {

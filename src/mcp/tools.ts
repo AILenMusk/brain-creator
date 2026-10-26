@@ -135,7 +135,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
     name: "bc_prepare",
     title: "Brain Creator prepare requirement",
     description:
-      "Requirement-first facade for ingesting sources, running staged Requirement Eval, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, and confirming immutable execution preflight snapshots.",
+      "Requirement-first facade for ingesting sources, running staged Requirement Eval, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, recording scenario-attributed Trial interventions and manual recovery, confirming immutable execution preflight snapshots, re-evaluating fully reviewed legacy execution evidence, and attesting complete Trial intervention capture.",
     inputSchema: z.object({
       action: z.enum([
         "start-evaluation-trial",
@@ -143,6 +143,8 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         "validate-evaluation-trial",
         "complete-evaluation-trial",
         "record-evaluation-intervention",
+        "complete-intervention-capture",
+        "reevaluate-legacy-execution-evidence",
         "ingest-requirement",
         "refresh-requirement",
         "analyze-attachments",
@@ -173,6 +175,9 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         "reopen-gap",
         "resolve-test-data",
         "prepare-test-data",
+        "confirm-cleanup-notice",
+        "mark-test-data-sent",
+        "reconcile-test-data-no-effect",
         "submit-test-data",
         "prepare-execution",
         "record-execution-action",
@@ -202,6 +207,9 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       interventionCategory: z.enum([
         "controlled-facade-write",
         "user-clarification",
+        "user-authentication",
+        "manual-evidence-review",
+        "manual-recovery",
         "manual-store-write",
         "source-change",
         "code-change",
@@ -249,6 +257,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       cleanupPolicy: z.enum(["delete", "close", "retain-with-label"]).optional(),
       maxWrites: z.number().int().min(0).max(20).optional(),
       explorationOutcome: z.enum(["resolved", "failed", "cancelled"]).optional(),
+      selectedTransitionRefs: z.array(z.string().min(1)).default([]),
       failureReason: z.string().optional(),
       role: z.string().optional(),
       gapId: z.string().optional(),
@@ -258,6 +267,8 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       systemSnapshotHash: z.string().optional(),
       dataPlanHash: z.string().optional(),
       executionEvidenceId: z.string().optional(),
+      historicalEvidenceReviewer: z.string().min(1).max(200).optional(),
+      historicalEvidenceNote: z.string().min(1).max(2000).optional(),
       actionKey: z.string().min(1).max(200).optional(),
       actionPhase: z.enum([
         "planned",
@@ -272,9 +283,15 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       actionStepTitle: z.string().max(500).optional(),
       actionPostcondition: z.string().max(1000).optional(),
       actionEvidenceRefs: z.array(z.string()).default([]),
+      actionEvidenceArtifacts: z.array(z.object({
+        path: z.string().min(1).max(1000),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/i)
+      })).default([]),
+      operator: z.string().min(1).max(200).optional(),
       autoVerify: z.boolean().default(false),
       requirementSuiteRunId: z.string().optional(),
       caseSuiteId: z.string().optional(),
+      businessScenarioId: z.string().optional(),
       caseNo: z.string().optional(),
       observationMode: z.enum(["observe", "headless"]).optional(),
       runPassed: z.boolean().optional(),
@@ -322,6 +339,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       approvalReceiptId: z.string().optional(),
       executableCaseId: z.string().optional(),
       taskId: z.string().optional(),
+      cleanupNoticeSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
       taskStatus: z.enum(["succeeded", "failed"]).optional(),
       dataDecision: z.enum(["reuse", "create"]).optional(),
       dataReference: z.string().optional(),
@@ -420,7 +438,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
           title: z.string(),
           finalUrl: z.string().url(),
           domText: z.string(),
-          screenshotPath: z.string(),
+          screenshotPath: z.string().optional(),
           interactiveElements: z.array(
             z.object({
               name: z.string(),
@@ -678,7 +696,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
     name: "bc_review",
     title: "Brain Creator review",
     description:
-      "Facade review entry for onboarding plans, document and requirement suite runs, run-ledger timelines, execution diagnoses, cases, execution plans, conformance results, bugs, gaps, artifacts, requirement quality, historical Requirement Eval accuracy, System Brain snapshots and semantic bindings, and system exploration runs.",
+      "Facade review entry for onboarding plans, document and requirement suite runs, run-ledger timelines, execution diagnoses, cases, execution plans, conformance results, system-scoped gaps, knowledge-project-scoped requirement gaps, artifacts, requirement quality, historical Requirement Eval accuracy, System Brain snapshots and semantic bindings, and system exploration runs.",
     inputSchema: z.object({
       target: z.enum([
         "evaluation-trial",
@@ -755,12 +773,14 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
     inputSchema: z.object({
       target: z.enum(["system", "auth", "term", "rule", "checkpoint", "knowledge-project", "system-binding", "connector", "runtime", "approval"]),
       operation: z.enum(["create", "verify", "preflight", "refresh", "archive", "update", "reload-config", "reload-store", "rebuild-index"]).default("create"),
+      confirm: z.boolean().default(false),
       knowledgeProjectId: z.string().optional(),
       connector: z.enum(["feishu"]).optional(),
       systemId: z.string().optional(),
       name: z.string().optional(),
       environment: z.string().optional(),
       baseUrl: z.string().optional(),
+      executionProvenance: z.enum(["real-system", "synthetic", "unknown"]).optional(),
       defaultLocale: z.string().default("zh-CN"),
       urlAllowlist: z.array(z.string()).default([]),
       env: z.string().optional(),
@@ -803,6 +823,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       name: z.string(),
       environment: z.string(),
       baseUrl: z.string(),
+      executionProvenance: z.enum(["real-system", "synthetic", "unknown"]).optional(),
       defaultLocale: z.string().default("zh-CN"),
       urlAllowlist: z.array(z.string()).default([])
     })
@@ -880,6 +901,10 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       systemId: z.string(),
       authProfileId: z.string(),
       testCaseId: z.string().optional(),
+      evaluationTrialId: z.string().optional(),
+      requirementSuiteRunId: z.string().optional(),
+      executableCaseId: z.string().optional(),
+      businessScenarioId: z.string().optional(),
       reason: z.string(),
       resumeInstruction: z.string()
     })
@@ -1180,7 +1205,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
   {
     name: "bc_resolve_gap",
     title: "Resolve gap",
-    description: "Mark a gap resolved inside a business system.",
+    description: "Deprecated direct resolution is blocked; use bc_prepare action=resolve-gap with a preview, note, and evidence references.",
     inputSchema: z.object({
       projectId: z.string(),
       gapId: z.string()

@@ -53,6 +53,16 @@ describe("static suite execution report", () => {
       }],
       bugs: [{ id: "bug-1", status: "open", actualResult: "Unexpected value" }],
       gaps: [{ id: "gap-1", status: "open", reason: "Missing role evidence" }],
+      actionEvidence: [{
+        caseId: "case-1",
+        phase: "reconciled",
+        actionKey: "submit-order",
+        actionSemantic: "Submit order",
+        entityReference: "ORDER-42",
+        postcondition: "Order status is submitted",
+        evidenceRefs: ["target:order:ORDER-42"],
+        evidenceArtifacts: [{ path: "/tmp/postcondition.json", sha256: "a".repeat(64) }]
+      }],
       progress: {
         current: {
           sequence: 3,
@@ -85,6 +95,11 @@ describe("static suite execution report", () => {
     expect(html).toContain("gap-1");
     expect(html).toContain("filterReport");
     expect(html).toContain("TestIntent coverage");
+    expect(html).toContain("Recovery and write-action evidence");
+    expect(html).toContain("Order status is submitted");
+    expect(html).toContain("target:order:ORDER-42");
+    expect(html).toContain("a".repeat(64));
+    expect(html).toContain("not by themselves a business conformance verdict");
     expect(html).toContain("strong-verified");
     expect(html).toContain("Auth checkpoint required.");
     expect(html).toContain("Current progress");
@@ -123,6 +138,75 @@ describe("static suite execution report", () => {
     expect(html).toContain("Queued case");
     expect(html).toContain("Not executed");
     expect(html).toContain("blocked");
+  });
+
+  it("redacts protected credentials from actual results, progress, and artifact links", () => {
+    const secret = "session-secret-1234567890";
+    const html = renderStaticSuiteExecutionReport({
+      title: "Protected report",
+      run: {
+        ...run(),
+        caseRuns: [{ ...run().caseRuns[0]!, title: `Case ${secret}` }]
+      },
+      evidence: [{
+        id: "evidence-1",
+        knowledgeProjectId: "project-1",
+        systemId: "system-1",
+        executableCaseId: "case-1",
+        testCaseId: "test-1",
+        contextPackPath: "context.json",
+        status: "failed",
+        actualResult: `Observed ${secret}`,
+        evidenceWarnings: [`Contains ${secret}`],
+        steps: [{
+          stepId: "step-1",
+          order: 1,
+          action: "assert",
+          instruction: `Check ${secret}`,
+          expected: "visible",
+          actual: secret,
+          assertionStatus: "failed",
+          screenshotPath: `artifacts/${secret}.png`,
+          sourceRefs: [],
+          origin: "source"
+        }],
+        tracePaths: [],
+        artifactPaths: [`artifacts/${secret}.png`],
+        consoleErrors: [],
+        networkFailures: [],
+        createdAt: new Date().toISOString()
+      }],
+      progress: {
+        current: {
+          sequence: 1,
+          runId: "suite-1",
+          caseTitle: `Waiting ${secret}`,
+          stage: "execution",
+          stepTitle: `Check ${secret}`,
+          status: "running",
+          pageUrl: `https://example.test/${secret}`,
+          waitReason: `Wait ${secret}`,
+          elapsedMs: 100,
+          traceId: "trace-1",
+          createdAt: new Date().toISOString()
+        },
+        possiblyStalled: false,
+        stalledAfterMs: 120_000
+      },
+      actionEvidence: [{
+        phase: "reconciled",
+        actionKey: `action-${secret}`,
+        actionSemantic: `Submit ${secret}`,
+        entityReference: `order:${secret}`,
+        postcondition: `status=${secret}`,
+        evidenceRefs: [`target:${secret}`],
+        evidenceArtifacts: [{ path: `/tmp/${secret}.json`, sha256: "b".repeat(64) }]
+      }],
+      protectedSecrets: { sessionToken: secret }
+    });
+
+    expect(html).not.toContain(secret);
+    expect(html).toContain("[REDACTED]");
   });
 
   it("shows all requirement revisions attached to a mixed suite", () => {

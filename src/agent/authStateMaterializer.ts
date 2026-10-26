@@ -1,9 +1,9 @@
-import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
 import { decryptSecrets } from "../shared/crypto.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
+import { writeEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import { browserExecutablePath } from "./authStateVerifier.js";
 
 export type AuthStateMaterializer = (input: {
@@ -33,9 +33,6 @@ export const materializeBrowserAuthState: AuthStateMaterializer = async (input) 
     input.workDir,
     join(".brain-creator", "auth", safePart(input.system.id), safePart(input.authProfile.id), "storage-state.json")
   );
-  const authDir = join(outputPath, "..");
-  await mkdir(authDir, { recursive: true, mode: 0o700 });
-  await chmod(authDir, 0o700).catch(() => undefined);
   const executablePath = browserExecutablePath();
   const browser = await chromium.launch({
     headless: true,
@@ -56,8 +53,11 @@ export const materializeBrowserAuthState: AuthStateMaterializer = async (input) 
       waitUntil: "domcontentloaded",
       timeout: 15_000
     });
-    await context.storageState({ path: outputPath });
-    await chmod(outputPath, 0o600).catch(() => undefined);
+    const state = await context.storageState();
+    await writeEncryptedAuthStorageState(outputPath, state as {
+      cookies: Array<Record<string, unknown>>;
+      origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+    }, input.workDir);
     await context.close();
   } finally {
     await browser.close();

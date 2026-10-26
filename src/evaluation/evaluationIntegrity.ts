@@ -8,7 +8,9 @@ import type {
   ProjectionManifest,
   SourceSnapshot
 } from "../brain/types.js";
+import type { RequirementSource } from "../domain/types.js";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
+import type { IntegrityAuthenticator } from "../shared/crypto.js";
 import { id } from "../shared/id.js";
 import { RequirementGateService } from "./requirementGate.js";
 
@@ -28,7 +30,10 @@ export type StartEvaluationTrialInput = {
 };
 
 export class EvaluationIntegrityService {
-  constructor(private readonly repository: InMemoryBrainCreatorRepository) {}
+  constructor(
+    private readonly repository: InMemoryBrainCreatorRepository,
+    private readonly projectionAuthenticator?: IntegrityAuthenticator
+  ) {}
 
   startTrial(input: StartEvaluationTrialInput) {
     const source = this.repository.requirementSources.find(
@@ -61,10 +66,14 @@ export class EvaluationIntegrityService {
       if (!scenario || scenario.knowledgeProjectId !== project.id || scenario.requirementSetId !== requirementSetId) {
         throw new Error("Evaluation trial scenario is outside the source requirement set");
       }
-      const contract = this.repository.scenarioAssuranceContracts.find((item) => item.scenarioId === scenarioId);
-      if (input.systemId && contract?.systemId && contract.systemId !== input.systemId) {
-        throw new Error("Evaluation trial scenario belongs to another business system");
-      }
+    }
+    const scenarioReadinessReasons = this.scenarioReadinessReasons({
+      knowledgeProjectId: project.id,
+      systemId: input.systemId,
+      scenarioIds
+    });
+    if (scenarioReadinessReasons.length > 0) {
+      throw new Error(`Evaluation trial scenarios are not ready: ${scenarioReadinessReasons.join("; ")}`);
     }
     const approvalReceipt = input.approvalReceiptId
       ? this.repository.approvalReceipts.find((item) => item.id === input.approvalReceiptId)
@@ -93,9 +102,16 @@ export class EvaluationIntegrityService {
     }
 
     const now = new Date().toISOString();
+    const systemBrainSnapshot = scenarioIds.length > 0 && input.systemId
+      ? this.latestConfirmedSystemBrainSnapshot(project.id, input.systemId)
+      : undefined;
     const executionScope = scenarioIds.length > 0 || approvalReceipt ? {
       businessScenarioIds: [...scenarioIds].sort(),
       baselineHash: requirementSetId ? new RequirementGateService(this.repository).baselineFingerprint(requirementSetId) : undefined,
+      ...(systemBrainSnapshot ? {
+        systemBrainSnapshotId: systemBrainSnapshot.id,
+        systemBrainSnapshotHash: systemBrainSnapshot.contentHash
+      } : {}),
       ...(approvalReceipt ? { approvalScopeRef: approvalReceipt.id, approvalScopeHash: approvalReceipt.assetHash } : {})
     } : undefined;
     const trialId = id("evaluationTrial");
@@ -108,12 +124,16 @@ export class EvaluationIntegrityService {
       sourceType: source.sourceType,
       sourceRevision: source.revision,
       contentHash: source.contentHash,
+      semanticInputHash: requirementSemanticInputHash(source),
       sourceLocatorHash: hash(source.source),
       blockCount: source.blocks.length,
       attachmentCount: source.attachments.length,
       warningCount: source.warnings.length,
       createdAt: now
     };
+    if (this.projectionAuthenticator) {
+      sourceSnapshot.integrityTag = this.projectionAuthenticator.sign(sourceSnapshotPayload(sourceSnapshot));
+    }
     const projectionManifest = this.buildManifest({
       trialId,
       knowledgeProjectId: source.knowledgeProjectId,
@@ -166,6 +186,10 @@ export class EvaluationIntegrityService {
     if (trial.latestProjectionManifestId !== input.previousProjectionManifestId) {
       throw new Error("Evaluation projection checkpoint is stale");
     }
+    const chainReasons = this.projectionManifestChainReasons(trial, false);
+    if (chainReasons.length > 0) {
+      throw new Error(`Evaluation projection checkpoint chain is invalid: ${chainReasons.join("; ")}`);
+    }
     if (input.evidenceRefs.length === 0) {
       throw new Error("Controlled projection checkpoints require evidence references");
     }
@@ -179,7 +203,7 @@ export class EvaluationIntegrityService {
       trial.latestProjectionManifestId = manifest.id;
       trial.updatedAt = manifest.createdAt;
       this.repository.projectionManifests.push(manifest);
-      this.repository.interventionRecords.push({
+      const intervention: InterventionRecord = {
         id: id("intervention"),
         trialId: trial.id,
         category: "controlled-facade-write",
@@ -188,7 +212,11 @@ export class EvaluationIntegrityService {
         evidenceRefs: manifest.evidenceRefs,
         invalidatesTrial: false,
         createdAt: manifest.createdAt
-      });
+      };
+      if (this.projectionAuthenticator) {
+        intervention.integrityTag = this.projectionAuthenticator.sign(interventionPayload(intervention));
+      }
+      this.repository.interventionRecords.push(intervention);
     });
     return manifest;
   }
@@ -200,12 +228,9 @@ export class EvaluationIntegrityService {
   }, invalidate = true) {
     const trial = this.trial(trialId);
     const source = this.repository.requirementSources.find((item) => item.id === trial.requirementSourceId);
-    const manifest = this.repository.projectionManifests.find(
-      (item) => item.id === trial.latestProjectionManifestId
-    );
-    const current = this.projection(trial.knowledgeProjectId, trial.systemId);
     const reasons = [
       ...this.executionScopeReasons(trial),
+      ...this.sourceSnapshotReasons(trial),
       ...(!source || source.revision !== trial.sourceRevision || source.contentHash !== trial.sourceHash
         ? ["Requirement source changed during the evaluation trial"] : []),
       ...(input.codeRevision !== trial.codeRevision
@@ -218,8 +243,7 @@ export class EvaluationIntegrityService {
         ? ["Evaluation trial has no known pinned runtime build identity"] : []),
       ...(trial.executionScope && (!input.runtimeBuildIdentity || input.runtimeBuildIdentity === "unknown")
         ? ["Current runtime build identity is unknown"] : []),
-      ...(!manifest || manifest.projectionHash !== current.hash
-        ? ["Repository projection changed outside a controlled checkpoint"] : [])
+      ...this.projectionManifestChainReasons(trial, true)
     ];
     if (reasons.length > 0 && invalidate) {
       this.repository.transaction(() => this.invalidate(trial, reasons));
@@ -237,6 +261,8 @@ export class EvaluationIntegrityService {
   }) {
     const trial = this.trial(input.trialId);
     const reasons: string[] = this.executionScopeReasons(trial);
+    reasons.push(...this.sourceSnapshotReasons(trial));
+    reasons.push(...this.projectionManifestChainReasons(trial, true));
     if (!trial.executionScope?.businessScenarioIds.length || !trial.systemId) reasons.push("Execution binding requires a frozen scenario scope and system");
     if (trial.status !== "active") reasons.push(`Evaluation trial is not active: ${trial.status}`);
     if (trial.knowledgeProjectId !== input.knowledgeProjectId) reasons.push("Evaluation trial belongs to another knowledge project");
@@ -309,6 +335,30 @@ export class EvaluationIntegrityService {
         source?.knowledgeProjectId !== trial.knowledgeProjectId || source.latestRequirementSetId !== set.id ||
         !trial.systemId || !project?.systemIds.includes(trial.systemId)) return [...reasons, "Frozen source/project/system membership changed"];
     if (scope.baselineHash !== new RequirementGateService(this.repository).baselineFingerprint(set.id)) reasons.push("Frozen requirement baseline or scope version changed");
+    if (scope.businessScenarioIds.length > 0) {
+      const pinnedSystemSnapshot = scope.systemBrainSnapshotId
+        ? this.repository.systemBrainSnapshots.find((item) => item.id === scope.systemBrainSnapshotId)
+        : undefined;
+      const latestConfirmedSystemSnapshot = trial.systemId
+        ? this.latestConfirmedSystemBrainSnapshot(trial.knowledgeProjectId, trial.systemId)
+        : undefined;
+      if (
+        !scope.systemBrainSnapshotId ||
+        !scope.systemBrainSnapshotHash ||
+        !pinnedSystemSnapshot ||
+        pinnedSystemSnapshot.knowledgeProjectId !== trial.knowledgeProjectId ||
+        pinnedSystemSnapshot.systemId !== trial.systemId ||
+        pinnedSystemSnapshot.status !== "confirmed" ||
+        pinnedSystemSnapshot.contentHash !== scope.systemBrainSnapshotHash ||
+        latestConfirmedSystemSnapshot?.id !== scope.systemBrainSnapshotId ||
+        latestConfirmedSystemSnapshot.contentHash !== scope.systemBrainSnapshotHash
+      ) reasons.push("Frozen System Brain snapshot changed or is not pinned");
+    }
+    reasons.push(...this.scenarioReadinessReasons({
+      knowledgeProjectId: trial.knowledgeProjectId,
+      systemId: trial.systemId,
+      scenarioIds: scope.businessScenarioIds
+    }));
     if (scope.approvalScopeRef) {
       try {
         const receipt = new RequirementGateService(this.repository).verifyApprovalReceipt(set.id, scope.approvalScopeRef);
@@ -318,30 +368,214 @@ export class EvaluationIntegrityService {
     return reasons;
   }
 
+  private scenarioReadinessReasons(input: {
+    knowledgeProjectId: string;
+    systemId?: string;
+    scenarioIds: string[];
+  }) {
+    const reasons: string[] = [];
+    for (const scenarioId of input.scenarioIds) {
+      const scenario = this.repository.businessScenarios.find(
+        (item) => item.id === scenarioId && item.knowledgeProjectId === input.knowledgeProjectId
+      );
+      if (!scenario || scenario.status !== "approved") {
+        reasons.push(`Scenario ${scenarioId} is missing or not approved`);
+        continue;
+      }
+      if (!input.systemId) {
+        reasons.push(`Scenario ${scenarioId} has no bound execution system`);
+        continue;
+      }
+      const contracts = this.repository.scenarioAssuranceContracts.filter(
+        (item) => item.scenarioId === scenarioId && item.systemId === input.systemId
+      );
+      if (contracts.length !== 1) {
+        reasons.push(`Scenario ${scenarioId} does not have one unique assurance contract for the selected system`);
+        continue;
+      }
+      const contract = contracts[0]!;
+      if (
+        contract.systemId !== input.systemId ||
+        contract.systemBinding !== "unique" ||
+        contract.verdict !== "pass" ||
+        contract.oracleStrength !== "strong" ||
+        contract.requirementRefs.length === 0 ||
+        contract.unsupportedInferences.length > 0 ||
+        contract.testDataReadiness === "blocked"
+      ) {
+        reasons.push(`Scenario ${scenarioId} lacks a unique system binding, strong requirement-backed Oracle, or executable data plan`);
+        continue;
+      }
+      const snapshot = contract.systemBrainSnapshotId
+        ? this.repository.systemBrainSnapshots.find((item) => item.id === contract.systemBrainSnapshotId)
+        : undefined;
+      const latestConfirmedSnapshot = this.latestConfirmedSystemBrainSnapshot(input.knowledgeProjectId, input.systemId);
+      if (
+        !snapshot ||
+        snapshot.knowledgeProjectId !== input.knowledgeProjectId ||
+        snapshot.systemId !== input.systemId ||
+        snapshot.status !== "confirmed" ||
+        !snapshot.confirmedAt ||
+        !snapshot.confirmedBy?.trim() ||
+        latestConfirmedSnapshot?.id !== snapshot.id
+      ) {
+        reasons.push(`Scenario ${scenarioId} is not bound to the current confirmed System Brain snapshot`);
+      }
+    }
+    return reasons;
+  }
+
+  private latestConfirmedSystemBrainSnapshot(knowledgeProjectId: string, systemId: string) {
+    return this.repository.systemBrainSnapshots
+      .filter((item) =>
+        item.knowledgeProjectId === knowledgeProjectId &&
+        item.systemId === systemId &&
+        item.status === "confirmed"
+      )
+      .sort((left, right) => right.revision - left.revision || right.createdAt.localeCompare(left.createdAt))[0];
+  }
+
   recordIntervention(input: {
     trialId: string;
     category: EvaluationInterventionCategory;
     actor: string;
     note: string;
     evidenceRefs: string[];
+    businessScenarioIds?: string[];
+    authenticationPhase?: InterventionRecord["authenticationPhase"];
   }): InterventionRecord {
     const trial = this.trial(input.trialId);
-    const invalidatesTrial = !["controlled-facade-write", "user-clarification"].includes(input.category);
+    const businessScenarioIds = unique(input.businessScenarioIds ?? []);
+    const frozenScenarioIds = trial.executionScope?.businessScenarioIds ?? [];
+    if (businessScenarioIds.some((scenarioId) => !frozenScenarioIds.includes(scenarioId))) {
+      throw new Error("Intervention scenario is outside the frozen Trial scope");
+    }
+    const evidenceRefs = unique(input.evidenceRefs.map((reference) => required(reference, "Intervention evidence reference")));
+    if (evidenceRefs.length === 0) throw new Error("Intervention records require evidence references");
+    if (input.authenticationPhase && input.category !== "user-authentication") {
+      throw new Error("Authentication phase is only valid for user-authentication interventions");
+    }
+    const invalidatesTrial = ![
+      "controlled-facade-write",
+      "user-clarification",
+      "user-authentication",
+      "manual-evidence-review",
+      "manual-recovery"
+    ].includes(input.category);
     const record: InterventionRecord = {
       id: id("intervention"),
       trialId: trial.id,
       category: input.category,
       actor: required(input.actor, "Intervention actor"),
       note: required(input.note, "Intervention note"),
-      evidenceRefs: unique(input.evidenceRefs),
+      evidenceRefs,
+      ...(businessScenarioIds.length > 0 ? { businessScenarioIds } : {}),
+      ...(input.authenticationPhase ? { authenticationPhase: input.authenticationPhase } : {}),
       invalidatesTrial,
       createdAt: new Date().toISOString()
     };
+    if (this.projectionAuthenticator) {
+      record.integrityTag = this.projectionAuthenticator.sign(interventionPayload(record));
+    }
     this.repository.transaction(() => {
       this.repository.interventionRecords.push(record);
       if (invalidatesTrial) this.invalidate(trial, [`${input.category}: ${record.note}`]);
     });
     return record;
+  }
+
+  completeInterventionCapture(input: {
+    trialId: string;
+    scenarioIds: string[];
+    actor: string;
+    evidenceRefs: string[];
+  }) {
+    const trial = this.trial(input.trialId);
+    const scope = trial.executionScope;
+    if (trial.status !== "completed") throw new Error("Intervention capture can only be completed after the Trial is completed");
+    if (!scope?.scopeHash || !scope.businessScenarioIds.length) {
+      throw new Error("Intervention capture requires a frozen business scenario scope");
+    }
+    const scenarioIds = unique(input.scenarioIds).sort();
+    if (stableStringify(scenarioIds) !== stableStringify([...scope.businessScenarioIds].sort())) {
+      throw new Error("Intervention capture must cover every frozen Trial scenario");
+    }
+    const evidenceRefs = unique(input.evidenceRefs.map((reference) => required(reference, "Intervention capture evidence reference")));
+    if (evidenceRefs.length === 0) throw new Error("Intervention capture requires evidence references");
+    const missingInterventionSourceRefs = this.unrecordedInterventionSourceRefs(trial.id);
+    if (missingInterventionSourceRefs.length > 0) {
+      throw new Error(`Completed Trial intervention sources are missing records: ${missingInterventionSourceRefs.join(", ")}`);
+    }
+    const capture: NonNullable<EvaluationTrial["interventionCapture"]> = {
+      scenarioIds,
+      interventionIds: this.repository.interventionRecords
+        .filter((record) => record.trialId === trial.id)
+        .map((record) => record.id),
+      scopeHash: scope.scopeHash,
+      actor: required(input.actor, "Intervention capture actor"),
+      evidenceRefs,
+      completedAt: new Date().toISOString()
+    };
+    if (this.projectionAuthenticator) {
+      capture.integrityTag = this.projectionAuthenticator.sign(interventionCapturePayload(capture));
+    }
+    this.repository.transaction(() => {
+      trial.interventionCapture = capture;
+      trial.updatedAt = capture.completedAt;
+    });
+    return capture;
+  }
+
+  reviewInterventionIntegrity(trialId: string) {
+    const trial = this.trial(trialId);
+    const records = this.repository.interventionRecords.filter((record) => record.trialId === trial.id);
+    const capture = trial.interventionCapture;
+    const interventionValidById = new Map(records.map((record) => [
+      record.id,
+      Boolean(record.integrityTag && this.projectionAuthenticator?.verify(
+        interventionPayload(record), record.integrityTag
+      ))
+    ]));
+    const capturedIds = new Set(capture?.interventionIds ?? []);
+    const currentIds = new Set(records.map((record) => record.id));
+    const unrecordedInterventionSourceRefs = this.unrecordedInterventionSourceRefs(trial.id);
+    const interventionSetMatchesCapture = Boolean(capture) &&
+      capturedIds.size === currentIds.size &&
+      [...capturedIds].every((recordId) => currentIds.has(recordId));
+    const captureIntegrityValid = Boolean(capture?.integrityTag && this.projectionAuthenticator?.verify(
+      interventionCapturePayload(capture), capture.integrityTag
+    ));
+    return {
+      captureIntegrityValid,
+      interventionSetMatchesCapture,
+      interventionValidById,
+      unrecordedInterventionSourceRefs,
+      interventionSourcesComplete: unrecordedInterventionSourceRefs.length === 0
+    };
+  }
+
+  private unrecordedInterventionSourceRefs(trialId: string) {
+    const records = this.repository.interventionRecords.filter((record) => record.trialId === trialId);
+    const missingAuthCheckpointRefs = this.repository.authCheckpoints
+      .filter((checkpoint) => checkpoint.evaluationTrialId === trialId && checkpoint.status === "completed")
+      .filter((checkpoint) => !records.some((record) =>
+        record.category === "user-authentication" &&
+        record.evidenceRefs.includes(`auth-checkpoint:${checkpoint.id}`)
+      ))
+      .map((checkpoint) => `auth-checkpoint:${checkpoint.id}`);
+    const trialSuiteRunIds = new Set(this.repository.requirementSuiteRuns
+      .filter((run) => run.evaluationTrialId === trialId)
+      .map((run) => run.id));
+    const missingManualRecoveryRefs = this.repository.runLedgerEntries
+      .filter((entry) => entry.evaluationTrialId === trialId ||
+        Boolean(entry.requirementSuiteRunId && trialSuiteRunIds.has(entry.requirementSuiteRunId)))
+      .filter((entry) => entry.event === "action-reconciled" && entry.recoveryMode === "manual")
+      .filter((entry) => !records.some((record) =>
+        record.category === "manual-recovery" &&
+        record.evidenceRefs.includes(`run-ledger:${entry.id}`)
+      ))
+      .map((entry) => `run-ledger:${entry.id}`);
+    return [...missingAuthCheckpointRefs, ...missingManualRecoveryRefs].sort();
   }
 
   completeTrial(
@@ -380,7 +614,7 @@ export class EvaluationIntegrityService {
     const knowledgeProjectId = trial?.knowledgeProjectId ?? input.knowledgeProjectId;
     if (!knowledgeProjectId) throw new Error("Evaluation projection requires a knowledge project");
     const projection = this.projection(knowledgeProjectId, trial?.systemId ?? input.systemId);
-    return {
+    const manifest: ProjectionManifest = {
       id: id("projectionManifest"),
       trialId: input.trialId,
       previousManifestId: input.previousManifestId,
@@ -391,6 +625,10 @@ export class EvaluationIntegrityService {
       status: "current",
       createdAt: new Date().toISOString()
     };
+    if (this.projectionAuthenticator) {
+      manifest.integrityTag = this.projectionAuthenticator.sign(projectionManifestPayload(manifest));
+    }
+    return manifest;
   }
 
   private projection(knowledgeProjectId: string, systemId?: string) {
@@ -427,10 +665,97 @@ export class EvaluationIntegrityService {
     };
   }
 
+  private projectionManifestChainReasons(trial: EvaluationTrial, compareCurrentProjection: boolean) {
+    const reasons: string[] = [];
+    const visited = new Set<string>();
+    let manifest = this.repository.projectionManifests.find(
+      (item) => item.id === trial.latestProjectionManifestId
+    );
+    if (!manifest) return ["Evaluation projection manifest is missing"];
+    if (manifest.trialId !== trial.id) reasons.push("Evaluation projection manifest belongs to another Trial");
+    if (manifest.status !== "current") reasons.push("Evaluation projection manifest is not current");
+    if (compareCurrentProjection && manifest.projectionHash !== this.projection(trial.knowledgeProjectId, trial.systemId).hash) {
+      reasons.push("Repository projection changed outside a controlled checkpoint");
+    }
+    while (manifest) {
+      if (visited.has(manifest.id)) {
+        reasons.push("Evaluation projection manifest chain contains a cycle");
+        break;
+      }
+      visited.add(manifest.id);
+      if (manifest.trialId !== trial.id) {
+        reasons.push("Evaluation projection manifest chain crosses Trial ownership");
+        break;
+      }
+      if (this.projectionAuthenticator && (
+        !manifest.integrityTag ||
+        !this.projectionAuthenticator.verify(projectionManifestPayload(manifest), manifest.integrityTag)
+      )) {
+        reasons.push("Evaluation projection manifest integrity authentication failed");
+      }
+      const children = this.repository.projectionManifests.filter(
+        (item) => item.previousManifestId === manifest!.id
+      );
+      if (manifest.id !== trial.latestProjectionManifestId && children.length !== 1) {
+        reasons.push("Evaluation projection manifest chain is branched or incomplete");
+        break;
+      }
+      if (manifest.id === trial.latestProjectionManifestId && children.length > 0) {
+        reasons.push("Evaluation projection manifest is not the end of its chain");
+        break;
+      }
+      if (!manifest.evidenceRefs.length || manifest.evidenceRefs.some((reference) => !reference.trim())) {
+        reasons.push("Evaluation projection manifest has no valid evidence references");
+      }
+      if (!manifest.previousManifestId) {
+        if (manifest.operation !== "start-trial") reasons.push("Evaluation projection manifest chain has no Trial root");
+        if (!manifest.evidenceRefs.includes(`requirement-source:${trial.requirementSourceId}`) ||
+            !manifest.evidenceRefs.includes(`source-snapshot:${trial.sourceSnapshotId}`)) {
+          reasons.push("Evaluation projection manifest root does not bind the frozen requirement source snapshot");
+        }
+        break;
+      }
+      const previous = this.repository.projectionManifests.find(
+        (item) => item.id === manifest!.previousManifestId
+      );
+      if (!previous) {
+        reasons.push("Evaluation projection manifest chain has a missing parent");
+        break;
+      }
+      manifest = previous;
+    }
+    return [...new Set(reasons)];
+  }
+
   private activeTrial(trialId: string) {
     const trial = this.trial(trialId);
     if (trial.status !== "active") throw new Error(`Evaluation trial is not active: ${trial.status}`);
     return trial;
+  }
+
+  private sourceSnapshotReasons(trial: EvaluationTrial) {
+    const snapshot = this.repository.sourceSnapshots.find((item) => item.id === trial.sourceSnapshotId);
+    const source = this.repository.requirementSources.find((item) => item.id === trial.requirementSourceId);
+    if (!snapshot || !source) {
+      return ["Frozen requirement source snapshot is missing, changed, or outside the Trial"];
+    }
+    const reasons: string[] = [];
+    if (this.projectionAuthenticator && (
+      !snapshot.integrityTag ||
+      !this.projectionAuthenticator.verify(sourceSnapshotPayload(snapshot), snapshot.integrityTag)
+    )) {
+      reasons.push("Frozen requirement source snapshot integrity authentication failed");
+    }
+    if (snapshot.trialId !== trial.id || snapshot.sourceId !== trial.requirementSourceId ||
+        snapshot.knowledgeProjectId !== trial.knowledgeProjectId || snapshot.requirementSetId !== trial.requirementSetId ||
+        snapshot.sourceRevision !== trial.sourceRevision || snapshot.contentHash !== trial.sourceHash ||
+        source.revision !== snapshot.sourceRevision || source.contentHash !== snapshot.contentHash ||
+        source.latestRequirementSetId !== snapshot.requirementSetId ||
+        snapshot.sourceLocatorHash !== hash(source.source) ||
+        snapshot.semanticInputHash !== requirementSemanticInputHash(source)) {
+      reasons.push("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+    }
+    return reasons;
   }
 
   private trial(trialId: string) {
@@ -458,12 +783,93 @@ export class EvaluationIntegrityService {
   }
 }
 
+function requirementSemanticInputHash(source: RequirementSource) {
+  return hash(stableStringify({
+    sourceType: source.sourceType,
+    title: source.title,
+    content: source.content,
+    blocks: source.blocks,
+    attachments: source.attachments.map((attachment) => ({
+      id: attachment.id,
+      blockId: attachment.blockId,
+      fileToken: attachment.fileToken,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      type: attachment.type,
+      url: attachment.url,
+      contentHash: attachment.contentHash,
+      pageNumber: attachment.pageNumber
+    })),
+    warnings: source.warnings
+  }));
+}
+
 function normalizedRecord(value: Record<string, string>) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function sameRecord(left: Record<string, string>, right: Record<string, string>) {
   return stableStringify(left) === stableStringify(right);
+}
+
+function projectionManifestPayload(manifest: ProjectionManifest) {
+  return stableStringify({
+    id: manifest.id,
+    trialId: manifest.trialId,
+    previousManifestId: manifest.previousManifestId,
+    operation: manifest.operation,
+    projectionHash: manifest.projectionHash,
+    assetCounts: manifest.assetCounts,
+    evidenceRefs: manifest.evidenceRefs,
+    createdAt: manifest.createdAt
+  });
+}
+
+function interventionPayload(intervention: InterventionRecord) {
+  return stableStringify({
+    id: intervention.id,
+    trialId: intervention.trialId,
+    category: intervention.category,
+    actor: intervention.actor,
+    note: intervention.note,
+    evidenceRefs: intervention.evidenceRefs,
+    businessScenarioIds: intervention.businessScenarioIds,
+    ...(intervention.authenticationPhase
+      ? { authenticationPhase: intervention.authenticationPhase }
+      : {}),
+    invalidatesTrial: intervention.invalidatesTrial,
+    createdAt: intervention.createdAt
+  });
+}
+
+function interventionCapturePayload(capture: NonNullable<EvaluationTrial["interventionCapture"]>) {
+  return stableStringify({
+    scenarioIds: capture.scenarioIds,
+    interventionIds: capture.interventionIds,
+    scopeHash: capture.scopeHash,
+    actor: capture.actor,
+    evidenceRefs: capture.evidenceRefs,
+    completedAt: capture.completedAt
+  });
+}
+
+function sourceSnapshotPayload(snapshot: SourceSnapshot) {
+  return stableStringify({
+    id: snapshot.id,
+    trialId: snapshot.trialId,
+    sourceId: snapshot.sourceId,
+    knowledgeProjectId: snapshot.knowledgeProjectId,
+    requirementSetId: snapshot.requirementSetId,
+    sourceType: snapshot.sourceType,
+    sourceRevision: snapshot.sourceRevision,
+    contentHash: snapshot.contentHash,
+    semanticInputHash: snapshot.semanticInputHash,
+    sourceLocatorHash: snapshot.sourceLocatorHash,
+    blockCount: snapshot.blockCount,
+    attachmentCount: snapshot.attachmentCount,
+    warningCount: snapshot.warningCount,
+    createdAt: snapshot.createdAt
+  });
 }
 
 function stableStringify(value: unknown): string {

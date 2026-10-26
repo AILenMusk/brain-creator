@@ -9,7 +9,7 @@ describe("FeishuOpenApiAdapter", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(json({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }))
       .mockResolvedValueOnce(
-        json({ code: 0, data: { node: { obj_token: "docx-token", obj_type: "docx", title: "Order PRD" } } })
+        json({ code: 0, data: { node: { obj_token: "docx-token", obj_type: "docx", title: "Order PRD", has_child: true } } })
       )
       .mockResolvedValueOnce(
         json({ code: 0, data: { document: { document_id: "docx-token", revision_id: 7, title: "Order PRD" } } })
@@ -42,6 +42,7 @@ describe("FeishuOpenApiAdapter", () => {
     expect(result.title).toBe("Order PRD");
     expect(result.content).toContain("Approved orders are read-only");
     expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining("table")]));
+    expect(result.warnings).toContain("Feishu Wiki node has child nodes that require separate source extraction");
     expect(result.attachments).toEqual([
       expect.objectContaining({
         blockId: "image-1",

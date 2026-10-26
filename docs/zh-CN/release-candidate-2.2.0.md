@@ -2,7 +2,7 @@
 
 本页记录 2.2.0 候选版本的 L3 宿主模式评估边界，不是正式发布公告。
 
-## 已测量内容
+## 合成语料评分
 
 源码工作区提供 `npm run verify:l3-eval`。该命令使用确定性的脱敏黄金样本，覆盖：
 
@@ -14,7 +14,7 @@
 - 结构化执行证据。
 - 20 轮合成 Runner 稳定性样本。
 
-命令会逐项报告 `measured` 或 `not-measured`、样本数量和阈值。需要 JSON 输出时运行 `npm run verify:l3-eval:json`；需要保存到指定路径时直接运行 `node --loader ts-node/esm scripts/l3Eval.ts --json --output <path>`。
+命令将脱敏 fixture 结果标为 `scored`，并与真实 Trial 指标分开展示。没有关联的真实 Trial 证据时，真实维度保持 `not-measured`，发布门禁保持阻断。输出分别列出样本分母和阈值。需要 JSON 输出时运行 `npm run verify:l3-eval:json`；需要保存到指定路径时直接运行 `node --loader ts-node/esm scripts/l3Eval.ts --json --output <path>`。
 
 ## 发布边界
 

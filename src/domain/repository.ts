@@ -126,6 +126,7 @@ export function shardedRepositoryCollectionKeys() {
 
 export class InMemoryBrainCreatorRepository {
   schemaVersion = CURRENT_REPOSITORY_SCHEMA_VERSION;
+  protected transactionDepth = 0;
   systemProfiles: SystemProfile[] = [];
   systemExplorations: SystemExploration[] = [];
   authProfiles: AuthProfile[] = [];
@@ -204,6 +205,7 @@ export class InMemoryBrainCreatorRepository {
 
   transaction<T>(action: () => T): T {
     const before = structuredClone(snapshotRepository(this, this.schemaVersion));
+    this.transactionDepth += 1;
     try {
       const result = action();
       this.persist();
@@ -211,6 +213,8 @@ export class InMemoryBrainCreatorRepository {
     } catch (error) {
       applyRepositorySnapshot(this, before);
       throw error;
+    } finally {
+      this.transactionDepth -= 1;
     }
   }
 
@@ -425,6 +429,7 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
   }
 
   override persist() {
+    if (this.transactionDepth > 0) return;
     this.withLock(() => {
       const snapshot = snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION);
       this.writeSnapshot(snapshot);
@@ -433,8 +438,10 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
 
   override transaction<T>(action: () => T): T {
     const before = structuredClone(snapshotRepository(this, this.schemaVersion));
+    this.transactionDepth += 1;
     try {
       const result = action();
+      if (this.transactionDepth > 1) return result;
       this.withLock(() => {
         writeAtomicJson(this.transactionJournalPath, {
           schemaVersion: SHARDED_REPOSITORY_SCHEMA_VERSION,
@@ -458,6 +465,8 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
     } catch (error) {
       applyRepositorySnapshot(this, before);
       throw error;
+    } finally {
+      this.transactionDepth -= 1;
     }
   }
 

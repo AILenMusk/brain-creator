@@ -178,6 +178,69 @@ describe("execution task projection", () => {
     ]));
   });
 
+  it("marks a stale active document suite as possibly stalled without ledger events", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    repository.caseSuites.push({
+      id: "document-suite-stale",
+      systemId: "system-orders",
+      sourceId: "source-orders",
+      status: "waiting-for-agent",
+      totalCases: 1,
+      selectedCaseNos: ["TC-001"],
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z"
+    });
+
+    const result = projectExecutionTasks(repository, {
+      systemId: "system-orders",
+      nowMs: Date.parse("2026-10-22T00:00:00.000Z")
+    });
+
+    expect(result.active).toEqual(expect.objectContaining({
+      id: "document-suite-stale",
+      status: "waiting-for-agent",
+      possiblyStalled: true
+    }));
+    expect(result.possiblyStalled).toBe(1);
+  });
+
+  it("uses recent ledger activity instead of a stale persisted suite timestamp", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    repository.caseSuites.push({
+      id: "document-suite-recent-ledger",
+      systemId: "system-orders",
+      sourceId: "source-orders",
+      status: "waiting-for-agent",
+      totalCases: 1,
+      selectedCaseNos: ["TC-001"],
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z"
+    });
+    const ledger = new RunLedgerService(repository, () => "2026-10-22T00:00:00.000Z");
+    ledger.append({
+      runType: "document-suite",
+      systemId: "system-orders",
+      caseSuiteId: "document-suite-recent-ledger",
+      event: "progress",
+      scope: "suite",
+      stage: "execution",
+      toStatus: "waiting-for-agent",
+      message: "Agent output is pending"
+    });
+
+    const result = projectExecutionTasks(repository, {
+      systemId: "system-orders",
+      nowMs: Date.parse("2026-10-22T00:00:01.000Z")
+    });
+
+    expect(result.active).toEqual(expect.objectContaining({
+      id: "document-suite-recent-ledger",
+      updatedAt: "2026-10-22T00:00:00.000Z",
+      possiblyStalled: false
+    }));
+    expect(result.possiblyStalled).toBe(0);
+  });
+
   it("recovers a document suite from an active run even before the suite row is updated", () => {
     const repository = new InMemoryBrainCreatorRepository();
     repository.caseSuites.push({
@@ -323,6 +386,75 @@ describe("execution task projection", () => {
       waitReason: expect.stringContaining("postcondition"),
       pendingAction: expect.objectContaining({
         actionKey: "plan-submit:step-submit",
+        phase: "sent"
+      })
+    }));
+  });
+
+  it("requires reconciling an uncertain write before reviewing a blocked suite", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const current = suite();
+    current.status = "blocked";
+    current.caseRuns[0].status = "blocked";
+    current.caseRuns[0].testDataTaskId = undefined;
+    current.caseRuns[0].testDataPhase = undefined;
+    repository.requirementSuiteRuns.push(current);
+    const ledger = new RunLedgerService(repository);
+    ledger.recordAction({
+      requirementSuiteRunId: current.id,
+      systemId: current.systemId,
+      executableCaseId: current.currentExecutableCaseId,
+      stepId: "step-submit",
+      actionKey: "plan-submit:step-submit",
+      phase: "sent",
+      actionSemantic: "Submit order",
+      entityReference: "order:order-001",
+      postcondition: "Order status is submitted"
+    });
+
+    const result = projectExecutionTasks(repository, { systemId: current.systemId });
+    expect(result.active).toEqual(expect.objectContaining({
+      status: "blocked",
+      nextAction: "reconcile-action",
+      pendingAction: expect.objectContaining({
+        actionKey: "plan-submit:step-submit",
+        phase: "sent"
+      })
+    }));
+  });
+
+  it("requires reconciling an uncertain write before reviewing a blocked document suite", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const suiteId = "document-suite-blocked-write";
+    repository.caseSuites.push({
+      id: suiteId,
+      systemId: "system-orders",
+      sourceId: "source-orders",
+      status: "blocked",
+      totalCases: 1,
+      selectedCaseNos: ["TC-001"],
+      createdAt: "2026-09-14T00:00:00.000Z",
+      updatedAt: "2026-09-14T00:00:02.000Z"
+    });
+    const ledger = new RunLedgerService(repository);
+    ledger.recordAction({
+      runType: "document-suite",
+      systemId: "system-orders",
+      caseSuiteId: suiteId,
+      caseNo: "TC-001",
+      actionKey: "TC-001:submit",
+      phase: "sent",
+      actionSemantic: "Submit order",
+      entityReference: "order:order-001",
+      postcondition: "Order status is submitted"
+    });
+
+    const result = projectExecutionTasks(repository, { systemId: "system-orders" });
+    expect(result.active).toEqual(expect.objectContaining({
+      status: "waiting",
+      nextAction: "reconcile-action",
+      pendingAction: expect.objectContaining({
+        actionKey: "TC-001:submit",
         phase: "sent"
       })
     }));

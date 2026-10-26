@@ -135,6 +135,28 @@ describe("BRAIN_CREATOR_TOOLS", () => {
     const prepare = BRAIN_CREATOR_TOOLS.find((tool) => tool.name === "bc_prepare");
     const configure = BRAIN_CREATOR_TOOLS.find((tool) => tool.name === "bc_configure");
     const review = BRAIN_CREATOR_TOOLS.find((tool) => tool.name === "bc_review");
+    const createSystem = BRAIN_CREATOR_TOOLS.find((tool) => tool.name === "bc_create_system");
+
+    expect(configure?.inputSchema.safeParse({
+      target: "system",
+      name: "Business target",
+      environment: "test",
+      baseUrl: "https://business.example.test",
+      executionProvenance: "real-system"
+    }).success).toBe(true);
+
+    expect(createSystem?.inputSchema.safeParse({
+      name: "Sandbox",
+      environment: "local",
+      baseUrl: "http://127.0.0.1:3000",
+      executionProvenance: "synthetic"
+    }).success).toBe(true);
+    expect(createSystem?.inputSchema.safeParse({
+      name: "Sandbox",
+      environment: "local",
+      baseUrl: "http://127.0.0.1:3000",
+      executionProvenance: "production"
+    }).success).toBe(false);
 
     expect(
       prepare?.inputSchema.safeParse({
@@ -159,6 +181,14 @@ describe("BRAIN_CREATOR_TOOLS", () => {
         }
       }).success
     ).toBe(true);
+    expect(prepare?.inputSchema.safeParse({
+      action: "reevaluate-legacy-execution-evidence",
+      evaluationTrialId: "trial-1",
+      executionEvidenceId: "evidence-1",
+      historicalEvidenceReviewer: "reviewer",
+      historicalEvidenceNote: "Reviewed the Reporter and artifacts",
+      confirm: true
+    }).success).toBe(true);
     const structuredPackage = prepare?.inputSchema.parse({
       action: "ingest-requirement",
       source: "requirements.md",

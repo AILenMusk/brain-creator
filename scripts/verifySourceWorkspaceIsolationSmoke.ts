@@ -28,10 +28,20 @@ try {
   );
 
   assert(context.workDir === businessWorkspace, "MCP context did not use business workspace");
-  const installedAssetsPath = join(businessWorkspace, ".brain-creator", "local-assets.json");
-  const installedAssets = JSON.parse(await readFile(installedAssetsPath, "utf8"));
+  const installedStoreDir = join(businessWorkspace, ".brain-creator", "store");
+  const installedManifest = JSON.parse(
+    await readFile(join(installedStoreDir, "manifest.json"), "utf8")
+  );
   assert(
-    installedAssets.systemProfiles.some((item: { id: string }) => item.id === system.id),
+    installedManifest.format === "sharded" &&
+      installedManifest.collections.includes("systemProfiles"),
+    "Installed workspace did not persist a valid sharded store manifest"
+  );
+  const installedProfiles = JSON.parse(
+    await readFile(join(installedStoreDir, "collections", "systemProfiles.json"), "utf8")
+  );
+  assert(
+    installedProfiles.some((item: { id: string }) => item.id === system.id),
     "Installed workspace did not persist created system"
   );
   assert(
@@ -39,9 +49,9 @@ try {
     "Source repository Brain Creator assets changed during installed MCP smoke"
   );
 
-  console.log("Installed MCP smoke passed.");
+  console.log("Source MCP workspace isolation smoke passed.");
   console.log(`Workspace: ${businessWorkspace}`);
-  console.log(`Assets: ${installedAssetsPath}`);
+  console.log(`Store: ${installedStoreDir}`);
   console.log(`System: ${system.id}`);
 } finally {
   restoreEnv("BRAIN_CREATOR_WORKSPACE", previousWorkspace);

@@ -13,6 +13,7 @@ describe("BrainCreatorService", () => {
     const ordersSystem = service.createSystemProfile({
       name: "Orders Console",
       environment: "staging",
+      executionProvenance: "synthetic",
       baseUrl: "http://127.0.0.1:3000/fixtures/private-target",
       defaultLocale: "zh-CN",
       urlAllowlist: ["http://127.0.0.1:3000/fixtures/private-target"]
@@ -20,6 +21,7 @@ describe("BrainCreatorService", () => {
     const crmSystem = service.createSystemProfile({
       name: "CRM Console",
       environment: "test",
+      executionProvenance: "real-system",
       baseUrl: "https://crm.example.test",
       defaultLocale: "en-US",
       urlAllowlist: ["https://crm.example.test"]
@@ -38,6 +40,59 @@ describe("BrainCreatorService", () => {
       "CRM Console"
     ]);
     expect(crmSystem.id).not.toBe(ordersSystem.id);
+    expect(ordersSystem.executionProvenance).toBe("synthetic");
+    expect(crmSystem.executionProvenance).toBe("real-system");
+  });
+
+  it("defaults system execution provenance to unknown", () => {
+    const system = createService().createSystemProfile({
+      name: "Unclassified system",
+      environment: "test",
+      baseUrl: "https://unknown.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://unknown.example.test"]
+    });
+
+    expect(system.executionProvenance).toBe("unknown");
+  });
+
+  it("adds only HTTPS origins to an existing system allowlist", () => {
+    const service = createService();
+    const system = service.createSystemProfile({
+      name: "Test5 GHR",
+      environment: "test",
+      baseUrl: "https://ghr.example.test/index",
+      defaultLocale: "zh-CN",
+      urlAllowlist: ["https://ghr.example.test"]
+    });
+
+    const updated = service.addSystemUrlAllowlistOrigins(system.id, ["https://sso.example.test"]);
+    expect(updated).toEqual(expect.objectContaining({
+      id: system.id,
+      baseUrl: "https://ghr.example.test/index",
+      urlAllowlist: ["https://ghr.example.test", "https://sso.example.test"]
+    }));
+    expect(service.addSystemUrlAllowlistOrigins(system.id, ["https://sso.example.test"]).urlAllowlist)
+      .toEqual(["https://ghr.example.test", "https://sso.example.test"]);
+  });
+
+  it.each([
+    "http://sso.example.test",
+    "https://sso.example.test/cas/login",
+    "https://user@sso.example.test"
+  ])("rejects non-origin allowlist additions: %s", (origin) => {
+    const service = createService();
+    const system = service.createSystemProfile({
+      name: "Test5 GHR",
+      environment: "test",
+      baseUrl: "https://ghr.example.test/index",
+      defaultLocale: "zh-CN",
+      urlAllowlist: ["https://ghr.example.test"]
+    });
+    const before = { ...system, urlAllowlist: [...system.urlAllowlist] };
+
+    expect(() => service.addSystemUrlAllowlistOrigins(system.id, [origin])).toThrow("HTTPS origins");
+    expect(service.listSystemProfiles()[0]).toEqual(before);
   });
 
   it("redacts protected values from bug reports and gap lifecycle notes", () => {
@@ -86,10 +141,28 @@ describe("BrainCreatorService", () => {
       projectId: system.id,
       operation: "resolve",
       note: "Resolved after token=bug-token-123 was removed",
-      evidenceRefs: []
+      evidenceRefs: ["evidence:secret-redaction-review"]
     });
     expect(transitioned.reason).toBe("token=[REDACTED]");
     expect(transitioned.lifecycle?.at(-1)?.note).toContain("token=[REDACTED]");
+  });
+
+  it("requires evidence references before resolving or dismissing a Gap", () => {
+    const service = createService();
+    const gap = service.failTrainingSession(
+      service.createTrainingSession({ projectId: "system-1", pageModelId: "page_1" }).id,
+      "Missing locator evidence"
+    ).gap;
+
+    expect(() => service.resolveGap({
+      projectId: "system-1",
+      gapId: gap.id,
+      note: "Reviewed the missing evidence.",
+      evidenceRefs: []
+    })).toThrow("Gap resolution requires at least one evidence reference");
+    expect(service.listGaps({ projectId: "system-1", status: "open" })).toEqual([
+      expect.objectContaining({ id: gap.id, status: "open" })
+    ]);
   });
 
   it("prevents page modeling and case generation from crossing business systems", () => {
@@ -258,6 +331,42 @@ describe("BrainCreatorService", () => {
       "Console error: fixture console failure",
       "Network failure: GET http://127.0.0.1:3000/missing.js"
     ]);
+  });
+
+  it("keeps screenshotless page observations explicitly limited", () => {
+    const service = createService();
+
+    const result = service.discoverPageModel({
+      projectId: "project-1",
+      route: "/orders",
+      name: "Orders",
+      authProfileId: "auth_1",
+      domText: "Orders Create Order",
+      captureMode: "browser",
+      browserCapture: {
+        title: "Orders Fixture",
+        finalUrl: "https://example.test/orders",
+        domText: "Orders Create Order",
+        interactiveElements: [
+          {
+            name: "Create Order",
+            role: "button",
+            text: "Create Order",
+            selector: "button[data-action=create]"
+          }
+        ],
+        consoleErrors: [],
+        networkFailures: [],
+        issues: []
+      }
+    });
+
+    expect(result.pageModel).not.toHaveProperty("screenshotId");
+    expect(result.locatorPoints[0]?.confidence).toBe(0.6);
+    expect(result.probeResult.type).toBe("host-accessibility-observation");
+    expect(result.probeResult.issues).toContain(
+      "Screenshot evidence unavailable for this page capture"
+    );
   });
 
   it("creates a gap instead of hallucinating generated steps without locators", () => {
@@ -867,6 +976,7 @@ describe("BrainCreatorService", () => {
       reason: "User must complete Google password and 2FA manually",
       resumeInstruction: "Resume after Inbox is visible"
     });
+    expect(checkpoint.authenticationPhase).toBe("initial-authorization");
 
     const cancelled = service.cancelTestCase(testCase.id, "User closed the login page");
 
@@ -894,6 +1004,19 @@ describe("BrainCreatorService", () => {
     expect(resumed.resolvedGaps).toEqual([
       expect.objectContaining({ sourceType: "user-interruption", status: "resolved" })
     ]);
+
+    service.verifyAuthProfile(auth.id, {
+      targetUrl: system.baseUrl,
+      finalUrl: "https://mail.google.com/"
+    });
+    const recoveryCheckpoint = service.createAuthCheckpoint({
+      systemId: system.id,
+      authProfileId: auth.id,
+      testCaseId: testCase.id,
+      reason: "The previously verified browser session expired",
+      resumeInstruction: "Resume after the Inbox is visible again"
+    });
+    expect(recoveryCheckpoint.authenticationPhase).toBe("session-recovery");
   });
 
   it("reports external preflight gaps and archives systems and auth without deleting them", () => {
@@ -1055,7 +1178,9 @@ describe("BrainCreatorService", () => {
 
     const resolved = service.resolveGap({
       projectId: "system-1",
-      gapId: failed.gap.id
+      gapId: failed.gap.id,
+      note: "The missing locator evidence has been reviewed.",
+      evidenceRefs: ["evidence:locator-review"]
     });
 
     expect(resolved.status).toBe("resolved");
@@ -1063,7 +1188,9 @@ describe("BrainCreatorService", () => {
     expect(() =>
       service.resolveGap({
         projectId: "system-2",
-        gapId: failed.gap.id
+        gapId: failed.gap.id,
+        note: "This is the wrong system scope.",
+        evidenceRefs: ["evidence:wrong-system"]
       })
     ).toThrow("Gap belongs to another business system");
   });

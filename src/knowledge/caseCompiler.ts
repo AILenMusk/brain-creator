@@ -97,6 +97,35 @@ export function compileIntentSemanticSteps(input: {
     ...confirmedModels(input.intent, input.stateMachineModels),
     ...confirmedModels(input.intent, input.workflowModels)
   ].map((model) => model.id));
+  const confirmedStateModels = confirmedModels(input.intent, input.stateMachineModels);
+  const confirmedWorkflowModels = confirmedModels(input.intent, input.workflowModels);
+  const selectedTransitionRefs = unique(input.intent.selectedTransitionRefs ?? []);
+  const availableTransitionRefs = new Set([
+    ...confirmedStateModels.flatMap((model) =>
+      model.transitions.map((transition) => transitionSourceRef({ source: "state-machine", model, transition }))),
+    ...confirmedWorkflowModels.flatMap((model) =>
+      model.transitions.map((transition) => transitionSourceRef({ source: "workflow", model, transition })))
+  ]);
+  const selectedPathSource = selectedTransitionRefs.length === 0
+    ? undefined
+    : selectedTransitionRefs.every((reference) => reference.startsWith("state-machine:"))
+      ? "state-machine"
+      : selectedTransitionRefs.every((reference) => reference.startsWith("workflow:"))
+        ? "workflow"
+        : "mixed";
+  const unresolvedTransitionRefs = selectedTransitionRefs.filter((reference) => !availableTransitionRefs.has(reference));
+  if (unresolvedTransitionRefs.length > 0) {
+    const refs = unique([...sourceRefs, ...selectedTransitionRefs]);
+    return {
+      source: selectedPathSource === "workflow" ? "workflow" : "state-machine",
+      processPathSourceRefs: refs,
+      steps: [],
+      ambiguity: {
+        reason: `Explicitly selected process transitions are not all present in the confirmed model scope: ${unresolvedTransitionRefs.join(", ")}.`,
+        sourceRefs: refs
+      }
+    };
+  }
   const unresolvedModelRefs = explicitModelRefs.filter((modelRef) => !confirmedModelIds.has(modelRef));
   if (unresolvedModelRefs.length > 0) {
     const missingModelRefs = unique([
@@ -113,7 +142,245 @@ export function compileIntentSemanticSteps(input: {
       }
     };
   }
-  const matches = matchingIntentTransitions(input.intent, candidates);
+
+  const negatedStateRefs = negatedProcessStateRefs(input.intent, confirmedStateModels, confirmedWorkflowModels);
+  if (negatedStateRefs.length > 0) {
+    const refs = unique([...sourceRefs, ...negatedStateRefs]);
+    return {
+      source: "requirement-clause",
+      processPathSourceRefs: refs,
+      steps: [],
+      ambiguity: {
+        reason: "The intent contains a negated process-state mention; the compiler cannot treat it as an explicit path endpoint. Clarify the intended starting state or target outcome before compilation.",
+        sourceRefs: refs
+      }
+    };
+  }
+
+  if (selectedPathSource === "mixed") {
+    const refs = unique([...sourceRefs, ...selectedTransitionRefs]);
+    return {
+      source: "requirement-clause",
+      processPathSourceRefs: refs,
+      steps: [],
+      ambiguity: {
+        reason: "Explicitly selected transitions must belong to one confirmed process-model family; the compiler will not combine unrelated state and workflow paths.",
+        sourceRefs: refs
+      }
+    };
+  }
+
+  if (selectedPathSource === undefined &&
+      hasExplicitStatePath(input.intent, confirmedStateModels) &&
+      hasExplicitWorkflowPath(input.intent, confirmedWorkflowModels)) {
+    const statePaths = confirmedStateModels.flatMap((model) => statePathsForIntent(input.intent, model));
+    const workflowPaths = confirmedWorkflowModels.flatMap((model) => workflowPathsForIntent(input.intent, model));
+    if (statePaths.length > 0 && workflowPaths.length > 0) {
+      const pathRefs = unique([
+        ...sourceRefs,
+        ...statePaths.flatMap((path) => [
+          `state-machine:${path.model.id}`,
+          ...path.transitions.flatMap((transition) => [
+            ...transition.sourceRefs,
+            transitionSourceRef({ source: "state-machine", model: path.model, transition })
+          ])
+        ]),
+        ...workflowPaths.flatMap((path) => [
+          `workflow:${path.model.id}`,
+          ...path.transitions.flatMap((transition) => [
+            ...transition.sourceRefs,
+            transitionSourceRef({ source: "workflow", model: path.model, transition })
+          ])
+        ])
+      ]);
+      return {
+        source: "requirement-clause",
+        processPathSourceRefs: pathRefs,
+        steps: [],
+        ambiguity: {
+          reason: "Both state and workflow models provide confirmed endpoint paths; select one model and transition family before compilation.",
+          sourceRefs: pathRefs
+        }
+      };
+    }
+  }
+
+  if (selectedPathSource !== "workflow" && hasExplicitStatePath(input.intent, confirmedStateModels)) {
+    const paths = confirmedStateModels.flatMap((model) => statePathsForIntent(input.intent, model));
+    if (paths.length > 1) {
+      const pathRefs = unique([
+        ...sourceRefs,
+        ...paths.flatMap((path) => [
+          `state-machine:${path.model.id}`,
+          ...path.transitions.flatMap((transition) => [
+            ...transition.sourceRefs,
+            `state-machine:${path.model.id}#transition:${transition.id}`
+          ])
+        ])
+      ]);
+      return {
+        source: "state-machine",
+        processPathSourceRefs: pathRefs,
+        steps: [],
+        ambiguity: {
+          reason: `Multiple confirmed state paths match the explicit starting and target states; select a path or add transition constraints (${paths.length} candidates).`,
+          sourceRefs: pathRefs
+        }
+      };
+    }
+    if (paths.length === 1) {
+      const path = paths[0];
+      const stateLabels = new Map(path.model.states.map((state) => [state.id, state.label]));
+      const pathRefs = unique([
+        ...sourceRefs,
+        ...path.transitions.flatMap((transition) => [
+          ...transition.sourceRefs,
+          transitionSourceRef({ source: "state-machine", model: path.model, transition }),
+          `state-machine:${path.model.id}`
+        ])
+      ]);
+      const steps = path.transitions.flatMap((transition) => {
+        const from = stateLabels.get(transition.from) ?? transition.from;
+        const to = stateLabels.get(transition.to) ?? transition.to;
+        const transitionRef = transitionSourceRef({ source: "state-machine", model: path.model, transition });
+        const actor = transition.actor ? ` as ${transition.actor}` : "";
+        const conditions = [
+          ...(transition.preconditions ?? []),
+          transition.trigger
+        ].filter((value): value is string => Boolean(value));
+        return processSteps({
+          module: input.intent.module,
+          action: transitionAction(transition.trigger),
+          actionInstruction: `Trigger the confirmed state transition from ${from} to ${to}${actor}${conditions.length ? ` when ${conditions.join(" and ")}` : ""}`,
+          businessContext: transitionBusinessContext(transition.businessObject, transition.sideEffects),
+          targetSemantic: transition.trigger || `transition to ${to}`,
+          expected: `State becomes ${to}`,
+          sourceRefs: unique([...sourceRefs, `state-machine:${path.model.id}`, ...transition.sourceRefs, transitionRef])
+        });
+      }).map((step, index) => ({ ...step, id: id("step"), order: index + 1 }));
+      return {
+        source: "state-machine",
+        processPathSourceRefs: pathRefs,
+        steps
+      };
+    }
+    const pathRefs = unique([
+      ...sourceRefs,
+      ...confirmedStateModels.flatMap((model) => [
+        `state-machine:${model.id}`,
+        ...model.sourceRefs,
+        ...model.transitions.flatMap((transition) => [
+          ...transition.sourceRefs,
+          `state-machine:${model.id}#transition:${transition.id}`
+        ])
+      ])
+    ]);
+    return {
+      source: "state-machine",
+      processPathSourceRefs: pathRefs,
+      steps: [],
+      ambiguity: {
+        reason: "The explicit starting and target states do not resolve to a unique confirmed path; the compiler will not replace a missing path with generic clause steps.",
+        sourceRefs: pathRefs
+      }
+    };
+  }
+
+  if (selectedPathSource !== "state-machine" && hasExplicitWorkflowPath(input.intent, confirmedWorkflowModels)) {
+    const paths = confirmedWorkflowModels.flatMap((model) => workflowPathsForIntent(input.intent, model));
+    if (paths.length > 1) {
+      const pathRefs = unique([
+        ...sourceRefs,
+        ...paths.flatMap((path) => [
+          `workflow:${path.model.id}`,
+          ...path.transitions.flatMap((transition) => [
+            ...transition.sourceRefs,
+            transitionSourceRef({ source: "workflow", model: path.model, transition })
+          ])
+        ])
+      ]);
+      return {
+        source: "workflow",
+        processPathSourceRefs: pathRefs,
+        steps: [],
+        ambiguity: {
+          reason: `Multiple confirmed workflow paths match the explicit starting and target steps; select a path or add transition constraints (${paths.length} candidates).`,
+          sourceRefs: pathRefs
+        }
+      };
+    }
+    if (paths.length === 1) {
+      const path = paths[0];
+      const stepLabels = new Map(path.model.steps.map((step) => [step.id, step.label]));
+      const pathRefs = unique([
+        ...sourceRefs,
+        ...path.transitions.flatMap((transition) => [
+          ...transition.sourceRefs,
+          transitionSourceRef({ source: "workflow", model: path.model, transition }),
+          `workflow:${path.model.id}`
+        ])
+      ]);
+      const steps = path.transitions.flatMap((transition) => {
+        const from = stepLabels.get(transition.from) ?? transition.from;
+        const to = stepLabels.get(transition.to) ?? transition.to;
+        const fromStep = path.model.steps.find((step) => step.id === transition.from);
+        const toStep = path.model.steps.find((step) => step.id === transition.to);
+        const transitionRef = transitionSourceRef({ source: "workflow", model: path.model, transition });
+        const actor = transition.actor ?? fromStep?.actor;
+        const conditions = [
+          ...(transition.preconditions ?? []),
+          transition.condition,
+          transition.trigger
+        ].filter((value): value is string => Boolean(value));
+        return processSteps({
+          module: input.intent.module,
+          action: transitionAction(transition.trigger ?? transition.condition),
+          actionInstruction: `Follow the confirmed workflow from ${from} to ${to}${actor ? ` as ${actor}` : ""}${conditions.length ? ` when ${conditions.join(" and ")}` : ""}`,
+          businessContext: transitionBusinessContext(
+            transition.businessObject ?? toStep?.businessObject ?? fromStep?.businessObject,
+            unique([...(fromStep?.sideEffects ?? []), ...(transition.sideEffects ?? []), ...(toStep?.sideEffects ?? [])])
+          ),
+          targetSemantic: transition.trigger || transition.condition || to,
+          expected: `Workflow reaches ${to}`,
+          sourceRefs: unique([
+            ...sourceRefs,
+            `workflow:${path.model.id}`,
+            ...(fromStep?.sourceRefs ?? []),
+            ...transition.sourceRefs,
+            ...(toStep?.sourceRefs ?? []),
+            transitionRef
+          ])
+        });
+      }).map((step, index) => ({ ...step, id: id("step"), order: index + 1 }));
+      return {
+        source: "workflow",
+        processPathSourceRefs: pathRefs,
+        steps
+      };
+    }
+    const pathRefs = unique([
+      ...sourceRefs,
+      ...confirmedWorkflowModels.flatMap((model) => [
+        `workflow:${model.id}`,
+        ...model.sourceRefs,
+        ...model.transitions.flatMap((transition) => [
+          ...transition.sourceRefs,
+          transitionSourceRef({ source: "workflow", model, transition })
+        ])
+      ])
+    ]);
+    return {
+      source: "workflow",
+      processPathSourceRefs: pathRefs,
+      steps: [],
+      ambiguity: {
+        reason: "The explicit starting and target steps do not resolve to a unique confirmed workflow path; the compiler will not replace a missing path with generic clause steps.",
+        sourceRefs: pathRefs
+      }
+    };
+  }
+
+  const matches = selectedTransitionRefs.length > 0 ? [] : matchingIntentTransitions(input.intent, candidates);
   if (matches.length > 1) {
     const ambiguousSourceRefs = unique([
       ...sourceRefs,
@@ -169,6 +436,7 @@ export function compileIntentSemanticSteps(input: {
         module: input.intent.module,
         action: transitionAction(match.transition.trigger),
         actionInstruction: `Trigger the confirmed state transition from ${from} to ${to}${match.transition.trigger ? ` using ${match.transition.trigger}` : ""}`,
+        businessContext: transitionBusinessContext(match.transition.businessObject, match.transition.sideEffects),
         targetSemantic: match.transition.trigger || `transition to ${to}`,
         expected: input.intent.expectedResults[0] || `State becomes ${to}`,
         sourceRefs: transitionRefs
@@ -198,6 +466,7 @@ export function compileIntentSemanticSteps(input: {
         module: input.intent.module,
         action: transitionAction(match.transition.condition),
         actionInstruction: `Follow the confirmed workflow from ${from} to ${to}${match.transition.condition ? ` when ${match.transition.condition}` : ""}`,
+        businessContext: transitionBusinessContext(match.transition.businessObject, match.transition.sideEffects),
         targetSemantic: match.transition.condition || to,
         expected: input.intent.expectedResults[0] || `Workflow reaches ${to}`,
         sourceRefs: transitionRefs
@@ -279,18 +548,33 @@ function processSteps(input: {
   module: string;
   action: "click" | "select";
   actionInstruction: string;
+  businessContext?: string[];
   targetSemantic: string;
   expected: string;
   sourceRefs: string[];
 }): ExecutableCaseStep[] {
   return [
     step(1, "navigate", `Open the ${input.module} workflow entry`, `${input.module} entry`, input.sourceRefs, "derived"),
-    step(2, input.action, input.actionInstruction, input.targetSemantic, input.sourceRefs, "derived"),
+    step(
+      2,
+      input.action,
+      [input.actionInstruction, ...(input.businessContext ?? [])].join(". "),
+      input.targetSemantic,
+      input.sourceRefs,
+      "derived"
+    ),
     {
       ...step(3, "assert", "Verify the requirement-defined transition outcome", "transition outcome", input.sourceRefs, "source"),
       expected: normalizeRequirementText(input.expected),
       assertion: deriveAssertion(input.expected)
     }
+  ];
+}
+
+function transitionBusinessContext(businessObject?: string, sideEffects: string[] = []) {
+  return [
+    ...(businessObject ? [`Business object: ${businessObject}`] : []),
+    ...sideEffects.map((effect) => `Business side effect: ${effect}`)
   ];
 }
 
@@ -403,6 +687,234 @@ type WorkflowTransitionMatch = {
 };
 
 type SemanticTransitionMatch = StateTransitionMatch | WorkflowTransitionMatch;
+
+type StatePath = {
+  model: StateMachineModel;
+  transitions: StateMachineModel["transitions"];
+};
+
+type WorkflowPath = {
+  model: WorkflowModel;
+  transitions: WorkflowModel["transitions"];
+};
+
+function statePathsForIntent(intent: TestIntent, model: StateMachineModel): StatePath[] {
+  const matchedStarts = model.states.filter((state) =>
+    intent.preconditions.some((condition) => mentionsState(condition, state.id, state.label))
+  );
+  const startIds = matchedStarts.length > 0
+    ? unique(matchedStarts.map((state) => state.id))
+    : model.states.filter((state) => state.initial).map((state) => state.id);
+  const matchedTargets = model.states.filter((state) =>
+    intent.expectedResults.some((result) => mentionsState(result, state.id, state.label))
+  );
+  if (startIds.length !== 1 || matchedTargets.length !== 1 || startIds[0] === matchedTargets[0].id) return [];
+  const paths: StatePath[] = [];
+  const selectedTransitionRefs = unique(intent.selectedTransitionRefs ?? []);
+  const modelTransitionRefs = new Set(model.transitions.map((transition) => transitionSourceRef({
+    source: "state-machine",
+    model,
+    transition
+  })));
+  if (selectedTransitionRefs.some((reference) => !modelTransitionRefs.has(reference))) return [];
+  const selectedTransitionRefSet = new Set(selectedTransitionRefs);
+  const outgoing = new Map<string, StateMachineModel["transitions"]>();
+  for (const transition of model.transitions) {
+    if (transition.validity === "forbidden") continue;
+    const reference = transitionSourceRef({ source: "state-machine", model, transition });
+    if (selectedTransitionRefs.length > 0 && !selectedTransitionRefSet.has(reference)) continue;
+    const edges = outgoing.get(transition.from) ?? [];
+    edges.push(transition);
+    outgoing.set(transition.from, edges);
+  }
+  const targetId = matchedTargets[0].id;
+  const visited = new Set([startIds[0]]);
+  const transitions: StateMachineModel["transitions"] = [];
+  const stack = [{ stateId: startIds[0], edges: outgoing.get(startIds[0]) ?? [], nextEdge: 0 }];
+  while (stack.length > 0 && paths.length < 2) {
+    const frame = stack[stack.length - 1];
+    if (frame.nextEdge >= frame.edges.length) {
+      stack.pop();
+      if (stack.length > 0) {
+        visited.delete(frame.stateId);
+        transitions.pop();
+      }
+      continue;
+    }
+    const transition = frame.edges[frame.nextEdge++];
+    if (visited.has(transition.to)) continue;
+    if (transition.to === targetId) {
+      paths.push({ model, transitions: [...transitions, transition] });
+      continue;
+    }
+    visited.add(transition.to);
+    transitions.push(transition);
+    stack.push({
+      stateId: transition.to,
+      edges: outgoing.get(transition.to) ?? [],
+      nextEdge: 0
+    });
+  }
+  if (selectedTransitionRefs.length > 0) {
+    return paths.filter((path) => {
+      const pathRefs = new Set(path.transitions.map((transition) => transitionSourceRef({
+        source: "state-machine",
+        model,
+        transition
+      })));
+      return pathRefs.size === selectedTransitionRefs.length && selectedTransitionRefs.every((reference) => pathRefs.has(reference));
+    });
+  }
+  return paths;
+}
+
+function workflowPathsForIntent(intent: TestIntent, model: WorkflowModel): WorkflowPath[] {
+  const matchedStarts = model.steps.filter((step) =>
+    intent.preconditions.some((condition) => mentionsState(condition, step.id, step.label))
+  );
+  const startIds = matchedStarts.length > 0
+    ? unique(matchedStarts.map((step) => step.id))
+    : unique(model.startStepIds);
+  const matchedTargets = model.steps.filter((step) =>
+    intent.expectedResults.some((result) => mentionsState(result, step.id, step.label))
+  );
+  const targetIds = unique(matchedTargets.map((step) => step.id));
+  if (startIds.length !== 1 || targetIds.length !== 1 || startIds[0] === targetIds[0]) return [];
+
+  const selectedTransitionRefs = unique(intent.selectedTransitionRefs ?? []);
+  const transitionRefs = new Set(model.transitions.map((transition) => transitionSourceRef({
+    source: "workflow",
+    model,
+    transition
+  })));
+  if (selectedTransitionRefs.some((reference) => !transitionRefs.has(reference))) return [];
+  const selectedRefs = new Set(selectedTransitionRefs);
+  const outgoing = new Map<string, WorkflowModel["transitions"]>();
+  for (const transition of model.transitions) {
+    const reference = transitionSourceRef({ source: "workflow", model, transition });
+    if (selectedTransitionRefs.length > 0 && !selectedRefs.has(reference)) continue;
+    const edges = outgoing.get(transition.from) ?? [];
+    edges.push(transition);
+    outgoing.set(transition.from, edges);
+  }
+
+  const targetId = targetIds[0];
+  const visited = new Set([startIds[0]]);
+  const transitions: WorkflowModel["transitions"] = [];
+  const paths: WorkflowPath[] = [];
+  const stack = [{ stateId: startIds[0], edges: outgoing.get(startIds[0]) ?? [], nextEdge: 0 }];
+  while (stack.length > 0 && paths.length < 2) {
+    const frame = stack[stack.length - 1];
+    if (frame.nextEdge >= frame.edges.length) {
+      stack.pop();
+      if (stack.length > 0) {
+        visited.delete(frame.stateId);
+        transitions.pop();
+      }
+      continue;
+    }
+    const transition = frame.edges[frame.nextEdge++];
+    if (!model.steps.some((step) => step.id === transition.from) ||
+        !model.steps.some((step) => step.id === transition.to) || visited.has(transition.to)) continue;
+    if (transition.to === targetId) {
+      paths.push({ model, transitions: [...transitions, transition] });
+      continue;
+    }
+    visited.add(transition.to);
+    transitions.push(transition);
+    stack.push({
+      stateId: transition.to,
+      edges: outgoing.get(transition.to) ?? [],
+      nextEdge: 0
+    });
+  }
+  if (selectedTransitionRefs.length > 0) {
+    return paths.filter((path) => {
+      const pathRefs = new Set(path.transitions.map((transition) => transitionSourceRef({
+        source: "workflow",
+        model,
+        transition
+      })));
+      return pathRefs.size === selectedTransitionRefs.length && selectedTransitionRefs.every((reference) => pathRefs.has(reference));
+    });
+  }
+  return paths;
+}
+
+function hasExplicitStatePath(intent: TestIntent, models: StateMachineModel[]) {
+  return models.some((model) => {
+    const starts = model.states.filter((state) =>
+      intent.preconditions.some((condition) => mentionsState(condition, state.id, state.label))
+    );
+    const targets = model.states.filter((state) =>
+      intent.expectedResults.some((result) => mentionsState(result, state.id, state.label))
+    );
+    return targets.length > 0 && (starts.length > 0 || model.states.filter((state) => state.initial).length === 1);
+  });
+}
+
+function hasExplicitWorkflowPath(intent: TestIntent, models: WorkflowModel[]) {
+  return models.some((model) => {
+    const starts = model.steps.filter((step) =>
+      intent.preconditions.some((condition) => mentionsState(condition, step.id, step.label))
+    );
+    const targets = model.steps.filter((step) =>
+      intent.expectedResults.some((result) => mentionsState(result, step.id, step.label))
+    );
+    return targets.length > 0 && (starts.length > 0 || model.startStepIds.length === 1);
+  });
+}
+
+function negatedProcessStateRefs(
+  intent: TestIntent,
+  stateModels: StateMachineModel[],
+  workflowModels: WorkflowModel[]
+) {
+  const endpointText = [...intent.preconditions, ...intent.expectedResults];
+  const refs: string[] = [];
+  for (const model of stateModels) {
+    for (const state of model.states) {
+      if ([state.id, state.label].some((candidate) =>
+        endpointText.some((value) => hasNegatedStateMention(value, candidate)))) {
+        refs.push(`state-machine:${model.id}`, `state-machine:${model.id}#state:${state.id}`, ...state.sourceRefs);
+      }
+    }
+  }
+  for (const model of workflowModels) {
+    for (const step of model.steps) {
+      if ([step.id, step.label].some((candidate) =>
+        endpointText.some((value) => hasNegatedStateMention(value, candidate)))) {
+        refs.push(`workflow:${model.id}`, `workflow:${model.id}#step:${step.id}`, ...step.sourceRefs);
+      }
+    }
+  }
+  return unique(refs);
+}
+
+function hasNegatedStateMention(value: string, stateLabel: string) {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase();
+  const candidate = stateLabel.normalize("NFKC").toLocaleLowerCase();
+  if (!candidate) return false;
+  const clauseSeparators = [".", "!", "?", ";", ":", "。", "！", "？", "；", "：", "，", ","];
+  let occurrence = normalized.indexOf(candidate);
+  while (occurrence >= 0) {
+    const clauseStart = Math.max(-1, ...clauseSeparators.map((separator) => normalized.lastIndexOf(separator, occurrence - 1)));
+    const prefix = normalized.slice(clauseStart + 1, occurrence).trimEnd();
+    const englishNegation = /\b(?:not|never|without|cannot|can't|won't|shouldn't|mustn't|doesn't|don't|isn't|aren't|no)(?:\s+[\p{L}\p{N}'’-]+){0,3}\s*$/iu;
+    const chineseNegation = /(?:并非|不允许|不应|不得|不能|不会|不是|不为|不在|不处于|尚未|未曾|没有|未|无|非)(?:为|是|处于|进入|达到|变成|成为|在)?\s*$/u;
+    if ((englishNegation.test(prefix) && !/\bnot\s+(?:only|just)\s*$/iu.test(prefix)) ||
+        (chineseNegation.test(prefix) && !/(?:不只是|不但|不仅)\s*$/u.test(prefix))) return true;
+    occurrence = normalized.indexOf(candidate, occurrence + candidate.length);
+  }
+  return false;
+}
+
+function mentionsState(value: string, stateId: string, stateLabel: string) {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase();
+  return [stateId, stateLabel].some((candidate) =>
+    normalized.includes(candidate.normalize("NFKC").toLocaleLowerCase())
+  );
+}
 
 function confirmedStateTransitions(intent: TestIntent, models: StateMachineModel[]): StateTransitionMatch[] {
   return confirmedModels(intent, models).flatMap((model) =>

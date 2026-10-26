@@ -98,6 +98,45 @@ describe("ExecutionPreflightService", () => {
     ]);
   });
 
+  it("binds execution preflight data leases to the owning SuiteRun", () => {
+    const fixture = preflightFixture();
+    fixture.executableCase.dataPlan = referenceDataPlan();
+    fixture.repository.testDataLeases.push({
+      ...dataLease(fixture, { decision: "reuse", cleanup: "none" }),
+      id: "lease-old-run",
+      requirementSuiteRunId: "suite-old"
+    });
+
+    const blocked = fixture.service.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId: "suite-current",
+      confirm: true
+    });
+    expect(blocked.status).toBe("blocked");
+
+    fixture.repository.testDataLeases.push({
+      ...dataLease(fixture, { decision: "reuse", cleanup: "none" }),
+      id: "lease-current-run",
+      requirementSuiteRunId: "suite-current"
+    });
+    const ready = fixture.service.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId: "suite-current",
+      confirm: true
+    });
+
+    expect(ready.status).toBe("ready");
+    expect(ready.executionPlan).toEqual(expect.objectContaining({
+      requirementSuiteRunId: "suite-current",
+      dataBindings: [expect.objectContaining({ leaseId: "lease-current-run" })]
+    }));
+    expect(fixture.service.validatePlan(ready.executionPlan!.id).status).toBe("valid");
+  });
+
   it("persists one immutable ready plan for the same snapshot", () => {
     const fixture = preflightFixture();
 

@@ -77,7 +77,7 @@ npx brain-creator config write --provider host-agent
   "mcpServers": {
     "brain-creator": {
       "command": "npx",
-      "args": ["brain-creator-mcp"],
+      "args": ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       "env": {
         "BRAIN_CREATOR_WORKSPACE": ".",
         "BRAIN_CREATOR_TOOL_PROFILE": "facade",

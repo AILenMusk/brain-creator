@@ -30,7 +30,7 @@ Approve employee      consumes: employee:testperson001
 
 The reference is not a secret and is not a replacement for the value entered into a field. It identifies the same business entity across cases. The compiled case records it in `entityReferenceRequirements`, the data plan, relevant operations, and step bindings.
 
-When a producer case already holds an active lease, a consumer case receives a read-only inherited binding to that exact lease. The binding is accepted only through the declared dependency edge and a unique current producer case; an unrelated case with the same text cannot satisfy it. If the producer has not run or the binding is ambiguous, preparation remains blocked or asks the host to resolve the data.
+When a producer case already holds an active lease in the current SuiteRun, a consumer case receives a read-only inherited binding to that exact lease and records a consumer lease for the current run. Prior-run or unbound leases cannot satisfy a SuiteRun dependency or execution plan; the new run must look up or prepare its own entity lease. The binding is accepted only through the declared dependency edge and a unique current producer case; an unrelated case with the same text cannot satisfy it. Producer cleanup waits until every selected consumer in that SuiteRun has released its consumption lease, so one consumer cannot delete data still needed by a later consumer. Evidence from an older SuiteRun cannot release a current consumer lease. If the producer has not run or the binding is ambiguous, preparation remains blocked or asks the host to resolve the data.
 
 The dependency graph enforces four outcomes:
 
@@ -58,6 +58,8 @@ lookup -> create -> transition -> verify -> cleanup
 ```
 
 The provider receives the semantic entity reference and the selected `systemId`. Testdata Brain records the returned reference, evidence, lease, and cleanup state. Reuse is preferred. Creation requires explicit authorization and a cleanup policy. Provider failures remain typed data or environment Gaps instead of becoming product Bugs.
+
+When one case creates multiple entities, cleanup tasks run sequentially after execution. The case outcome stays pending until every required cleanup succeeds; a cleanup failure or preparation error blocks the Suite with a typed cleanup Gap.
 
 The built-in provider is only a deterministic fixture, not a universal adapter for arbitrary business systems. A real integration must supply system-specific lookup, CRUD, workflow transition, and cleanup behavior, or the host Agent must perform the approved operation and submit evidence through the Facade.
 

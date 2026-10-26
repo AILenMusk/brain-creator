@@ -10,6 +10,136 @@ import {
 import type { BusinessScenario } from "./types.js";
 
 describe("Testdata Brain", () => {
+  it("blocks scenarios without an explicit data plan instead of treating an empty profile list as ready", () => {
+    const plan = buildScenarioDataPlan({
+      scenario: {
+        id: "scenario-without-data-plan",
+        knowledgeProjectId: "knowledge-hr",
+        testDataNeeds: [],
+        sourceRefs: ["requirement:demand-submit"]
+      },
+      profiles: []
+    });
+
+    expect(plan).toEqual(expect.objectContaining({
+      readiness: "blocked",
+      profileIds: [],
+      operations: [],
+      reasons: [expect.stringContaining("No scenario-scoped test data profiles are declared")]
+    }));
+  });
+
+  it("rejects multiple lookup matches without selecting or recording an entity", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => [
+      { status: "found", reference: "system-orders:order:1", sourceRefs: ["query:orders"] },
+      { status: "found", reference: "system-orders:order:2", sourceRefs: ["query:orders"] }
+    ];
+
+    await expect(service.lookup({ systemId: "system-orders", entityType: "order", key: "active" }))
+      .rejects.toThrow("returned 2 matches; a unique entity is required");
+    expect(repository.businessEntityInstances).toEqual([]);
+  });
+
+  it("does not infer a semantic entity binding when the provider omits or changes it", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      sourceRefs: ["query:orders"]
+    });
+
+    await expect(service.lookup({
+      systemId: "system-orders",
+      entityType: "order",
+      key: "active",
+      entityReference: "order:approved-target"
+    })).rejects.toThrow("did not confirm the semantic entity reference");
+    expect(repository.businessEntityInstances).toEqual([]);
+
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      entityReference: "order:other-target",
+      sourceRefs: ["query:orders"]
+    });
+    await expect(service.lookup({
+      systemId: "system-orders",
+      entityType: "order",
+      key: "active",
+      entityReference: "order:approved-target"
+    })).rejects.toThrow("different semantic entity reference");
+    expect(repository.businessEntityInstances).toEqual([]);
+  });
+
+  it("accepts a single explicit candidate from a multi-result lookup provider", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => [
+      { status: "found", reference: "system-orders:order:1", sourceRefs: ["query:orders"] }
+    ];
+
+    await expect(service.lookup({ systemId: "system-orders", entityType: "order", key: "active" }))
+      .resolves.toMatchObject({ reference: "system-orders:order:1" });
+    expect(repository.businessEntityInstances).toHaveLength(1);
+  });
+
+  it("records only a unique target lookup that includes provider-owned evidence", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      entityReference: "order:approved-target",
+      values: { status: "pending" },
+      sourceRefs: ["target-query:orders/order-1"]
+    });
+
+    await expect(service.lookupVerified({
+      systemId: "system-orders",
+      knowledgeProjectId: "project-orders",
+      entityType: "order",
+      reference: "system-orders:order:1",
+      entityReference: "order:approved-target",
+      sourceRefs: []
+    })).resolves.toEqual(expect.objectContaining({
+      reference: "system-orders:order:1",
+      provider: "fixture-provider",
+      sourceRefs: ["target-query:orders/order-1"]
+    }));
+    expect(repository.businessEntityInstances).toEqual([
+      expect.objectContaining({
+        entityKey: "system-orders:order:1",
+        sourceRefs: ["target-query:orders/order-1"],
+        lifecycleEvents: [expect.objectContaining({ operation: "lookup" })]
+      })
+    ]);
+  });
+
+  it("does not record an unverified target lookup without provider evidence", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    provider.lookup = async () => ({
+      status: "found",
+      reference: "system-orders:order:1",
+      sourceRefs: []
+    });
+
+    await expect(service.lookupVerified({
+      systemId: "system-orders",
+      reference: "system-orders:order:1",
+      sourceRefs: []
+    })).rejects.toThrow("provider-owned evidence references");
+    expect(repository.businessEntityInstances).toEqual([]);
+  });
+
   it("does not release an entity when cleanup returns another entity or only a lookup result", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const provider: TestDataProvider = new InMemoryTestDataProvider("fixture-provider");
@@ -100,6 +230,21 @@ describe("Testdata Brain", () => {
     })).toThrow(/same system/i);
   });
 
+  it("rejects ambiguous target providers instead of selecting the first match", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new TestDataBrainService(repository, [
+      new InMemoryTestDataProvider("fixture-provider-a", "system-orders"),
+      new InMemoryTestDataProvider("fixture-provider-b", "system-orders")
+    ]);
+
+    await expect(service.create({
+      systemId: "system-orders",
+      entityType: "order",
+      key: "order-42"
+    })).rejects.toThrow("matched 2");
+    expect(repository.businessEntityInstances).toEqual([]);
+  });
+
   it("rejects dependencies whose entities belong to another system", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const provider = new InMemoryTestDataProvider("fixture-provider");
@@ -121,7 +266,7 @@ describe("Testdata Brain", () => {
       toReference: employee.reference,
       relation: "requires",
       sourceRefs: ["case:cross-system-entity"]
-    })).toThrow(/unknown entity|same system/i);
+    })).toThrow(/unknown entity|same system|system\/project scope/i);
   });
 
   it("builds a scenario data plan with explicit entity dependencies", () => {
@@ -183,6 +328,7 @@ describe("Testdata Brain", () => {
         entityKey: "employee:001",
         entityReference: "employee:testperson001",
         semanticConceptId: "object:employee",
+        knowledgeProjectId: scenario.knowledgeProjectId,
         systemId: "system-hr",
         values: { status: "active" },
         status: "active",
@@ -261,6 +407,61 @@ describe("Testdata Brain", () => {
     ]));
   });
 
+  it("does not plan reuse of same-system entities from another knowledge project", () => {
+    const scenario: BusinessScenario = {
+      id: "scenario-project-isolation",
+      knowledgeProjectId: "knowledge-project-current",
+      requirementSetId: "requirement-current",
+      title: "Use the approved employee",
+      objective: "Use an approved employee record.",
+      family: "main-flow",
+      actors: ["requester"],
+      preconditions: [],
+      workflowRefs: [],
+      stateTransitionRefs: [],
+      decisionRuleRefs: [],
+      testDataNeeds: ["profile-current-employee"],
+      expectedBusinessOutcomes: ["The approved employee is used."],
+      sourceRefs: ["requirement:project-isolation"],
+      risk: "medium",
+      status: "draft"
+    };
+    const profiles: TestDataProfile[] = [{
+      id: "profile-current-employee",
+      knowledgeProjectId: scenario.knowledgeProjectId,
+      requirementSetId: scenario.requirementSetId,
+      name: "Employee",
+      field: "Employee",
+      strategy: "existing-reference",
+      constraints: [],
+      seed: "employee:approved-1",
+      entityReference: "employee:approved-1",
+      cleanup: "none",
+      sourceRefs: scenario.sourceRefs,
+      createdAt: new Date(0).toISOString()
+    }];
+    const plan = buildScenarioDataPlan({
+      scenario,
+      profiles,
+      entities: [{
+        id: "entity-other-project",
+        entityKey: "system-hr:employee:1",
+        entityReference: "employee:approved-1",
+        semanticConceptId: "object:employee",
+        knowledgeProjectId: "knowledge-project-other",
+        systemId: "system-hr",
+        values: { status: "active" },
+        status: "active",
+        sourceRefs: ["other-project:fixture"],
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString()
+      }]
+    });
+
+    expect(plan.readiness).toBe("blocked");
+    expect(plan.missingEntityReferences).toEqual(["employee:approved-1"]);
+  });
+
   it("records provider lifecycle and rejects unknown entity transitions", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const provider = new InMemoryTestDataProvider("fixture-provider");
@@ -309,5 +510,53 @@ describe("Testdata Brain", () => {
       expect.objectContaining({ operation: "cleanup", provider: "fixture-provider" })
     ]));
     expect(entity?.status).toBe("released");
+  });
+
+  it("keeps same-system entity upserts, graphs, and dependencies knowledge-project scoped", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const provider = new InMemoryTestDataProvider("fixture-provider");
+    const service = new TestDataBrainService(repository, [provider]);
+    const current = await service.create({
+      knowledgeProjectId: "knowledge-current",
+      systemId: "system-orders",
+      entityType: "order",
+      reference: "system-orders:order:shared",
+      entityReference: "order:shared",
+      sourceRefs: ["current:order"]
+    });
+    const other = await service.create({
+      knowledgeProjectId: "knowledge-other",
+      systemId: "system-orders",
+      entityType: "order",
+      reference: "system-orders:order:shared",
+      entityReference: "order:shared",
+      sourceRefs: ["other:order"]
+    });
+
+    expect(current.entityId).not.toBe(other.entityId);
+    expect(service.graph("system-orders", "knowledge-current").entities.map((entity) => entity.id))
+      .toEqual([current.entityId]);
+    expect(service.graph("system-orders", "knowledge-other").entities.map((entity) => entity.id))
+      .toEqual([other.entityId]);
+
+    service.recordExternal({
+      knowledgeProjectId: "knowledge-current",
+      systemId: "system-orders",
+      reference: "system-orders:employee:current",
+      sourceRefs: ["current:employee"]
+    });
+    service.recordExternal({
+      knowledgeProjectId: "knowledge-other",
+      systemId: "system-orders",
+      reference: "system-orders:employee:other",
+      sourceRefs: ["other:employee"]
+    });
+    expect(() => service.linkDependency({
+      systemId: "system-orders",
+      fromReference: "system-orders:employee:current",
+      toReference: "system-orders:employee:other",
+      relation: "requires",
+      sourceRefs: ["cross-project:dependency"]
+    })).toThrow("must stay within the same knowledge project");
   });
 });

@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { chromium } from "@playwright/test";
+import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
 
 export type AuthStateVerification = {
   status: "valid" | "expired" | "unavailable";
@@ -11,6 +12,7 @@ export type AuthStateVerification = {
 
 export type AuthStateVerifier = (input: {
   storageStatePath: string;
+  workDir?: string;
   targetUrl: string;
   allowedUrls: string[];
   timeoutMs?: number;
@@ -33,7 +35,8 @@ export const verifyStoredBrowserAuth: AuthStateVerifier = async (input) => {
       headless: true,
       ...(executablePath ? { executablePath } : {})
     });
-    const context = await browser.newContext({ storageState: input.storageStatePath });
+    const storageState = await readEncryptedAuthStorageState(input.storageStatePath, input.workDir);
+    const context = await browser.newContext({ storageState: storageState as never });
     const page = await context.newPage();
     await page.goto(input.targetUrl, {
       waitUntil: "domcontentloaded",

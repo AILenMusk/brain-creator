@@ -209,9 +209,9 @@ export class RequirementAnalysisHostHarness {
       clauses: analysis.clauses.map(({ sourceRef: _sourceRef, policyId: _policyId, policyVersion: _policyVersion, ...clause }) => clause),
       openQuestions: analysis.openQuestions
     };
-    const allowedPrefixes = this.allowedSourcePrefixes(requirementSet.id);
+    const allowedSourceRefs = this.allowedSourceRefs(requirementSet.id);
     for (const [stage, output] of [["document-mapper", mapper], ["clause-analyst", analyst]] as const) {
-      const validation = validateStageOutput(stage, output, allowedPrefixes);
+      const validation = validateStageOutput(stage, output, allowedSourceRefs);
       if (!validation.ok) {
         throw new Error(`Host Skill ${stage} normalization failed: ${validation.errors.join("; ")}`);
       }
@@ -229,16 +229,24 @@ export class RequirementAnalysisHostHarness {
       throw new Error(`Requirement Host Harness task is not waiting for output: ${task.state}`);
     }
     const stage = stageFromTask(task);
-    const validation = validateStageOutput(stage, input.output, this.allowedSourcePrefixes(task.requirementSetId!));
+    const validation = validateStageOutput(stage, input.output, this.allowedSourceRefs(task.requirementSetId!));
     if (!validation.ok) return this.handleInvalidOutput(task, stage, validation.errors, input.output);
 
     const output = input.output as StageOutputs[RequirementHarnessStage];
     const artifactPath = await this.writeStageOutput(task, stage, output);
     if (stage !== "coverage-critic") {
       const evaluation = stagePassEvaluation(stage, output);
+      const nextStage = STAGES[STAGES.indexOf(stage) + 1]!;
+      const nextTask = await this.createStageTask(
+        task.requirementSetId!,
+        nextStage,
+        task.sessionId!,
+        false,
+        { stage, output }
+      );
       this.harness.completeDeferredTask(task.id, evaluation, [artifactPath]);
       this.recordStageEvaluations(task, stage, output, evaluation);
-      return this.createStageTask(task.requirementSetId!, STAGES[STAGES.indexOf(stage) + 1], task.sessionId!, false);
+      return nextTask;
     }
     this.harness.setOutputRefs(task.id, [artifactPath]);
     const outputs = {
@@ -320,11 +328,13 @@ export class RequirementAnalysisHostHarness {
     requirementSetId: string,
     stage: RequirementHarnessStage,
     sessionId: string,
-    retry: boolean
+    retry: boolean,
+    stageOutput?: { stage: RequirementHarnessStage; output: unknown }
   ): Promise<RequirementHostHarnessResponse> {
     const requirementSet = this.requirementSet(requirementSetId);
     const source = this.repository.requirementSources.find((item) => item.id === requirementSet.sourceId)!;
     const outputs = await this.readStageOutputs(sessionId);
+    if (stageOutput) outputs[stageOutput.stage] = stageOutput.output as never;
     const contextPack = buildContextPack(stage, requirementSet.id, source, this.repository.attachmentAnalyses.filter(
       (analysis) => analysis.requirementSetId === requirementSetId && analysis.status === "confirmed"
     ), outputs);
@@ -635,11 +645,18 @@ export class RequirementAnalysisHostHarness {
     return source;
   }
 
-  private allowedSourcePrefixes(requirementSetId: string) {
+  private allowedSourceRefs(requirementSetId: string) {
     const requirementSet = this.requirementSet(requirementSetId);
     const source = this.repository.requirementSources.find((item) => item.id === requirementSet.sourceId)!;
+    const sourceLineRefs = source.content.split(/\r?\n/).map((_, index) => `source:${source.id}#line:${index + 1}`);
+    const blockSourceRefs = source.blocks.flatMap((block) => [
+      compactBlockSourceRef(block.sourceRef, source.id),
+      ...(Array.isArray(block.sourceRefs) ? block.sourceRefs.filter(isNonEmptyString) : [])
+        .map((sourceRef) => compactBlockSourceRef(sourceRef, source.id))
+    ]).filter(isNonEmptyString);
     return [
-      `source:${source.id}#`,
+      ...sourceLineRefs,
+      ...blockSourceRefs,
       ...this.repository.attachmentAnalyses
         .filter((item) => item.requirementSetId === requirementSetId && item.status === "confirmed")
         .flatMap((analysis) => [
@@ -663,30 +680,43 @@ function buildContextPack(
   attachmentAnalyses: Array<{ id: string; kind: string; markdown: string; nodes: unknown[]; edges: unknown[]; sourceRefs: string[] }>,
   outputs: StageOutputs
 ): BrainContextPack {
-  const sourceLines = source.content.split(/\r?\n/).map((line, index) =>
-    `source:${source.id}#line:${index + 1} ${line}`
-  );
-  const structured = JSON.stringify({
+  const sourceLines = source.content.split(/\r?\n/).map((line, index) => ({
+    ref: `source:${source.id}#line:${index + 1}`,
+    content: `source:${source.id}#line:${index + 1} ${line}`
+  }));
+  const structuredRefPrefix = stage === "coverage-critic" ? `source:${source.id}#line:` : undefined;
+  const structured = JSON.stringify(compactStructuredOutput({
     documentMap: compactStructuredOutput(outputs["document-mapper"]),
     clauseAnalysis: compactStructuredOutput(outputs["clause-analyst"]),
     businessModels: compactStructuredOutput(outputs["business-modeler"])
-  }, null, 2);
-  const attachmentEvidence = JSON.stringify(attachmentAnalyses.map((analysis) => ({
-    ref: `attachment-analysis:${analysis.id}`,
-    kind: analysis.kind,
-    markdown: analysis.markdown,
-    nodes: analysis.nodes,
-    edges: analysis.edges,
-    sourceRefs: analysis.sourceRefs
-  })), null, 2);
-  const documentBlocks = outputs["business-modeler"]
+  }, structuredRefPrefix));
+  const attachmentEvidence = JSON.stringify(attachmentAnalyses.map((analysis) => {
+    const markdownContainsFlowGraph = analysis.kind === "flowchart" &&
+      analysis.markdown.includes("流程节点") && analysis.markdown.includes("原始连线");
+    return {
+      ref: `attachment-analysis:${analysis.id}`,
+      kind: analysis.kind,
+      markdown: analysis.markdown,
+      ...(!markdownContainsFlowGraph ? { nodes: analysis.nodes, edges: analysis.edges } : {}),
+      sourceRefs: analysis.sourceRefs
+    };
+  }));
+  const blockSourceRefs = source.blocks
+    .map((block) => compactBlockSourceRef(block.sourceRef, source.id))
+    .filter(isNonEmptyString);
+  const blockRefPrefix = commonPrefix(blockSourceRefs);
+  const documentBlocks = outputs["document-mapper"]
     ? JSON.stringify({
-        omittedAfterModeling: true,
+        omittedAfterDocumentMapping: true,
         blockCount: source.blocks.length,
         sourceLineCount: source.content.split(/\r?\n/).length,
+        sourceLinesRemainInContext: true,
         sourceRefsRemainInContextReferences: true
       })
-    : JSON.stringify(source.blocks.map((block) => compactRequirementBlock(block, source.id)));
+    : JSON.stringify({
+        sourceRefPrefix: blockRefPrefix,
+        blocks: source.blocks.map((block) => compactRequirementBlock(block, source.id, blockRefPrefix))
+      });
   const fixed = [
     `Requirement: ${source.title}`,
     `Stage: ${stage}`,
@@ -695,26 +725,72 @@ function buildContextPack(
     "Document block AST:",
     documentBlocks,
     "Structured outputs from completed independent stages:",
-    structured
+    structured,
+    ...(structuredRefPrefix
+      ? [`Structured source reference encoding: #line:<n> means source:${source.id}#line:<n>; full anchors remain in the task references.`]
+      : [])
   ].join("\n");
   if (fixed.length + 32 > MAX_CONTEXT_CHARS) {
     throw new Error(
       "Structured requirement context exceeds the Harness budget; key flows and sourceRefs will not be silently truncated"
     );
   }
-  const sourceBudget = outputs["business-modeler"]
-    ? 0
-    : Math.max(0, MAX_CONTEXT_CHARS - fixed.length - 64);
-  const fullSource = sourceLines.join("\n");
-  const truncated = Boolean(outputs["business-modeler"]) || fullSource.length > sourceBudget;
-  const sourceContent = truncated
-    ? outputs["business-modeler"]
-      ? "[source content omitted after structured modeling; use source references and structured outputs above]"
-      : `${fullSource.slice(0, sourceBudget)}\n[cold requirement content truncated]`
-    : fullSource;
+  const sourceBudget = Math.max(0, MAX_CONTEXT_CHARS - fixed.length - 160);
+  const citedSourceRefs = outputs["clause-analyst"]
+    ? collectSourceLineReferences(outputs, source.id)
+    : new Set<string>();
+  const selectedSourceLines = citedSourceRefs.size > 0
+    ? sourceLines.filter((line) => citedSourceRefs.has(line.ref))
+    : sourceLines;
+  const formatSourceLines = (maxContentChars: number, compactReferences = false, includeExcerptMarker = true) => selectedSourceLines.map((line, index) => {
+    const lineText = line.content.slice(line.ref.length + 1);
+    const prefix = compactReferences ? `L${index + 1}: ` : `${line.ref} `;
+    const text = lineText.length <= maxContentChars
+      ? lineText
+      : `${lineText.slice(0, Math.ceil(maxContentChars / 2))}…${maxContentChars > 1 ? lineText.slice(-Math.floor(maxContentChars / 2)) : ""}`;
+    return `${prefix}${text}${includeExcerptMarker && text.length < lineText.length ? " [source line excerpt; full requirement remains pinned by reference]" : ""}`;
+  });
+  let sourceContentLines = formatSourceLines(320);
+  let fullSource = sourceContentLines.join("\n");
+  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget) {
+    sourceContentLines = formatSourceLines(100);
+    fullSource = sourceContentLines.join("\n");
+  }
+  const hasSourceExcerpts = selectedSourceLines.some((line) => line.content.length - line.ref.length - 1 > 320);
+  const truncated = fullSource.length > sourceBudget || selectedSourceLines.length < sourceLines.length || hasSourceExcerpts;
+  if (citedSourceRefs.size > 0 && selectedSourceLines.length < citedSourceRefs.size) {
+    throw new Error("Structured requirement output references source lines that are unavailable in the frozen source");
+  }
+  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget) {
+    throw new Error(`Cited requirement source lines exceed the Harness budget (${fullSource.length} > ${sourceBudget}; fixed context ${fixed.length}); source evidence will not be silently truncated`);
+  }
+  let sourceContent: string;
+  if (fullSource.length <= sourceBudget) {
+    sourceContent = fullSource;
+  } else if (citedSourceRefs.size === 0) {
+    const excerptNotice = "[source lines excerpted; full requirement remains pinned by references]";
+    const anchorNotice = `Source line labels L<n> map to source:${source.id}#line:<n>; exact anchors are listed in references.`;
+    const referenceChars = selectedSourceLines.reduce((total, _, index) => total + `L${index + 1}: `.length, 0);
+    const separators = Math.max(0, selectedSourceLines.length - 1);
+    const excerptCharsPerLine = Math.floor(
+      (sourceBudget - excerptNotice.length - anchorNotice.length - referenceChars - separators - selectedSourceLines.length - 2) /
+        Math.max(1, selectedSourceLines.length)
+    );
+    if (excerptCharsPerLine < 2) {
+      throw new Error("Source line references exceed the Harness budget; source evidence will not be silently dropped");
+    }
+    const excerptedLines = formatSourceLines(excerptCharsPerLine, true, false);
+    sourceContent = `${excerptNotice}\n${anchorNotice}\n${excerptedLines.join("\n")}`;
+    if (sourceContent.length > sourceBudget) {
+      throw new Error("Source line excerpts exceed the Harness budget; source evidence will not be silently dropped");
+    }
+  } else {
+    throw new Error("Cited requirement source lines exceed the Harness budget; source evidence will not be silently truncated");
+  }
   const content = `${fixed}\nSource content:\n${sourceContent}`;
   const references = unique([
-    ...sourceLines.map((_, index) => `source:${source.id}#line:${index + 1}`),
+    ...sourceLines.map((line) => line.ref),
+    ...blockSourceRefs,
     ...attachmentAnalyses.flatMap((analysis) => [`attachment-analysis:${analysis.id}`, ...analysis.sourceRefs])
   ]).map((ref) => ({ ref, kind: "requirement" as const }));
   return {
@@ -728,17 +804,36 @@ function buildContextPack(
   };
 }
 
+function collectSourceLineReferences(outputs: StageOutputs, sourceId: string) {
+  const references = new Set<string>();
+  const expectedPrefix = `source:${sourceId}#line:`;
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(/source:[^#]+#line:\d+/g)) {
+        if (match[0].startsWith(expectedPrefix)) references.add(match[0]);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (isRecord(value)) Object.values(value).forEach(visit);
+  };
+  visit(outputs);
+  return references;
+}
+
 const TABLE_PREVIEW_CELL_CHARS = 32;
 const IMAGE_ALT_PREVIEW_CHARS = 120;
 
-function compactRequirementBlock(block: RequirementContentBlock, sourceId: string) {
+function compactRequirementBlock(block: RequirementContentBlock, sourceId: string, sourceRefPrefix: string) {
+  const sourceRef = compactBlockSourceRef(block.sourceRef, sourceId);
   return {
-    id: block.id,
+    id: sourceRef ? undefined : block.id,
     type: block.type,
     level: block.level,
-    parentId: block.parentId,
-    order: block.order,
-    sourceRef: compactBlockSourceRef(block.sourceRef, sourceId),
+    sourceRef: sourceRef?.startsWith(sourceRefPrefix) ? sourceRef.slice(sourceRefPrefix.length) : sourceRef,
     table: block.table
       ? {
           headers: block.table.headers.map((cell) => compactText(cell, TABLE_PREVIEW_CELL_CHARS)),
@@ -758,6 +853,18 @@ function compactRequirementBlock(block: RequirementContentBlock, sourceId: strin
   };
 }
 
+function commonPrefix(values: string[]) {
+  if (values.length < 2) return "";
+  let prefix = values[0]!;
+  for (const value of values.slice(1)) {
+    let length = 0;
+    while (length < prefix.length && length < value.length && prefix[length] === value[length]) length += 1;
+    prefix = prefix.slice(0, length);
+    if (prefix.length === 0) return "";
+  }
+  return prefix.length >= 16 ? prefix : "";
+}
+
 function compactBlockSourceRef(value: string | undefined, sourceId: string) {
   if (!value) return value;
   const line = value.match(/#line[-:](\d+)$/)?.[1];
@@ -769,20 +876,19 @@ function compactText(value: string | undefined, limit: number) {
   return value.length <= limit ? value : `${value.slice(0, limit)}… [full content in source lines]`;
 }
 
-function compactStructuredOutput(value: unknown): unknown {
-  if (typeof value === "string") return compactText(value, 240);
-  if (Array.isArray(value)) return value.map((item) => compactStructuredOutput(item));
+function compactStructuredOutput(value: unknown, sourceRefPrefix?: string): unknown {
+  if (typeof value === "string") {
+    if (sourceRefPrefix && value.startsWith(sourceRefPrefix)) return `#line:${value.slice(sourceRefPrefix.length)}`;
+    return compactText(value, 240);
+  }
+  if (Array.isArray(value)) return value.map((item) => compactStructuredOutput(item, sourceRefPrefix));
   if (!isRecord(value)) return value;
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
-      isSourceReferenceKey(key) ? item : compactStructuredOutput(item)
+      compactStructuredOutput(item, sourceRefPrefix)
     ])
   );
-}
-
-function isSourceReferenceKey(key: string) {
-  return key === "sourceRef" || key === "sourceRefs" || key === "evidenceRefs" || key === "attachmentRefs";
 }
 
 function stagePrompt(stage: RequirementHarnessStage, context: BrainContextPack) {
@@ -886,7 +992,7 @@ function stageOutputTemplate(stage: RequirementHarnessStage) {
   return JSON.stringify(templates[stage], null, 2);
 }
 
-function validateStageOutput(stage: RequirementHarnessStage, value: unknown, allowedPrefixes: string[]) {
+function validateStageOutput(stage: RequirementHarnessStage, value: unknown, allowedSourceRefs: string[]) {
   const errors: string[] = [];
   if (!isRecord(value)) return { ok: false, errors: ["Output must be a JSON object"] };
   if ("systemObservations" in value || "observedBehavior" in value) {
@@ -957,7 +1063,7 @@ function validateStageOutput(stage: RequirementHarnessStage, value: unknown, all
   }
   const sourceRefs = collectSourceRefs(value);
   for (const ref of sourceRefs) {
-    if (!allowedPrefixes.some((prefix) => ref === prefix || ref.startsWith(prefix))) {
+    if (!allowedSourceRefs.includes(ref)) {
       errors.push(`Unsupported sourceRef: ${ref}`);
     }
   }

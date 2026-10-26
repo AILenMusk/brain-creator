@@ -80,7 +80,7 @@ function brainCreatorMcpServer(
   }
   return {
     command: "npx",
-    args: ["brain-creator-mcp"],
+    args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
     env: brainCreatorMcpEnv(provider)
   };
 }

@@ -8,6 +8,7 @@ Use the consolidated `brain-creator` command to install, inspect, diagnose, and 
 |---|---|---|
 | `brain-creator init` | Install project assets and create or update MCP configuration | `npx brain-creator init --provider host-agent` |
 | `brain-creator doctor` | Check provider, browser, connector, knowledge directory, and installed assets | `npx brain-creator doctor` |
+| `brain-creator auth capture` | Capture user-operated browser sign-in into encrypted workspace storage and verify it in a fresh context | `npx brain-creator auth capture --system <id> --profile <id>` |
 | `brain-creator config` | Print the redacted effective MCP configuration | `npx brain-creator config --json` |
 | `brain-creator config write` | Intentionally write MCP configuration | `npx brain-creator config write --provider codex` |
 | `brain-creator plugin install` | Install the Codex plugin and host-agent configuration | `npx brain-creator plugin install` |
@@ -21,9 +22,17 @@ Use the consolidated `brain-creator` command to install, inspect, diagnose, and 
 
 Run commands from the business project unless the option says otherwise.
 
+## `brain-creator auth capture`
+
+```text
+brain-creator auth capture --system <system-id> --profile <auth-profile-id> [--target <path>] [--json]
+```
+
+Opens an isolated visible browser for manual sign-in. The browser blocks top-level navigation outside the selected system's configured origin allowlist. Credentials must be entered only in the browser, never in the terminal or chat. Captured browser state is encrypted at rest, checked in a fresh browser context, and attached to the selected AuthProfile only after verification. This command verifies authentication readiness; it does not authorize business writes or approve a Trial.
+
 ## L3 golden evaluation
 
-The source checkout includes a deterministic, sanitized evaluation command. It measures the L3 control surface without claiming that a synthetic fixture is a real-system regression:
+The source checkout includes a deterministic, sanitized evaluation command. Synthetic fixture scores and real-trial metrics are reported separately; without linked real Trial evidence, real-trial dimensions remain `not measured`:
 
 ```bash
 npm run verify:l3-eval

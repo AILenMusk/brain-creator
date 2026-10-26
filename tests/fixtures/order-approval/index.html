@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Order Approval Fixture</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 2rem auto; max-width: 42rem; padding: 0 1rem; }
+    label { display: block; margin: 1rem 0; }
+    input, select, button { font: inherit; margin-top: .35rem; padding: .4rem; }
+    button { margin-right: .5rem; }
+    [hidden] { display: none !important; }
+    #order-summary { border: 1px solid #bbb; margin-top: 1.5rem; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Order Approval</h1>
+    <label for="role">Current role</label>
+    <select id="role">
+      <option value="requester">Requester</option>
+      <option value="manager">Manager</option>
+      <option value="finance">Finance</option>
+    </select>
+    <form id="create-order">
+      <label for="description">Order description</label>
+      <input id="description" required value="Office supplies">
+      <label for="amount">Amount</label>
+      <input id="amount" type="number" min="1" required value="500">
+      <button type="submit">Create order</button>
+    </form>
+    <section id="order-summary" aria-live="polite" hidden>
+      <h2>Current order</h2>
+      <p>Order ID: <output id="order-id"></output></p>
+      <p>Description: <output id="order-description"></output></p>
+      <p>Amount: <output id="order-amount"></output></p>
+      <p>Status: <output id="order-status"></output></p>
+      <button id="submit-order" hidden>Submit for approval</button>
+      <button id="approve-order" hidden>Approve</button>
+      <button id="reject-order" hidden>Reject</button>
+      <button id="close-order" hidden>Close order</button>
+    </section>
+    <p id="notice" role="status"></p>
+  </main>
+  <script>
+    const threshold = 1000;
+    const storageKey = "order-approval-fixture.order";
+    const role = document.querySelector("#role");
+    const form = document.querySelector("#create-order");
+    const summary = document.querySelector("#order-summary");
+    const status = document.querySelector("#order-status");
+    const notice = document.querySelector("#notice");
+    let order = JSON.parse(localStorage.getItem(storageKey) || "null");
+
+    function persist() {
+      localStorage.setItem(storageKey, JSON.stringify(order));
+      render();
+    }
+
+    function render() {
+      form.hidden = Boolean(order);
+      summary.hidden = !order;
+      if (!order) return;
+      document.querySelector("#order-id").textContent = order.id;
+      document.querySelector("#order-description").textContent = order.description;
+      document.querySelector("#order-amount").textContent = String(order.amount);
+      status.textContent = order.status;
+      document.querySelector("#submit-order").hidden = !(role.value === "requester" && order.status === "draft");
+      document.querySelector("#approve-order").hidden = !(
+        (role.value === "manager" && order.status === "manager-review") ||
+        (role.value === "finance" && order.status === "finance-review")
+      );
+      document.querySelector("#reject-order").hidden = !(role.value === "finance" && order.status === "finance-review");
+      document.querySelector("#close-order").hidden = !(role.value === "finance" && order.status === "approved");
+    }
+
+    role.addEventListener("change", render);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (role.value !== "requester") return;
+      order = {
+        id: `ORD-${Date.now().toString(36).toUpperCase()}`,
+        description: document.querySelector("#description").value,
+        amount: Number(document.querySelector("#amount").value),
+        status: "draft",
+        submissionCount: 0
+      };
+      notice.textContent = "Order created";
+      persist();
+    });
+    document.querySelector("#submit-order").addEventListener("click", () => {
+      if (role.value !== "requester" || order?.status !== "draft") return;
+      order.status = "manager-review";
+      order.submissionCount += 1;
+      notice.textContent = "Order submitted to manager";
+      persist();
+    });
+    document.querySelector("#approve-order").addEventListener("click", () => {
+      if (role.value === "manager" && order?.status === "manager-review") {
+        order.status = order.amount > threshold ? "finance-review" : "approved";
+        notice.textContent = order.status === "finance-review" ? "Manager approved; finance review required" : "Manager approved";
+      } else if (role.value === "finance" && order?.status === "finance-review") {
+        order.status = "approved";
+        notice.textContent = "Finance approved";
+      } else return;
+      persist();
+    });
+    document.querySelector("#reject-order").addEventListener("click", () => {
+      if (role.value !== "finance" || order?.status !== "finance-review") return;
+      order.status = "rejected";
+      notice.textContent = "Finance rejected";
+      persist();
+    });
+    document.querySelector("#close-order").addEventListener("click", () => {
+      if (role.value !== "finance" || order?.status !== "approved") return;
+      order.status = "closed";
+      notice.textContent = "Order closed";
+      persist();
+    });
+
+    render();
+  </script>
+</body>
+</html>

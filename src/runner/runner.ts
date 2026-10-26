@@ -12,7 +12,7 @@ export type ScheduledRunnerController = {
     runId: string,
     input: { owner: string; leaseMs?: number },
     now?: Date
-  ) => RequirementSuiteRun;
+  ) => RequirementSuiteRun | Promise<RequirementSuiteRun>;
   releaseScheduledLease: (
     runId: string,
     input: { owner: string; nextRunAt?: string; lastError?: string },
@@ -38,6 +38,7 @@ export type ScheduledRunnerResult = {
 
 export async function runScheduledSuites(input: {
   controller: ScheduledRunnerController;
+  validateRun?: (run: RequirementSuiteRun) => void;
   owner: string;
   knowledgeProjectId?: string;
   systemId?: string;
@@ -68,18 +69,40 @@ export async function runScheduledSuites(input: {
   const clock = input.clock ?? Date.now;
   for (const dueRun of dueRuns) {
     let run: RequirementSuiteRun;
+    let claimedRun: RequirementSuiteRun | undefined;
     try {
-      run = input.controller.claimScheduled(
+      if (dueRun.evaluationTrialId && !input.validateRun) {
+        throw new Error("Trial-bound scheduled runs require a runtime binding validator");
+      }
+      input.validateRun?.(dueRun);
+      claimedRun = input.controller.claimScheduled(
         dueRun.id,
         { owner, leaseMs: input.leaseMs ?? 300_000 },
         now
       );
+      input.validateRun?.(claimedRun);
+      run = claimedRun;
     } catch (error) {
+      const message = errorMessage(error);
+      if (claimedRun?.stabilitySchedule?.leaseId && claimedRun.stabilitySchedule.leaseOwner === owner) {
+        const releaseAt = new Date(clock());
+        try {
+          releaseLease(input, claimedRun, owner, releaseAt, message);
+        } catch (releaseError) {
+          results.push({
+            runId: dueRun.id,
+            status: "claim-failed",
+            processedCases: 0,
+            error: `${message}; lease release failed: ${errorMessage(releaseError)}`
+          });
+          continue;
+        }
+      }
       results.push({
         runId: dueRun.id,
         status: "claim-failed",
         processedCases: 0,
-        error: errorMessage(error)
+        error: message
       });
       continue;
     }
@@ -95,16 +118,16 @@ export async function runScheduledSuites(input: {
     );
     let leaseRenewals = 0;
     let leaseError: string | undefined;
-    let renewalInFlight = false;
+    let renewalInFlight: Promise<void> | undefined;
     const heartbeat = input.controller.renewScheduledLease && leaseRenewalMs > 0
       ? setInterval(() => {
           if (renewalInFlight || leaseError) return;
-          renewalInFlight = true;
-          void Promise.resolve(input.controller.renewScheduledLease!(
-            run.id,
-            { owner, leaseMs: input.leaseMs ?? 300_000 },
-            new Date(clock())
-          ))
+          renewalInFlight = Promise.resolve()
+            .then(() => input.controller.renewScheduledLease!(
+              run.id,
+              { owner, leaseMs: input.leaseMs ?? 300_000 },
+              new Date(clock())
+            ))
             .then(() => {
               leaseRenewals += 1;
             })
@@ -112,7 +135,7 @@ export async function runScheduledSuites(input: {
               leaseError = `Runner lease renewal failed: ${errorMessage(error)}`;
             })
             .finally(() => {
-              renewalInFlight = false;
+              renewalInFlight = undefined;
             });
         }, leaseRenewalMs)
       : undefined;
@@ -152,7 +175,7 @@ export async function runScheduledSuites(input: {
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       if (renewalInFlight) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(leaseRenewalMs || 1, 50)));
+        await renewalInFlight;
       }
     }
 

@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   commandRunnerAgentBridge,
@@ -8,6 +9,8 @@ import {
   preflightAgentBridge,
   runAgent,
   runChain,
+  resolvePlaywrightCli,
+  spawnCommand,
   validateActorJourneyUsage,
   validateHealerMutation,
   validateStepInstrumentation
@@ -807,6 +810,40 @@ describe("runChain", () => {
         status: "open"
       })
     ]);
+  });
+});
+
+describe("spawnCommand", () => {
+  it("runs Playwright from the active business workspace when it has a local package", async () => {
+    const workDir = await tempDir();
+    const workspaceCli = join(workDir, "node_modules", "@playwright", "test", "cli.js");
+    await mkdir(dirname(workspaceCli), { recursive: true });
+    await writeFile(workspaceCli, "process.stdout.write('workspace-playwright');", "utf8");
+
+    const result = await spawnCommand("npx", ["playwright", "--version"], { cwd: workDir });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "workspace-playwright",
+      stderr: ""
+    });
+  });
+
+  it("falls back to the Playwright CLI installed beside the Brain Creator package", async () => {
+    const root = await tempDir();
+    const modulePath = join(root, "node_modules", "brain-creator", "dist", "agent", "orchestrator.js");
+    const packageDir = join(root, "node_modules", "brain-creator", "node_modules", "@playwright", "test");
+    const workDir = join(root, "business-project");
+    await mkdir(dirname(modulePath), { recursive: true });
+    await mkdir(packageDir, { recursive: true });
+    await mkdir(workDir, { recursive: true });
+    await writeFile(modulePath, "", "utf8");
+    await writeFile(join(packageDir, "package.json"), JSON.stringify({ main: "index.js" }), "utf8");
+    await writeFile(join(packageDir, "index.js"), "", "utf8");
+    await writeFile(join(packageDir, "cli.js"), "", "utf8");
+
+    expect(resolvePlaywrightCli(workDir, pathToFileURL(modulePath).href))
+      .toBe(join(packageDir, "cli.js"));
   });
 });
 

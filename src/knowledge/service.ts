@@ -1,6 +1,6 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   AttachmentAnalysis,
@@ -33,6 +33,7 @@ import type {
 } from "../domain/types.js";
 import type { RequirementModelBundle } from "./requirementHarness.js";
 import { id } from "../shared/id.js";
+import type { IntegrityAuthenticator } from "../shared/crypto.js";
 import {
   analyzeRequirement,
   designTests,
@@ -60,6 +61,7 @@ import { buildAssertionContracts, determineAssuranceLevel, missingAssuranceEvide
 import { buildExecutionNarrative } from "../execution/executionNarrative.js";
 import { writeStaticExecutionReport } from "../execution/staticReport.js";
 import { validateExecutionArtifacts } from "../execution/artifactValidation.js";
+import { createExecutionEvidenceSnapshotHash } from "../execution/evidenceSnapshot.js";
 import { decryptSecrets } from "../shared/crypto.js";
 import {
   RequirementAttachmentPipeline,
@@ -128,7 +130,8 @@ export class KnowledgeService {
     private readonly knowledgeDir: string,
     private readonly sourceBaseDir = process.cwd(),
     private readonly systemBrainSnapshots?: SystemBrainSnapshotService,
-    private readonly semanticSpine?: SemanticSpineService
+    private readonly semanticSpine?: SemanticSpineService,
+    private readonly integrityAuthenticator?: IntegrityAuthenticator
   ) {
     this.systemReconciliation = new SystemBrainReconciliationService(repository);
     this.systemPageIdentities = new SystemPageIdentityService(repository);
@@ -671,12 +674,12 @@ export class KnowledgeService {
         id: id("knowledgeNode"),
         knowledgeProjectId: requirementSet.knowledgeProjectId,
         requirementSetId: requirementSet.id,
-        type: action.kind === "uncovered-coverage" ? "requirement" : "rule",
+        type: "requirement",
         title: `Confirmed Eval resolution: ${action.id}`,
         content: note,
         module,
         sourceRefs: [...new Set([...action.sourceRefs, resolutionSourceRef])],
-        origin: "source",
+        origin: "derived",
         confidence: 1,
         status: "draft",
         createdAt: confirmedAt,
@@ -689,21 +692,10 @@ export class KnowledgeService {
           item.requirementSetId === requirementSet.id &&
           item.requirementRefs.some((sourceRef) => action.sourceRefs.includes(sourceRef))
       )) {
-        intent.expectedResults = [
-          ...new Set([...intent.expectedResults, `Confirmed Eval resolution: ${note}`])
-        ];
         intent.knowledgeNodeRefs = [
           ...new Set([...intent.knowledgeNodeRefs, `${resolutionNode.type}:${resolutionNode.title}`])
         ];
         intent.updatedAt = confirmedAt;
-      }
-      for (const gapId of action.gapIds) {
-        const gap = this.repository.gaps.find((item) => item.id === gapId);
-        if (gap?.status === "open") {
-          gap.status = "resolved";
-          gap.updatedAt = confirmedAt;
-          resolvedGapIds.push(gap.id);
-        }
       }
     }
     evaluationGate.status = evaluationGate.actions.some((action) => action.status === "blocked")
@@ -760,6 +752,18 @@ export class KnowledgeService {
 
   validateRequirementSetApproval(requirementSetId: string) {
     const requirementSet = this.getRequirementSet(requirementSetId);
+    const requirementSource = this.repository.requirementSources.find(
+      (item) => item.id === requirementSet.sourceId && item.knowledgeProjectId === requirementSet.knowledgeProjectId
+    );
+    if (!requirementSource) {
+      throw new Error("Requirement source is missing from the selected knowledge project");
+    }
+    const unresolvedSourceWarnings = requirementSource.warnings.filter((warning) => warning.trim().length > 0);
+    if (unresolvedSourceWarnings.length > 0) {
+      throw new Error(
+        `Requirement source has unresolved extraction warnings (${unresolvedSourceWarnings.length}); refresh it with a complete content package before approval`
+      );
+    }
     if ([...this.repository.workflowModels, ...this.repository.stateMachineModels].some(
       (item) => item.requirementSetId === requirementSet.id && item.status === "conflicted"
     )) {
@@ -1393,6 +1397,7 @@ export class KnowledgeService {
     taskId: string;
     outcome: "resolved" | "failed" | "cancelled";
     evidenceRefs?: string[];
+    selectedTransitionRefs?: string[];
     failureReason?: string;
   }) {
     const task = this.repository.explorationTasks.find((item) => item.id === input.taskId);
@@ -1400,11 +1405,18 @@ export class KnowledgeService {
     if (task.status !== "pending") throw new Error("Exploration task is not pending");
     const now = timestamp();
     const evidenceRefs = uniqueStrings(input.evidenceRefs ?? []);
+    const selectedTransitionRefs = uniqueStrings(input.selectedTransitionRefs ?? []);
     if (input.outcome === "resolved" && evidenceRefs.length === 0) {
       throw new Error("Resolved exploration requires evidenceRefs");
     }
+    if (selectedTransitionRefs.length > 0) {
+      if (task.kind !== "state-action") throw new Error("Transition selection is only valid for state-action exploration");
+      const unknownRefs = selectedTransitionRefs.filter((reference) => !task.sourceRefs.includes(reference));
+      if (unknownRefs.length > 0) throw new Error(`Selected transitions are outside the exploration scope: ${unknownRefs.join(", ")}`);
+    }
     task.status = input.outcome;
     task.resultSourceRefs = evidenceRefs;
+    if (selectedTransitionRefs.length > 0) task.selectedTransitionRefs = selectedTransitionRefs;
     task.updatedAt = now;
     task.resolvedAt = now;
     const executableCase = task.executableCaseId
@@ -1433,6 +1445,11 @@ export class KnowledgeService {
     if (input.outcome === "cancelled") {
       this.repository.persist();
       return { task, executableCase };
+    }
+    if (selectedTransitionRefs.length > 0) {
+      const intent = this.getTestIntent(task.testIntentId);
+      intent.selectedTransitionRefs = selectedTransitionRefs;
+      intent.updatedAt = now;
     }
     this.repository.persist();
     const compiled = this.compileExecutableCases(task.testIntentId, task.systemId);
@@ -1756,6 +1773,15 @@ export class KnowledgeService {
     testIntents: TestIntent[];
     dataProfiles: TestDataProfile[];
   }) {
+    for (const intent of input.testIntents) {
+      const expectedResults = intent.expectedResults.filter(
+        (result) => !result.startsWith("Confirmed Eval resolution:")
+      );
+      if (expectedResults.length !== intent.expectedResults.length) {
+        intent.expectedResults = expectedResults;
+        intent.updatedAt = timestamp();
+      }
+    }
     const scenarios = buildBusinessScenarios(input).map((scenario) => ({
       ...scenario,
       dataPlan: buildScenarioDataPlan({
@@ -1948,6 +1974,7 @@ export class KnowledgeService {
     projectId: string;
     systemId: string;
     executableCaseId: string;
+    requirementSuiteRunId?: string;
     executionPlanId?: string;
     testCaseId: string;
     contextPackPath: string;
@@ -1956,10 +1983,21 @@ export class KnowledgeService {
     if (!project.systemIds.includes(input.systemId)) {
       throw new Error("Execution evidence requires a bound business system");
     }
+    const systemProfile = this.repository.systemProfiles.find((item) => item.id === input.systemId);
+    if (!systemProfile) throw new Error("Execution evidence requires a configured business system profile");
     const executableCase = this.repository.executableCases.find(
       (item) => item.id === input.executableCaseId && item.knowledgeProjectId === project.id
     );
     if (!executableCase) throw new Error("Executable case not found");
+    const requirementSuiteRun = input.requirementSuiteRunId
+      ? this.repository.requirementSuiteRuns.find((item) => item.id === input.requirementSuiteRunId)
+      : undefined;
+    if (input.requirementSuiteRunId && (!requirementSuiteRun ||
+        requirementSuiteRun.knowledgeProjectId !== project.id || requirementSuiteRun.systemId !== input.systemId ||
+        requirementSuiteRun.status !== "running" || requirementSuiteRun.currentExecutableCaseId !== executableCase.id ||
+        !requirementSuiteRun.caseRuns.some((item) => item.executableCaseId === executableCase.id))) {
+      throw new Error("Execution evidence run binding does not match the active suite case");
+    }
     const executionPlan = input.executionPlanId
       ? this.repository.executionPlans.find(
           (item) =>
@@ -1979,9 +2017,11 @@ export class KnowledgeService {
       knowledgeProjectId: project.id,
       systemId: input.systemId,
       executableCaseId: executableCase.id,
+      requirementSuiteRunId: input.requirementSuiteRunId,
       executionPlanId: input.executionPlanId,
       testCaseId: input.testCaseId,
       contextPackPath: input.contextPackPath,
+      provenance: systemProfile.executionProvenance ?? "unknown",
       status: "running",
       steps: executionSteps.map((step) => ({
         stepId: step.id,
@@ -2102,6 +2142,7 @@ export class KnowledgeService {
         : [])
     ];
     const referencedArtifacts = uniqueStrings([
+      ...(evidence.reporterPath ? [evidence.reporterPath] : []),
       ...(evidence.reporterResult?.attachments ?? []),
       ...(evidence.reporterResult?.assertions ?? []).flatMap((item) => item.evidenceRefs),
       ...(reporterSteps ?? []).flatMap((item) => [...item.evidenceRefs, ...(item.traceRefs ?? [])]),
@@ -2112,7 +2153,15 @@ export class KnowledgeService {
       Object.fromEntries((evidence.artifactValidation?.files ?? []).map((item) => [item.path, item.sha256]))
     );
     evidence.evidenceWarnings.push(...evidence.artifactValidation.reasons);
+    const reporterArtifactReason = await validateStructuredReporterArtifact({
+      root: input.evidenceRootDir,
+      path: evidence.reporterPath,
+      reporter: evidence.reporterResult,
+      artifactValidation: evidence.artifactValidation
+    });
+    if (reporterArtifactReason) evidence.evidenceWarnings.push(reporterArtifactReason);
     if (evidence.artifactValidation.status !== "valid" && evidence.assuranceLevel === "strong") evidence.assuranceLevel = "limited";
+    if (reporterArtifactReason && evidence.assuranceLevel === "strong") evidence.assuranceLevel = "limited";
     if ((missingStepEvidence.length || missingTraceEvidence.length) && evidence.assuranceLevel === "strong") {
       evidence.assuranceLevel = "limited";
     }
@@ -2209,7 +2258,12 @@ export class KnowledgeService {
         .map((gap) => ({ id: gap.id, status: gap.status, reason: gap.reason }))
     });
     evidence.artifactPaths = [...new Set([...evidence.artifactPaths, htmlReportPath])];
-    this.recordConformanceResult(evidence, input.diagnosis);
+    const conformance = this.recordConformanceResult(evidence, input.diagnosis);
+    evidence.semanticSnapshotHash = createExecutionEvidenceSnapshotHash(
+      evidence,
+      conformance,
+      this.integrityAuthenticator
+    );
     this.repository.persist();
     return evidence;
   }
@@ -2268,8 +2322,9 @@ export class KnowledgeService {
       ...(evidence.consoleErrors.length > 0 ? ["runtime:console-errors"] : []),
       ...(evidence.networkFailures.length > 0 ? ["runtime:network-failures"] : [])
     ]);
-    const result = evaluateConformance({
-      scenarioId: candidates[0].id,
+    const scenario = candidates[0];
+    const evaluatedResult = evaluateConformance({
+      scenarioId: scenario.id,
       executionEvidenceId: evidence.id,
       status: evidence.status === "running" ? "blocked" : evidence.status,
       assuranceLevel: evidence.assuranceLevel,
@@ -2290,6 +2345,13 @@ export class KnowledgeService {
         ...evidence.artifactPaths
       ])
     });
+    const result = scenario.status === "approved"
+      ? evaluatedResult
+      : {
+          ...evaluatedResult,
+          verdict: "inconclusive" as const,
+          reasons: [...evaluatedResult.reasons, "Business scenario is not approved; conformance cannot be claimed."]
+        };
     const existingIndex = this.repository.conformanceResults.findIndex(
       (item) => item.executionEvidenceId === evidence.id
     );
@@ -2315,9 +2377,9 @@ export class KnowledgeService {
       (scenario) =>
         scenario.knowledgeProjectId === input.evidence.knowledgeProjectId &&
         scenario.requirementSetId === executableCase.requirementSetId &&
-        (input.scenarioId
-          ? scenario.id === input.scenarioId
-          : scenario.testIntentIds?.includes(executableCase.testIntentId))
+        scenario.status === "approved" &&
+        scenario.testIntentIds?.includes(executableCase.testIntentId) &&
+        (!input.scenarioId || scenario.id === input.scenarioId)
     );
     // A TestIntent may legitimately be covered by multiple scenario families.
     // Do not guess which one owns the evidence without an explicit binding.
@@ -3755,6 +3817,7 @@ function executableCaseCompileKey(
       JSON.stringify({
         compilerVersion: 6,
         testIntentId: intent.id,
+        selectedTransitionRefs: intent.selectedTransitionRefs ?? [],
         systemId: systemId ?? null,
         requirementHash: requirementSet.contentHash,
         systemEvidence,
@@ -3860,6 +3923,47 @@ function redactReporterResult(
     consoleErrors: reporter.consoleErrors.map(redact),
     networkFailures: reporter.networkFailures.map(redact)
   };
+}
+
+async function validateStructuredReporterArtifact(input: {
+  root?: string;
+  path?: string;
+  reporter?: ExecutionEvidence["reporterResult"];
+  artifactValidation: NonNullable<ExecutionEvidence["artifactValidation"]>;
+}) {
+  if (!input.reporter) return undefined;
+  if (!input.path) return "Structured Reporter result has no persisted artifact path.";
+  if (!input.root || input.artifactValidation.status !== "valid" ||
+      !input.artifactValidation.files.some((file) => file.path === input.path)) {
+    return "Structured Reporter artifact is missing or was not validated with this execution.";
+  }
+  let parsed: unknown;
+  try {
+    const bytes = await readFile(resolve(input.root, input.path));
+    const validatedFile = input.artifactValidation.files.find((file) => file.path === input.path)!;
+    if (createHash("sha256").update(bytes).digest("hex") !== validatedFile.sha256) {
+      return "Structured Reporter artifact changed after file validation.";
+    }
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return "Structured Reporter artifact is unreadable or invalid JSON.";
+  }
+  if (stableJson(parsed) !== stableJson(input.reporter)) {
+    return "Structured Reporter artifact does not match the stored Reporter result.";
+  }
+  return undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function coverageClassificationReason(input: {

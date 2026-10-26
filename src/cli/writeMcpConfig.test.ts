@@ -26,7 +26,7 @@ describe("writeBrainCreatorMcpConfig", () => {
     const config = JSON.parse(await readFile(result.path, "utf8"));
     expect(config.mcpServers["brain-creator"]).toEqual({
       command: "npx",
-      args: ["brain-creator-mcp"],
+      args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       env: {
         BRAIN_CREATOR_WORKSPACE: ".",
         BRAIN_CREATOR_TOOL_PROFILE: "facade",
@@ -65,7 +65,7 @@ describe("writeBrainCreatorMcpConfig", () => {
       args: ["/c", "npx", "playwright", "run-test-mcp-server"]
     });
     expect(config.mcpServers["brain-creator"].command).toBe("npx");
-    expect(config.mcpServers["brain-creator"].args).toEqual(["brain-creator-mcp"]);
+    expect(config.mcpServers["brain-creator"].args).toEqual(["--yes", "--package=brain-creator", "brain-creator-mcp"]);
   });
 
   it("can write a global-install MCP config when requested", async () => {
@@ -143,7 +143,7 @@ describe("writeBrainCreatorMcpConfig", () => {
         mcpServers: {
           "brain-creator": {
             command: "npx",
-            args: ["brain-creator-mcp"],
+            args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
             env: {
               BRAIN_CREATOR_AGENT_PROVIDER: "codex",
               BRAIN_CREATOR_FEISHU_APP_SECRET: "private-value"
@@ -163,7 +163,7 @@ describe("writeBrainCreatorMcpConfig", () => {
     expect(inspection.exists).toBe(true);
     expect(inspection.server).toEqual({
       command: "npx",
-      args: ["brain-creator-mcp"],
+      args: ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       env: {
         BRAIN_CREATOR_AGENT_PROVIDER: "codex",
         BRAIN_CREATOR_FEISHU_APP_SECRET: "[REDACTED]"

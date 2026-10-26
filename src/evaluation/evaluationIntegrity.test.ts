@@ -1,5 +1,10 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
+import { createWorkspaceIntegrityAuthenticator } from "../shared/crypto.js";
 import { EvaluationIntegrityService } from "./evaluationIntegrity.js";
 
 describe("EvaluationIntegrityService", () => {
@@ -31,6 +36,111 @@ describe("EvaluationIntegrityService", () => {
       contentHash: "source-hash"
     }));
     expect(result.projectionManifest.projectionHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("authenticates projection manifests with the workspace key and rejects Store edits", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "brain-projection-integrity-"));
+    try {
+      const repository = fixtureRepository();
+      const authenticator = createWorkspaceIntegrityAuthenticator(workspace);
+      const service = new EvaluationIntegrityService(repository, authenticator);
+      const { trial, projectionManifest } = service.startTrial({
+        knowledgeProjectId: "knowledge-1",
+        requirementSourceId: "source-1",
+        provider: "host-agent",
+        comparisonGroupId: "comparison-1",
+        workspacePath: workspace,
+        storePath: join(workspace, ".brain-creator", "store"),
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+      expect(projectionManifest.integrityTag).toMatch(/^v1:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[a-f0-9]{64}$/);
+
+      const reloadedService = new EvaluationIntegrityService(
+        repository,
+        createWorkspaceIntegrityAuthenticator(workspace)
+      );
+      expect(reloadedService.validateTrial(trial.id, {
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      }).valid).toBe(true);
+
+      repository.projectionManifests[0]!.operation = "forged-checkpoint";
+      const tampered = reloadedService.validateTrial(trial.id, {
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+      expect(tampered.valid).toBe(false);
+      expect(tampered.reasons).toContain("Evaluation projection manifest integrity authentication failed");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("authenticates the frozen requirement source snapshot against Store edits", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "brain-source-snapshot-integrity-"));
+    try {
+      const repository = fixtureRepository();
+      const service = new EvaluationIntegrityService(
+        repository,
+        createWorkspaceIntegrityAuthenticator(workspace)
+      );
+      const { trial, sourceSnapshot } = service.startTrial({
+        knowledgeProjectId: "knowledge-1",
+        requirementSourceId: "source-1",
+        provider: "host-agent",
+        comparisonGroupId: "comparison-1",
+        workspacePath: workspace,
+        storePath: join(workspace, ".brain-creator", "store"),
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+      sourceSnapshot.semanticInputHash = "0".repeat(64);
+
+      const validation = service.validateTrial(trial.id, {
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+
+      expect(validation.valid).toBe(false);
+      expect(validation.reasons).toContain("Frozen requirement source snapshot integrity authentication failed");
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
+  it("fails closed without recreating a missing projection authentication key", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "brain-projection-missing-key-"));
+    try {
+      const repository = fixtureRepository();
+      const service = new EvaluationIntegrityService(
+        repository,
+        createWorkspaceIntegrityAuthenticator(workspace)
+      );
+      const { trial } = service.startTrial({
+        knowledgeProjectId: "knowledge-1",
+        requirementSourceId: "source-1",
+        provider: "host-agent",
+        comparisonGroupId: "comparison-1",
+        workspacePath: workspace,
+        storePath: join(workspace, ".brain-creator", "store"),
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+      const keyPath = join(workspace, ".brain-creator", "secret.key");
+      await rm(keyPath);
+
+      const validation = service.validateTrial(trial.id, {
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+
+      expect(validation.valid).toBe(false);
+      expect(validation.reasons).toContain("Evaluation projection manifest integrity authentication failed");
+      expect(existsSync(keyPath)).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("rejects A/B trials that reuse a store or change the canonical source", () => {
@@ -129,6 +239,174 @@ describe("EvaluationIntegrityService", () => {
     expect(validation.trial.status).toBe("invalidated");
   });
 
+  it("rejects a projection manifest borrowed from another trial", () => {
+    const repository = fixtureRepository();
+    const service = new EvaluationIntegrityService(repository);
+    const first = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "host-agent",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/first",
+      storePath: "C:/work/first/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    const second = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "builtin",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/second",
+      storePath: "C:/work/second/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    first.trial.latestProjectionManifestId = second.projectionManifest.id;
+
+    const validation = service.validateTrial(first.trial.id, {
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Evaluation projection manifest belongs to another Trial");
+    expect(validation.trial.status).toBe("invalidated");
+  });
+
+  it("does not let a projection checkpoint legitimize mutated frozen source content", () => {
+    const repository = fixtureRepository();
+    const service = new EvaluationIntegrityService(repository);
+    const { trial } = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "host-agent",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/host",
+      storePath: "C:/work/host/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    repository.requirementSources[0]!.source = `${repository.requirementSources[0]!.source} changed`;
+    service.checkpointTrial({
+      trialId: trial.id,
+      previousProjectionManifestId: trial.latestProjectionManifestId,
+      operation: "untrusted-checkpoint-attempt",
+      evidenceRefs: [`requirement-source:${trial.requirementSourceId}`]
+    });
+
+    const validation = service.validateTrial(trial.id, {
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+  });
+
+  it("invalidates a trial when source semantics change without changing the declared content hash", () => {
+    const repository = fixtureRepository();
+    const service = new EvaluationIntegrityService(repository);
+    const { trial } = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "host-agent",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/host",
+      storePath: "C:/work/host/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    repository.requirementSources[0]!.content = "Changed after trial start";
+
+    const validation = service.validateTrial(trial.id, {
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+  });
+
+  it("invalidates a trial when semantic blocks change independently of source content", () => {
+    const repository = fixtureRepository();
+    const service = new EvaluationIntegrityService(repository);
+    const { trial } = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "host-agent",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/host",
+      storePath: "C:/work/host/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    repository.requirementSources[0]!.blocks[0]!.text = "Changed block after trial start";
+
+    const validation = service.validateTrial(trial.id, {
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+  });
+
+  it("invalidates a trial when an attachment fingerprint changes", () => {
+    const repository = fixtureRepository();
+    repository.requirementSources[0]!.attachments = [{ name: "process-map.xlsx", contentHash: "attachment-before" }];
+    const service = new EvaluationIntegrityService(repository);
+    const { trial } = service.startTrial({
+      knowledgeProjectId: "knowledge-1",
+      requirementSourceId: "source-1",
+      provider: "host-agent",
+      comparisonGroupId: "comparison-1",
+      workspacePath: "C:/work/host",
+      storePath: "C:/work/host/store",
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+    repository.requirementSources[0]!.attachments[0]!.contentHash = "attachment-after";
+
+    const validation = service.validateTrial(trial.id, {
+      codeRevision: "commit-1",
+      runtimeVersions: { node: "22.0.0" }
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+  });
+
+  it.each(["content hash", "revision", "latest requirement set"] as const)(
+    "invalidates a trial when the live source %s drifts",
+    (field) => {
+      const repository = fixtureRepository();
+      const service = new EvaluationIntegrityService(repository);
+      const { trial } = service.startTrial({
+        knowledgeProjectId: "knowledge-1",
+        requirementSourceId: "source-1",
+        provider: "host-agent",
+        comparisonGroupId: "comparison-1",
+        workspacePath: "C:/work/host",
+        storePath: "C:/work/host/store",
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+      const source = repository.requirementSources[0]!;
+      if (field === "content hash") source.contentHash = "changed-hash";
+      if (field === "revision") source.revision += 1;
+      if (field === "latest requirement set") source.latestRequirementSetId = "requirement-set-changed";
+
+      const validation = service.validateTrial(trial.id, {
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      });
+
+      expect(validation.valid).toBe(false);
+      expect(validation.reasons).toContain("Frozen requirement source snapshot is missing, changed, or outside the Trial");
+    }
+  );
+
   it("records controlled checkpoints and invalidating interventions", () => {
     const repository = fixtureRepository();
     const service = new EvaluationIntegrityService(repository);
@@ -182,6 +460,35 @@ describe("EvaluationIntegrityService", () => {
     expect(intervention.invalidatesTrial).toBe(true);
     expect(repository.evaluationTrials[0].status).toBe("invalidated");
   });
+
+  it.each(["user-clarification", "user-authentication", "manual-evidence-review", "manual-recovery"] as const)(
+    "records %s as a non-invalidating user intervention",
+    (category) => {
+      const repository = fixtureRepository();
+      const service = new EvaluationIntegrityService(repository);
+      const trial = service.startTrial({
+        knowledgeProjectId: "knowledge-1",
+        requirementSourceId: "source-1",
+        provider: "host-agent",
+        comparisonGroupId: "comparison-1",
+        workspacePath: "C:/work/host",
+        storePath: "C:/work/host/store",
+        codeRevision: "commit-1",
+        runtimeVersions: { node: "22.0.0" }
+      }).trial;
+
+      const intervention = service.recordIntervention({
+        trialId: trial.id,
+        category,
+        actor: "user",
+        note: "Required user action during the scenario",
+        evidenceRefs: ["run-ledger:user-action"]
+      });
+
+      expect(intervention.invalidatesTrial).toBe(false);
+      expect(trial.status).toBe("active");
+    }
+  );
 });
 
 function fixtureRepository() {

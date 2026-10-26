@@ -2,7 +2,7 @@
 
 This page records the L3 host-mode evaluation boundary for the 2.2.0 candidate. It is an evaluation note, not a release announcement.
 
-## What Is Measured
+## Synthetic Corpus Scores
 
 The source checkout includes `npm run verify:l3-eval`. Its deterministic, sanitized corpus covers:
 
@@ -14,7 +14,7 @@ The source checkout includes `npm run verify:l3-eval`. Its deterministic, saniti
 - Structured execution evidence.
 - A 20-iteration synthetic Runner stability sample.
 
-The command reports each dimension as `measured` or `not-measured`, includes sample counts and thresholds. Use `npm run verify:l3-eval:json` for JSON output, or invoke `node --loader ts-node/esm scripts/l3Eval.ts --json --output <path>` to save it.
+The command labels sanitized fixture results `scored` and reports them separately from real-Trial metrics. With no linked real Trial evidence, real dimensions remain `not-measured` and the release gate remains blocked. Output includes separate sample denominators and thresholds. Use `npm run verify:l3-eval:json` for JSON output, or invoke `node --loader ts-node/esm scripts/l3Eval.ts --json --output <path>` to save it.
 
 ## Release Boundary
 

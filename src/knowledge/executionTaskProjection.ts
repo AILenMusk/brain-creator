@@ -64,6 +64,7 @@ type ProjectionOptions = {
   systemId?: string;
   knowledgeProjectId?: string;
   nowMs?: number;
+  stalledAfterMs?: number;
 };
 
 const activeRequirementStatuses = new Set<RequirementSuiteRun["status"]>([
@@ -88,7 +89,7 @@ export function projectExecutionTasks(
   for (const run of repository.requirementSuiteRuns) {
     if (!matchesScope(run.systemId, run.knowledgeProjectId, options)) continue;
     if (!activeRequirementStatuses.has(run.status)) continue;
-    const projection = projectRequirementSuite(repository, run, options.nowMs);
+    const projection = projectRequirementSuite(repository, run, options.nowMs, options.stalledAfterMs);
     tasks.push(projection.task);
     projection.relatedTaskIds.forEach((taskId) => relatedTaskIds.add(taskId));
   }
@@ -101,7 +102,7 @@ export function projectExecutionTasks(
   for (const suite of repository.caseSuites) {
     if (!matchesSystemAndProject(repository, suite.systemId, options)) continue;
     if (!activeDocumentStatuses.has(suite.status) && !activeDocumentSuiteIds.has(suite.id)) continue;
-    const projection = projectDocumentSuite(repository, suite, options.nowMs);
+    const projection = projectDocumentSuite(repository, suite, options.nowMs, options.stalledAfterMs);
     tasks.push(projection.task);
     projection.relatedTaskIds.forEach((taskId) => relatedTaskIds.add(taskId));
   }
@@ -124,7 +125,11 @@ export function projectExecutionTasks(
     tasks.push(projectBrainTask(task));
   }
 
-  tasks.sort(compareTasks);
+  tasks.sort((left, right) => {
+    if (left.pendingAction && !right.pendingAction) return -1;
+    if (!left.pendingAction && right.pendingAction) return 1;
+    return compareTasks(left, right);
+  });
   const active = tasks[0];
   return {
     ...(active ? { active } : {}),
@@ -138,7 +143,8 @@ export function projectExecutionTasks(
 function projectRequirementSuite(
   repository: InMemoryBrainCreatorRepository,
   run: RequirementSuiteRun,
-  nowMs?: number
+  nowMs?: number,
+  stalledAfterMs?: number
 ) {
   const recovery = recoverExecutionState(repository, run.id, nowMs);
   const caseRun = run.currentExecutableCaseId
@@ -185,10 +191,10 @@ function projectRequirementSuite(
       : authCheckpoint
         ? "waiting-for-auth"
         : run.status;
-  const nextAction = effectiveStatus === "blocked"
-    ? "review-and-resume"
-    : recovery.pendingAction
-      ? recovery.pendingAction.nextAction
+  const nextAction = recovery.pendingAction
+    ? recovery.pendingAction.nextAction
+    : effectiveStatus === "blocked"
+      ? "review-and-resume"
     : dataTasks.length > 0
       ? "complete-test-data"
       : agentTasks.length > 0
@@ -220,10 +226,15 @@ function projectRequirementSuite(
         ? "A write action was sent but its result was not confirmed. Query the postcondition before retrying."
         : recovery.waitReason ?? authCheckpoint?.reason ?? waitReasonFor(effectiveStatus),
       nextAction,
-      possiblyStalled: recovery.possiblyStalled,
+      possiblyStalled: recovery.possiblyStalled || isPossiblyStalled(
+        effectiveStatus,
+        latestActivityTimestamp(repository, run.id, run.updatedAt, recovery.updatedAt),
+        nowMs,
+        stalledAfterMs
+      ),
       relatedTaskIds: related,
       lastSequence: recovery.lastSequence,
-      updatedAt: maxTimestamp(run.updatedAt, recovery.updatedAt)
+      updatedAt: latestActivityTimestamp(repository, run.id, run.updatedAt, recovery.updatedAt)
     } satisfies UnifiedExecutionTask,
     relatedTaskIds: related
   };
@@ -232,7 +243,8 @@ function projectRequirementSuite(
 function projectDocumentSuite(
   repository: InMemoryBrainCreatorRepository,
   suite: CaseSuite,
-  nowMs?: number
+  nowMs?: number,
+  stalledAfterMs?: number
 ) {
   const recovery = recoverExecutionState(repository, suite.id, nowMs);
   const latestRun = repository.caseSuiteRuns
@@ -265,19 +277,24 @@ function projectDocumentSuite(
     waitReason: recovery.pendingAction
       ? "A write action was sent but its result was not confirmed. Query the postcondition before retrying."
       : recovery.waitReason ?? waitReasonFor(effectiveStatus),
-    nextAction: effectiveStatus === "blocked"
-      ? "review-and-resume"
-      : recovery.pendingAction
-        ? recovery.pendingAction.nextAction
+    nextAction: recovery.pendingAction
+      ? recovery.pendingAction.nextAction
+      : effectiveStatus === "blocked"
+        ? "review-and-resume"
       : agentTasks.length > 0
         ? "submit-agent-output"
       : recovery.status === "waiting"
         ? recovery.nextAction
         : nextActionForSuite(suite.status),
-    possiblyStalled: recovery.possiblyStalled,
+    possiblyStalled: recovery.possiblyStalled || isPossiblyStalled(
+      actionStatus,
+      latestActivityTimestamp(repository, suite.id, suite.updatedAt, recovery.updatedAt),
+      nowMs,
+      stalledAfterMs
+    ),
     relatedTaskIds: related,
     lastSequence: recovery.lastSequence,
-    updatedAt: maxTimestamp(suite.updatedAt, recovery.updatedAt)
+    updatedAt: latestActivityTimestamp(repository, suite.id, suite.updatedAt, recovery.updatedAt)
   };
   return { task, relatedTaskIds: related };
 }
@@ -385,6 +402,13 @@ function isActiveBrainTask(task: BrainTask) {
   return task.status === "pending" || task.status === "running";
 }
 
+function isPossiblyStalled(status: string, updatedAt: string, nowMs = Date.now(), stalledAfterMs = 120_000) {
+  const updatedAtMs = Date.parse(updatedAt);
+  const isActive = status === "running" || status.startsWith("waiting");
+  return isActive && Number.isFinite(updatedAtMs) &&
+    nowMs - updatedAtMs >= stalledAfterMs;
+}
+
 function nextActionForSuite(status: string) {
   if (status === "waiting-for-test-data") return "complete-test-data";
   if (status === "waiting-for-agent") return "submit-agent-output";
@@ -420,6 +444,17 @@ function taskPriority(task: UnifiedExecutionTask) {
 
 function maxTimestamp(...values: string[]) {
   return values.sort((left, right) => right.localeCompare(left))[0];
+}
+
+function latestActivityTimestamp(
+  repository: InMemoryBrainCreatorRepository,
+  taskId: string,
+  ...timestamps: string[]
+) {
+  const ledgerTimestamps = repository.runLedgerEntries
+    .filter((entry) => entry.requirementSuiteRunId === taskId || entry.caseSuiteId === taskId)
+    .map((entry) => entry.createdAt);
+  return maxTimestamp(...timestamps, ...ledgerTimestamps);
 }
 
 function unique(values: string[]) {

@@ -50,6 +50,58 @@ describe("cross-case data lease resolution", () => {
       entityReference: "employee:testperson001"
     })).toBeUndefined();
   });
+
+  it("does not select the first of multiple matching direct leases", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const current = executableCase("case-current", "intent-edit");
+    repository.executableCases.push(current);
+    repository.testDataLeases.push(
+      { ...dataLease(current.id), id: "lease-current-a" },
+      { ...dataLease(current.id), id: "lease-current-b" }
+    );
+
+    expect(findActiveTestDataLease(repository, current, "system-hr", {
+      profileId: "profile-employee",
+      reference: "employee:001"
+    })).toBeUndefined();
+  });
+
+  it("does not resolve a SuiteRun dependency from a lease owned by another run", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const producer = executableCase("case-producer", "intent-create");
+    const consumer = executableCase("case-consumer", "intent-edit");
+    consumer.caseDependencyGraph = {
+      requirementSetId: "requirement-1",
+      systemId: "system-hr",
+      nodes: [],
+      edges: [{
+        id: "edge-1",
+        fromTestIntentId: producer.testIntentId,
+        toTestIntentId: consumer.testIntentId,
+        entityReference: "employee:testperson001",
+        relation: "requires",
+        sourceRefs: ["requirement:employee-edit"]
+      }],
+      dependencyOrder: [producer.testIntentId, consumer.testIntentId],
+      unresolved: [],
+      verdict: "ready",
+      sourceRefs: ["requirement:employee-edit"],
+      generatedAt: new Date(0).toISOString()
+    };
+    repository.executableCases.push(producer, consumer);
+    const priorRunLease = { ...dataLease(producer.id), requirementSuiteRunId: "suite-old" };
+    const currentRunLease = { ...dataLease(producer.id), id: "lease-current-run", requirementSuiteRunId: "suite-current" };
+    repository.testDataLeases.push(priorRunLease, currentRunLease);
+
+    expect(findActiveTestDataLease(repository, consumer, "system-hr", {
+      profileId: "entity:employee%3Atestperson001",
+      entityReference: "employee:testperson001"
+    }, "suite-current")).toBe(currentRunLease);
+    expect(findActiveTestDataLease(repository, consumer, "system-hr", {
+      profileId: "entity:employee%3Atestperson001",
+      entityReference: "employee:testperson001"
+    }, "suite-missing")).toBeUndefined();
+  });
 });
 
 function executableCase(id: string, testIntentId: string): ExecutableCase {

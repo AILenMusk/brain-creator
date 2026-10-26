@@ -4,14 +4,14 @@ This folder defines the npm-package plugin contract for Brain Creator. It is inc
 
 Current status:
 
-- The supported install path is MCP connection with the npm package, using `npx brain-creator-mcp` for project-local installs.
+- The supported install path is MCP connection with the `brain-creator` npm package, using `npx --yes --package=brain-creator brain-creator-mcp` for project-local installs.
 - The repo-local Codex `/plugin` implementation now lives in `plugins/brain-creator`.
 - `.agents/plugins/marketplace.json` registers that local plugin for Codex marketplace discovery.
-- After installation, run `npx brain-creator-doctor` before asking a natural request such as `Use Brain Creator to connect this system`.
+- After installation, run `npx --yes --package=brain-creator brain-creator-doctor` before asking a natural request such as `Use Brain Creator to connect this system`.
 
 The plugin must provide:
 
-- `npx brain-creator-mcp` as the default project-local MCP server command.
-- `npx brain-creator-doctor` as the preflight command.
+- `npx --yes --package=brain-creator brain-creator-mcp` as the default project-local MCP server command.
+- `npx --yes --package=brain-creator brain-creator-doctor` as the preflight command.
 - `skills/brain-creator/SKILL.md` as the main agent entrypoint.
 - Default `BRAIN_CREATOR_AGENT_PROVIDER=auto` environment for Planner, Generator, and Healer dispatch, with Claude subprocess, Codex subprocess, and host-agent task handoff support.

@@ -1,8 +1,9 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
 import { decryptSecrets, encryptSecrets } from "../shared/crypto.js";
+import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import { AuthStateRefreshRegistry } from "./authStateRefresh.js";
 import { createStandardAuthProviderAdapters, type AuthProviderHttpRequest } from "./standardAuthProviders.js";
 
@@ -46,7 +47,7 @@ describe("standard authentication providers", () => {
     expect(requests[0].body).toContain("grant_type=refresh_token");
     expect(result).toMatchObject({ provider: "oauth", status: "succeeded", expiresAt: expect.any(String) });
     expect(rotatedRefreshToken).toBe("rotated-refresh");
-    const state = JSON.parse(await readFile(result.storageStatePath!, "utf8"));
+    const state = await readEncryptedAuthStorageState(result.storageStatePath!, workDir);
     expect(state.origins[0].localStorage).toEqual([{ name: "brain_creator_token", value: "oauth-access" }]);
   });
 
@@ -75,7 +76,7 @@ describe("standard authentication providers", () => {
     expect(requests[0]).toMatchObject({ method: "GET", url: expect.stringContaining("ticket=ST-123") });
     expect(requests[1]).toMatchObject({ method: "GET", url: expect.stringContaining("ticket=ST-123") });
     expect(JSON.stringify(result)).not.toContain("ST-123");
-    const state = JSON.parse(await readFile(result.storageStatePath!, "utf8"));
+    const state = await readEncryptedAuthStorageState(result.storageStatePath!, workDir);
     expect(state.cookies[0]).toMatchObject({ name: "SESSION", value: "session-value" });
     expect(JSON.stringify(state)).not.toContain("ST-123");
   });
@@ -123,7 +124,7 @@ describe("standard authentication providers", () => {
       samlResponse: "assertion",
       storageMode: "cookie"
     }));
-    const state = JSON.parse(await readFile(result.storageStatePath!, "utf8"));
+    const state = await readEncryptedAuthStorageState(result.storageStatePath!, workDir);
     expect(state.cookies[0]).toMatchObject({ name: "SAMLSESSION", value: "saml-cookie" });
   });
 
@@ -139,7 +140,7 @@ describe("standard authentication providers", () => {
       sessionEndpoint: "https://sso.example.test/session",
       samlResponse: "assertion"
     }));
-    const state = JSON.parse(await readFile(result.storageStatePath!, "utf8"));
+    const state = await readEncryptedAuthStorageState(result.storageStatePath!, workDir);
     expect(state.cookies[0]).toMatchObject({ name: "SAMLSESSION", value: "saml-cookie", domain: ".example.test", path: "/" });
     expect(state.cookies[0].url).toBeUndefined();
   });

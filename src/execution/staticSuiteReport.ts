@@ -5,11 +5,23 @@ import type {
   ExecutionProgressEvent,
   RequirementSuiteRun
 } from "../domain/types.js";
+import { redactSensitiveText } from "../shared/secretScan.js";
 
 type SuiteProgress = {
   current?: ExecutionProgressEvent;
   possiblyStalled: boolean;
   stalledAfterMs: number;
+};
+
+type SuiteActionEvidence = {
+  caseId?: string;
+  phase: string;
+  actionKey: string;
+  actionSemantic: string;
+  entityReference?: string;
+  postcondition?: string;
+  evidenceRefs: string[];
+  evidenceArtifacts: Array<{ path: string; sha256: string }>;
 };
 
 export async function writeStaticSuiteExecutionReport(input: {
@@ -30,6 +42,8 @@ export async function writeStaticSuiteExecutionReport(input: {
   bugs?: Array<{ id: string; status: string; caseNo?: string; actualResult: string }>;
   gaps?: Array<{ id: string; status: string; caseNo?: string; reason: string }>;
   progress?: SuiteProgress;
+  actionEvidence?: SuiteActionEvidence[];
+  protectedSecrets?: Record<string, string>;
 }) {
   await mkdir(dirname(input.outputPath), { recursive: true });
   await writeFile(input.outputPath, renderStaticSuiteExecutionReport(input), "utf8");
@@ -53,7 +67,14 @@ export function renderStaticSuiteExecutionReport(input: {
   bugs?: Array<{ id: string; status: string; caseNo?: string; actualResult: string }>;
   gaps?: Array<{ id: string; status: string; caseNo?: string; reason: string }>;
   progress?: SuiteProgress;
+  actionEvidence?: SuiteActionEvidence[];
+  protectedSecrets?: Record<string, string>;
 }) {
+  const safeHtml = (value: string) => escapeHtml(
+    input.protectedSecrets
+      ? redactSensitiveText(value, input.protectedSecrets)
+      : value
+  );
   const labels = staticReportLabelsFixed(input.locale);
   const evidenceByCase = new Map(input.evidence.map((item) => [item.executableCaseId, item]));
   const strong = input.evidence.filter((item) => item.assuranceLevel === "strong").length;
@@ -75,7 +96,7 @@ export function renderStaticSuiteExecutionReport(input: {
     return counts;
   }, {});
   const coverageRows = (input.coverage ?? []).map((item) =>
-    `<tr class="searchable-row"><td>${escapeHtml(item.testIntentId)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.module)}</td><td>${escapeHtml(item.classification)}</td><td>${escapeHtml(item.classificationReason)}</td><td>${escapeHtml(item.requirementRefs.join(", "))}</td></tr>`
+    `<tr class="searchable-row"><td>${safeHtml(item.testIntentId)}</td><td>${safeHtml(item.title)}</td><td>${safeHtml(item.module)}</td><td>${safeHtml(item.classification)}</td><td>${safeHtml(item.classificationReason)}</td><td>${safeHtml(item.requirementRefs.join(", "))}</td></tr>`
   ).join("");
   const requirementSetIds = [...new Set(input.requirementSetIds ?? [])];
   const formattedCreatedAt = formatTimestamp(input.run.createdAt, input.locale);
@@ -86,7 +107,7 @@ export function renderStaticSuiteExecutionReport(input: {
     : `Scenario trust: trusted ${trusted}, verified ${verified}, quarantined ${quarantined}.`;
   const plainLanguageSummary = `<section class="plain-language-summary"><h2>${labels.humanSummary}</h2><p>${labels.executionCaveat}</p><p>${labels.assuranceExplanation}</p><p>${trustSummary}</p></section>`;
   const progressSummary = currentProgress
-    ? `<section class="progress"><h2>${labels.currentProgress}</h2><p><strong class="${currentProgress.status}">${escapeHtml(currentProgress.status)}</strong> | ${labels.case}${labels.separator} ${escapeHtml(currentProgress.caseTitle ?? currentProgress.caseId ?? labels.none)} | ${labels.stage}${labels.separator} ${escapeHtml(currentProgress.stage)} | ${labels.currentStep}${labels.separator} ${escapeHtml(currentProgress.stepTitle ?? labels.none)} | ${labels.elapsed}${labels.separator} ${escapeHtml(String(currentProgress.elapsedMs))} ms${input.progress?.possiblyStalled ? ` | <strong class="blocked">${labels.possiblyStalled}</strong>` : ""}</p>${currentProgress.pageUrl ? `<p>${labels.page}${labels.separator} ${escapeHtml(currentProgress.pageUrl)}</p>` : ""}${currentProgress.waitReason ? `<p>${labels.waitReason}${labels.separator} ${escapeHtml(currentProgress.waitReason)}</p>` : ""}</section>`
+    ? `<section class="progress"><h2>${labels.currentProgress}</h2><p><strong class="${currentProgress.status}">${safeHtml(currentProgress.status)}</strong> | ${labels.case}${labels.separator} ${safeHtml(currentProgress.caseTitle ?? currentProgress.caseId ?? labels.none)} | ${labels.stage}${labels.separator} ${safeHtml(currentProgress.stage)} | ${labels.currentStep}${labels.separator} ${safeHtml(currentProgress.stepTitle ?? labels.none)} | ${labels.elapsed}${labels.separator} ${safeHtml(String(currentProgress.elapsedMs))} ms${input.progress?.possiblyStalled ? ` | <strong class="blocked">${labels.possiblyStalled}</strong>` : ""}</p>${currentProgress.pageUrl ? `<p>${labels.page}${labels.separator} ${safeHtml(currentProgress.pageUrl)}</p>` : ""}${currentProgress.waitReason ? `<p>${labels.waitReason}${labels.separator} ${safeHtml(currentProgress.waitReason)}</p>` : ""}</section>`
     : "";
   const rows = input.run.caseRuns.map((caseRun) => {
     const evidence = evidenceByCase.get(caseRun.executableCaseId);
@@ -96,14 +117,24 @@ export function renderStaticSuiteExecutionReport(input: {
     const reason = evidence?.actualResult ?? caseRun.error ?? (caseRun.status === "queued" ? "Not executed" : "");
     const steps = evidence?.steps ?? [];
     const stepDetails = steps.length > 0
-      ? `<details><summary>${steps.length} ${labels.stepUnit}</summary><ol>${steps.map((step) => `<li class="searchable-row"><strong>${escapeHtml(step.assertionStatus)}</strong> ${escapeHtml(step.instruction)}${step.expected ? ` | ${labels.expected}: ${escapeHtml(step.expected)}` : ""}${step.actual ? ` | ${labels.actual}: ${escapeHtml(step.actual)}` : ""}${step.screenshotPath ? ` | ${artifactLink(step.screenshotPath)}` : ""}</li>`).join("")}</ol></details>`
+      ? `<details><summary>${steps.length} ${labels.stepUnit}</summary><ol>${steps.map((step) => `<li class="searchable-row"><strong>${safeHtml(step.assertionStatus)}</strong> ${safeHtml(step.instruction)}${step.expected ? ` | ${labels.expected}: ${safeHtml(step.expected)}` : ""}${step.actual ? ` | ${labels.actual}: ${safeHtml(step.actual)}` : ""}${step.screenshotPath ? ` | ${artifactLink(step.screenshotPath, safeHtml)}` : ""}</li>`).join("")}</ol></details>`
       : `<span class=muted>${labels.noStepEvidence}</span>`;
-    return `<tr class="searchable-row"><td>${caseRun.order}</td><td>${escapeHtml(caseRun.title)}</td><td class="${caseRun.status}">${escapeHtml(caseRun.status)}</td><td>${escapeHtml(assurance)}</td><td>${escapeHtml(reason)}</td><td>${escapeHtml(warnings.join("; "))}</td><td>${stepDetails}</td><td>${escapeHtml(String(evidence?.consoleErrors.length ?? 0))}</td><td>${escapeHtml(String(evidence?.networkFailures.length ?? 0))}</td><td>${artifactLinks(artifacts)}</td></tr>`;
+    return `<tr class="searchable-row"><td>${caseRun.order}</td><td>${safeHtml(caseRun.title)}</td><td class="${caseRun.status}">${safeHtml(caseRun.status)}</td><td>${safeHtml(assurance)}</td><td>${safeHtml(reason)}</td><td>${safeHtml(warnings.join("; "))}</td><td>${stepDetails}</td><td>${escapeHtml(String(evidence?.consoleErrors.length ?? 0))}</td><td>${escapeHtml(String(evidence?.networkFailures.length ?? 0))}</td><td>${artifactLinks(artifacts, safeHtml)}</td></tr>`;
   }).join("");
-  const bugs = (input.bugs ?? []).map((bug) => `<li class="searchable-row">${escapeHtml(bug.id)} ${escapeHtml(bug.status)}: ${escapeHtml(bug.actualResult)}</li>`).join("") || `<li class=muted>${labels.none}</li>`;
-  const gaps = (input.gaps ?? []).map((gap) => `<li class="searchable-row">${escapeHtml(gap.id)} ${escapeHtml(gap.status)}: ${escapeHtml(gap.reason)}</li>`).join("") || `<li class=muted>${labels.none}</li>`;
-  const html = `<!doctype html><html lang="${labels.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title><style>body{font:14px system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#17202a}header{border-bottom:1px solid #ddd;margin-bottom:1rem}input{width:100%;padding:.6rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}.passed{color:#087f5b}.failed{color:#c92a2a}.blocked{color:#a15c00}.muted{color:#667085}details{min-width:240px}.plain-language-summary{border:1px solid #ddd;padding:1rem;margin:1rem 0}</style></head><body><header><h1>${escapeHtml(input.title)}</h1><p>${labels.status}${labels.separator} <strong class="${input.run.status}">${escapeHtml(input.run.status)}</strong> | ${labels.total}${labels.separator} ${input.run.total} | ${labels.passed}${labels.separator} ${input.run.passed} | ${labels.failed}${labels.separator} ${input.run.failed} | ${labels.blocked}${labels.separator} ${input.run.blocked}</p><p>${labels.browserMode}${labels.separator} ${escapeHtml(input.run.browserMode ?? "headless")}</p><p>${labels.assurance}${labels.separator} <strong>strong ${strong}</strong> | limited ${limited} | none ${none}</p><p>${labels.runtimeImpact}${labels.separator} ${labels.consoleErrors} ${consoleErrors} | ${labels.networkFailures} ${networkFailures}</p><p>${labels.coverage}${labels.separator} ${Object.entries(coverageCounts).map(([key, value]) => `${escapeHtml(key)} ${value}`).join(" | ") || labels.noCoverage}</p><p>${labels.run}${labels.separator} ${escapeHtml(input.run.id)} | ${labels.system}${labels.separator} ${escapeHtml(input.run.systemId)} | ${labels.requirementProject}${labels.separator} ${escapeHtml(input.run.knowledgeProjectId)}</p><p>${labels.created}${labels.separator} ${escapeHtml(formattedCreatedAt)} | ${labels.updated}${labels.separator} ${escapeHtml(formattedUpdatedAt)}${input.locale ? ` | ${labels.locale}${labels.localeSeparator} ${escapeHtml(input.locale)}` : ""}</p>${requirementSetIds.length > 0 ? `<p>${labels.requirementSets}${labels.separator} ${requirementSetIds.map((id) => escapeHtml(id)).join(", ")}</p>` : ""}</header>${plainLanguageSummary}${progressSummary}<label for="search">${labels.search}</label><input id="search" type="search" placeholder="${labels.searchPlaceholder}" oninput="filterReport(this.value)"><h2>${labels.coverage}</h2><table><thead><tr><th>${labels.intent}</th><th>${labels.title}</th><th>${labels.module}</th><th>${labels.classification}</th><th>${labels.reason}</th><th>${labels.requirementRefs}</th></tr></thead><tbody>${coverageRows || `<tr><td colspan=6 class=muted>${labels.noCoverage}</td></tr>`}</tbody></table><h2>${labels.cases}</h2><table><thead><tr><th>#</th><th>${labels.case}</th><th>${labels.status}</th><th>${labels.assurance}</th><th>${labels.actualOrNotExecuted}</th><th>${labels.evidenceWarnings}</th><th>${labels.steps}</th><th>${labels.consoleErrorsHeader}</th><th>${labels.networkFailuresHeader}</th><th>${labels.artifacts}</th></tr></thead><tbody>${rows || `<tr><td colspan=10 class=muted>${labels.noCases}</td></tr>`}</tbody></table><h2>${labels.bugReports}</h2><ul>${bugs}</ul><h2>${labels.gaps}</h2><ul>${gaps}</ul><script>function filterReport(q){q=q.toLowerCase();document.querySelectorAll('.searchable-row').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(q))}</script></body></html>`;
-  return html;
+  const bugs = (input.bugs ?? []).map((bug) => `<li class="searchable-row">${safeHtml(bug.id)} ${safeHtml(bug.status)}: ${safeHtml(bug.actualResult)}</li>`).join("") || `<li class=muted>${labels.none}</li>`;
+  const gaps = (input.gaps ?? []).map((gap) => `<li class="searchable-row">${safeHtml(gap.id)} ${safeHtml(gap.status)}: ${safeHtml(gap.reason)}</li>`).join("") || `<li class=muted>${labels.none}</li>`;
+  const html = `<!doctype html><html lang="${labels.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeHtml(input.title)}</title><style>body{font:14px system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#17202a}header{border-bottom:1px solid #ddd;margin-bottom:1rem}input{width:100%;padding:.6rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}.passed{color:#087f5b}.failed{color:#c92a2a}.blocked{color:#a15c00}.muted{color:#667085}details{min-width:240px}.plain-language-summary{border:1px solid #ddd;padding:1rem;margin:1rem 0}</style></head><body><header><h1>${safeHtml(input.title)}</h1><p>${labels.status}${labels.separator} <strong class="${input.run.status}">${safeHtml(input.run.status)}</strong> | ${labels.total}${labels.separator} ${input.run.total} | ${labels.passed}${labels.separator} ${input.run.passed} | ${labels.failed}${labels.separator} ${input.run.failed} | ${labels.blocked}${labels.separator} ${input.run.blocked}</p><p>${labels.browserMode}${labels.separator} ${safeHtml(input.run.browserMode ?? "headless")}</p><p>${labels.assurance}${labels.separator} <strong>strong ${strong}</strong> | limited ${limited} | none ${none}</p><p>${labels.runtimeImpact}${labels.separator} ${labels.consoleErrors} ${consoleErrors} | ${labels.networkFailures} ${networkFailures}</p><p>${labels.coverage}${labels.separator} ${Object.entries(coverageCounts).map(([key, value]) => `${safeHtml(key)} ${value}`).join(" | ") || labels.noCoverage}</p><p>${labels.run}${labels.separator} ${safeHtml(input.run.id)} | ${labels.system}${labels.separator} ${safeHtml(input.run.systemId)} | ${labels.requirementProject}${labels.separator} ${safeHtml(input.run.knowledgeProjectId)}</p><p>${labels.created}${labels.separator} ${safeHtml(formattedCreatedAt)} | ${labels.updated}${labels.separator} ${safeHtml(formattedUpdatedAt)}${input.locale ? ` | ${labels.locale}${labels.localeSeparator} ${safeHtml(input.locale)}` : ""}</p>${requirementSetIds.length > 0 ? `<p>${labels.requirementSets}${labels.separator} ${requirementSetIds.map((id) => safeHtml(id)).join(", ")}</p>` : ""}</header>${plainLanguageSummary}${progressSummary}<label for="search">${labels.search}</label><input id="search" type="search" placeholder="${labels.searchPlaceholder}" oninput="filterReport(this.value)"><h2>${labels.coverage}</h2><table><thead><tr><th>${labels.intent}</th><th>${labels.title}</th><th>${labels.module}</th><th>${labels.classification}</th><th>${labels.reason}</th><th>${labels.requirementRefs}</th></tr></thead><tbody>${coverageRows || `<tr><td colspan=6 class=muted>${labels.noCoverage}</td></tr>`}</tbody></table><h2>${labels.cases}</h2><table><thead><tr><th>#</th><th>${labels.case}</th><th>${labels.status}</th><th>${labels.assurance}</th><th>${labels.actualOrNotExecuted}</th><th>${labels.evidenceWarnings}</th><th>${labels.steps}</th><th>${labels.consoleErrorsHeader}</th><th>${labels.networkFailuresHeader}</th><th>${labels.artifacts}</th></tr></thead><tbody>${rows || `<tr><td colspan=10 class=muted>${labels.noCases}</td></tr>`}</tbody></table><h2>${labels.bugReports}</h2><ul>${bugs}</ul><h2>${labels.gaps}</h2><ul>${gaps}</ul><script>function filterReport(q){q=q.toLowerCase();document.querySelectorAll('.searchable-row').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(q))}</script></body></html>`;
+  const actionRows = (input.actionEvidence ?? []).map((action) =>
+    `<tr class="searchable-row"><td>${safeHtml(action.caseId ?? labels.none)}</td><td>${safeHtml(action.phase)}</td><td>${safeHtml(action.actionKey)}</td><td>${safeHtml(action.actionSemantic)}</td><td>${safeHtml(action.entityReference ?? labels.none)}</td><td>${safeHtml(action.postcondition ?? labels.none)}</td><td>${safeHtml(action.evidenceRefs.join(", "))}</td><td>${action.evidenceArtifacts.map((artifact) => `${artifactLink(artifact.path, safeHtml)} <code>${safeHtml(artifact.sha256)}</code>`).join("<br>") || labels.none}</td></tr>`
+  ).join("");
+  const zh = input.locale?.toLowerCase().startsWith("zh");
+  const actionHeading = zh ? "恢复与写操作证据" : "Recovery and write-action evidence";
+  const actionCaveat = zh
+    ? "账本动作状态和操作人产物是审计证据，不单独构成业务符合性结论。"
+    : "Ledger action phases and operator artifacts support auditability; they are not by themselves a business conformance verdict.";
+  const actionSection = `<section class="action-evidence"><h2>${actionHeading}</h2><p>${actionCaveat}</p><table><thead><tr><th>${labels.case}</th><th>${zh ? "动作阶段" : "Action phase"}</th><th>${zh ? "动作键" : "Action key"}</th><th>${zh ? "动作" : "Action"}</th><th>${zh ? "实体" : "Entity"}</th><th>${zh ? "后置条件" : "Postcondition"}</th><th>${zh ? "证据引用" : "Evidence refs"}</th><th>${labels.artifacts}</th></tr></thead><tbody>${actionRows || `<tr><td colspan=8 class=muted>${zh ? "暂无动作证据" : "No action evidence"}</td></tr>`}</tbody></table></section>`;
+  const caseHeading = `<h2>${labels.cases}</h2>`;
+  return html.replace(caseHeading, `${actionSection}${caseHeading}`);
 }
 
 function staticReportLabels(locale?: string) {
@@ -201,13 +232,14 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
 
-function artifactLinks(paths: string[]) {
-  return paths.map((path) => artifactLink(path)).filter(Boolean).join("<br>");
+function artifactLinks(paths: string[], safeHtml: (value: string) => string) {
+  return paths.map((path) => artifactLink(path, safeHtml)).filter(Boolean).join("<br>");
 }
 
-function artifactLink(path?: string) {
+function artifactLink(path: string | undefined, safeHtml: (value: string) => string) {
   if (!path) return "";
-  return `<a href="${escapeHtml(artifactHref(path))}">${escapeHtml(path)}</a>`;
+  const safePath = safeHtml(path);
+  return `<a href="${safeHtml(artifactHref(safePath))}">${safePath}</a>`;
 }
 
 function artifactHref(path: string) {

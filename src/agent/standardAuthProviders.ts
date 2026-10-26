@@ -1,8 +1,8 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
 import { decryptSecrets, encryptSecrets } from "../shared/crypto.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
+import { writeEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import type {
   AuthRefreshAdapter,
   AuthRefreshInput,
@@ -231,10 +231,7 @@ async function writeCookieStorageState(
       ? { ...cookieWithoutUrl, path: cookie.path ?? "/" }
       : { ...cookieWithoutUrl, url: input.system.baseUrl };
   });
-  await mkdir(dirname(outputPath), { recursive: true, mode: 0o700 });
-  await chmod(dirname(outputPath), 0o700).catch(() => undefined);
-  await writeFile(outputPath, JSON.stringify({ cookies: scopedCookies, origins: [] }), { encoding: "utf8", mode: 0o600 });
-  await chmod(outputPath, 0o600).catch(() => undefined);
+  await writeEncryptedAuthStorageState(outputPath, { cookies: scopedCookies, origins: [] }, input.workDir);
   return outputPath;
 }
 
@@ -302,10 +299,7 @@ async function writeTokenStorageState(
           localStorage: [{ name: secrets.localStorageKey ?? "brain_creator_token", value: token }]
         }]
       };
-  await mkdir(dirname(outputPath), { recursive: true, mode: 0o700 });
-  await chmod(dirname(outputPath), 0o700).catch(() => undefined);
-  await writeFile(outputPath, JSON.stringify(state), { encoding: "utf8", mode: 0o600 });
-  await chmod(outputPath, 0o600).catch(() => undefined);
+  await writeEncryptedAuthStorageState(outputPath, state, input.workDir);
   return outputPath;
 }
 

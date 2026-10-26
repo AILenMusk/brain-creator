@@ -8,6 +8,7 @@
 |---|---|---|
 | `brain-creator init` | 安装项目资产并创建或更新 MCP 配置 | `npx brain-creator init --provider host-agent` |
 | `brain-creator doctor` | 检查 provider、浏览器、连接器、知识目录和安装资产 | `npx brain-creator doctor` |
+| `brain-creator auth capture` | 用户在浏览器中登录，将状态加密保存到工作区并在新上下文中验证 | `npx brain-creator auth capture --system <id> --profile <id>` |
 | `brain-creator config` | 输出脱敏后的有效 MCP 配置 | `npx brain-creator config --json` |
 | `brain-creator config write` | 有意写入 MCP 配置 | `npx brain-creator config write --provider codex` |
 | `brain-creator plugin install` | 安装 Codex 插件和 host-agent 配置 | `npx brain-creator plugin install` |
@@ -20,6 +21,14 @@
 | `brain-creator --help` | 输出顶层帮助 | `npx brain-creator --help` |
 
 除非参数另有说明，命令都应在业务项目中运行。
+
+## `brain-creator auth capture`
+
+```text
+brain-creator auth capture --system <system-id> --profile <auth-profile-id> [--target <path>] [--json]
+```
+
+打开隔离的可见浏览器供用户手动登录。浏览器会阻止跳转到所选系统来源允许列表之外的站点。凭据只能在浏览器中输入，不要输入到终端或聊天。浏览器状态在静态存储时加密，并在新的浏览器上下文中验证；验证通过后才关联到所选 AuthProfile。该命令只验证鉴权，不授权业务写入，也不代表 Trial 已批准。
 
 ## L3 黄金评估
 

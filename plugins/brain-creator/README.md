@@ -17,10 +17,10 @@ py <plugin-creator-skill>/scripts/validate_plugin.py plugins/brain-creator
 For project-local npm installs, run these commands with `npx`:
 
 ```bash
-npx brain-creator-mcp
-npx brain-creator-doctor
-npx brain-creator-install-assets
-npx brain-creator-write-mcp-config
+npx --yes --package=brain-creator brain-creator-mcp
+npx --yes --package=brain-creator brain-creator-doctor
+npx --yes --package=brain-creator brain-creator-install-assets
+npx --yes --package=brain-creator brain-creator-write-mcp-config
 ```
 
 For global npm installs, the same commands can be run without `npx`.

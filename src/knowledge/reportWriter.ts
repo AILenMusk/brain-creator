@@ -75,6 +75,7 @@ const techniqueLabels: Record<string, string> = {
 export function renderRequirementAnalysisReport(input: RequirementAnalysisReportInput) {
   const coverageRows = input.coverageProfile ? Object.entries(input.coverageProfile.dimensions) : [];
   const scenarios = input.businessScenarios.filter((item) => item.status !== "stale");
+  const inlineEvidenceRefs = findInlineEvidenceRefs(input);
   const lines = [
     "---",
     `需求版本: ${input.analysis.requirementSetId}`,
@@ -143,6 +144,9 @@ export function renderRequirementAnalysisReport(input: RequirementAnalysisReport
     ...(input.analysis.openQuestions.length > 0 ? ["### 待澄清问题", "", ...input.analysis.openQuestions.map((item) => `- ${plainText(item)}`), ""] : ["### 待澄清问题", "", "- 暂无。", ""]),
     ...(input.analysis.contradictions.length > 0 ? ["### 需求矛盾", "", ...input.analysis.contradictions.map((item) => `- ${plainText(item)}`), ""] : ["### 需求矛盾", "", "- 暂未发现。", ""]),
     ...(input.analysis.missingBranches.length > 0 ? ["### 可能缺失的分支", "", ...input.analysis.missingBranches.map((item) => `- ${plainText(item)}`), ""] : ["### 可能缺失的分支", "", "- 暂未发现。", ""]),
+    ...(inlineEvidenceRefs.length > 0
+      ? ["### 报告文本完整性", "", `- 以下内部证据编号混入业务描述：${inlineEvidenceRefs.slice(0, 8).map((ref) => `\`${ref}\``).join("、")}。证据编号不能替代动作或状态预期；请更正并复核相关分析文本后再审核业务结果。`, ""]
+      : []),
     ...(input.evaluationGate.actions.length > 0
       ? ["### 评估门禁要求", "", ...input.evaluationGate.actions.map((action) => `- **${statusLabel(action.status)}**：${plainText(action.message)}（依据：${evidenceLinks(action.sourceRefs, input.evidenceCatalog)}）`), ""]
       : ["### 评估门禁要求", "", "- 暂无待处理门禁。", ""]),
@@ -155,7 +159,7 @@ export function renderRequirementAnalysisReport(input: RequirementAnalysisReport
     "- 测试意图进入系统探索和用例编译后，才会补充页面入口、操作步骤、测试数据和断言证据。",
     "- 需求预期、系统观察和执行结果保持分层，任何一层都不会静默覆盖另一层。"
   ];
-  return renderReport(lines, input.evidenceCatalog);
+  return renderReport(lines);
 }
 
 export function renderTestIntentReport(input: TestIntentReportInput) {
@@ -180,7 +184,7 @@ export function renderTestIntentReport(input: TestIntentReportInput) {
     "- 来源证据不足、系统入口不唯一或数据无法准备的意图，应保持待确认，不应直接执行。", "",
     ...(input.intents.length > 0 ? input.intents.flatMap((intent, index) => renderIntent(intent, index + 1, input.evidenceCatalog)) : ["## 当前没有测试意图", "", "- 请先完成需求分析和测试设计。"])
   ];
-  return renderReport(lines, input.evidenceCatalog);
+  return renderReport(lines);
 }
 
 function renderBusinessObject(model: BusinessObjectModel, catalog?: EvidenceCatalog) {
@@ -275,6 +279,41 @@ function scenarioAssuranceSummary(contracts: ScenarioAssuranceContract[]) {
   return Object.entries(counts).map(([key, value]) => `${key} ${value}`).join("、");
 }
 
+function findInlineEvidenceRefs(input: RequirementAnalysisReportInput) {
+  const narrative = [
+    ...input.analysis.clauses.map((item) => item.text),
+    ...input.analysis.nodes.flatMap((item) => [item.title, item.content]),
+    ...input.businessScenarios.flatMap((item) => [
+      item.title,
+      item.objective,
+      ...item.actors,
+      ...item.preconditions,
+      ...item.expectedBusinessOutcomes,
+      ...item.testDataNeeds
+    ]),
+    ...input.workflowModels.flatMap((item) => [
+      item.title,
+      ...item.actors,
+      ...item.steps.flatMap((step) => [step.label, step.trigger ?? "", ...(step.preconditions ?? []), ...(step.sideEffects ?? [])]),
+      ...item.transitions.flatMap((transition) => [transition.from, transition.to, transition.condition ?? "", transition.actor ?? "", transition.trigger ?? "", ...(transition.preconditions ?? []), ...(transition.sideEffects ?? [])])
+    ]),
+    ...input.stateMachineModels.flatMap((item) => [
+      item.title,
+      ...item.states.map((state) => state.label),
+      ...item.transitions.flatMap((transition) => [transition.from, transition.to, transition.trigger ?? "", transition.actor ?? "", ...(transition.preconditions ?? []), ...(transition.sideEffects ?? [])])
+    ]),
+    ...input.businessObjectModels.flatMap((item) => [item.name, ...item.fields, ...item.states, ...item.invariants]),
+    ...input.decisionTableModels.flatMap((item) => [
+      item.title,
+      ...item.conditions,
+      ...item.actions,
+      ...item.rules.flatMap((rule) => [...Object.values(rule.conditionValues), ...rule.expectedActions])
+    ])
+  ];
+  const refs = narrative.flatMap((text) => [...text.matchAll(/\b((?:REQ|TAB|IMG|SYS|RUN|EVD)-\d{3})\b/gi)].map((match) => match[1]!.toUpperCase()));
+  return [...new Set(refs)].sort();
+}
+
 function scenarioType(intent: TestIntent) {
   const title = intent.title.toLowerCase();
   if ((intent.actorJourney?.length ?? 0) > 1) return "跨角色业务流程";
@@ -351,15 +390,15 @@ function humanizeText(value: string) {
 function statusLabel(value: string) { return ({ draft: "草稿，待审核", approved: "已批准", superseded: "已被新版本替代", compiled: "已编译", stale: "需要重新确认", "needs-exploration": "等待系统探索", "needs-data": "等待测试数据", ambiguous: "存在歧义", blocked: "已阻塞", confirmed: "已确认", pending: "待处理", pass: "通过", "needs-user": "需要人工确认", generated: "已生成", grounded: "已具备需求依据", bound: "已绑定系统", verified: "已验证", trusted: "已建立信任", quarantined: "已隔离" } as Record<string, string>)[value] ?? value; }
 function gateStatusLabel(value: RequirementEvaluationGate["status"]) { return ({ passed: "已通过", "needs-confirmation": "等待人工确认", confirmed: "已确认", blocked: "已阻塞" })[value]; }
 function verdictLabel(value: RequirementPolicyEvaluation["verdict"]) { return ({ pass: "通过", "needs-user": "需要人工确认", blocked: "已阻塞" })[value]; }
-function providerLabel(value: RequirementAnalysis["provider"]) { return value === "host-skill" ? "宿主 Skill 增强分析" : "Brain Creator 内置分析"; }
+function providerLabel(value: RequirementAnalysis["provider"]) {
+  return {
+    builtin: "Brain Creator 内置分析",
+    "host-agent": "宿主 Agent 协作分析",
+    "host-skill": "宿主 Skill 增强分析"
+  }[value];
+}
 function percent(value: number) { return `${Math.round(value * 100)}%`; }
 function unique(values: string[]) { return [...new Set(values.filter(Boolean))]; }
-function renderReport(lines: string[], catalog?: EvidenceCatalog) {
-  let report = lines.join("\n").replace(/\n{3,}/g, "\n\n");
-  if (catalog) {
-    for (const entry of [...catalog.entries].sort((left, right) => right.rawRef.length - left.rawRef.length)) {
-      report = report.split(entry.rawRef).join(evidenceLinks([entry.rawRef], catalog));
-    }
-  }
-  return `${report}\n`;
+function renderReport(lines: string[]) {
+  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }

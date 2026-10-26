@@ -160,7 +160,52 @@ describe("scenario assurance", () => {
     expect(scenarios.every((item) => !item.title.includes("HR"))).toBe(true);
   });
 
-  it("requires a unique system binding, usable data, and a strong oracle before passing", () => {
+  it("links decision-table branches only to intents with matching source anchors", () => {
+    const relevant = intent("intent-relevant", ["req:decision"]);
+    const unrelated = intent("intent-unrelated", ["req:workflow"]);
+    const scenarios = buildBusinessScenarios({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      workflows: [],
+      stateMachines: [],
+      decisionTables: [decisionTable()],
+      testIntents: [relevant, unrelated]
+    });
+
+    const branch = scenarios.find((scenario) => scenario.family === "branch");
+
+    expect(branch).toEqual(expect.objectContaining({
+      testIntentIds: ["intent-relevant"]
+    }));
+  });
+
+  it("keeps positive workflow scenarios separate from negative intents and unrelated transitions", () => {
+    const matching = intent("intent-matching", ["req:approve"]);
+    matching.processModelRefs = ["workflow-order"];
+    const wrongTransition = intent("intent-wrong-transition", ["req:workflow"]);
+    wrongTransition.processModelRefs = ["workflow-order"];
+    const negative = intent("intent-negative", ["req:approve"]);
+    negative.processModelRefs = ["workflow-order"];
+    negative.scenarioType = "negative";
+    negative.expectedResults = ["Unauthorized actor is rejected"];
+
+    const scenarios = buildBusinessScenarios({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      workflows: [workflow()],
+      stateMachines: [],
+      decisionTables: [],
+      testIntents: [matching, wrongTransition, negative]
+    });
+    const mainFlow = scenarios.find((scenario) => scenario.family === "main-flow");
+    const conditionalPath = scenarios.find((scenario) => scenario.family === "branch");
+
+    expect(mainFlow?.testIntentIds).toEqual(["intent-matching", "intent-wrong-transition"]);
+    expect(mainFlow?.expectedBusinessOutcomes).not.toContain("Unauthorized actor is rejected");
+    expect(conditionalPath?.testIntentIds).toEqual(["intent-matching"]);
+  });
+
+  it("keeps free-text outcomes limited until a structured oracle contract exists", () => {
     const dataProfile: TestDataProfile = {
       id: "data-order",
       knowledgeProjectId: "project-1",
@@ -207,10 +252,11 @@ describe("scenario assurance", () => {
     expect(contract).toEqual(expect.objectContaining({
       systemBinding: "unique",
       testDataReadiness: "creatable",
-      oracleStrength: "strong",
-      verdict: "pass",
+      oracleStrength: "limited",
+      verdict: "needs-review",
       independence: "isolated-single-provider"
     }));
+    expect(contract.reasons).toContain("Free-text business outcomes are not a structured business oracle.");
 
     expect(buildScenarioAssurance({
       scenario,
@@ -222,6 +268,43 @@ describe("scenario assurance", () => {
       systemBinding: "missing",
       verdict: "blocked"
     }));
+  });
+
+  it("blocks assurance when no scenario-scoped data plan is declared", () => {
+    const scenario = buildBusinessScenarios({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      workflows: [workflow()],
+      stateMachines: [],
+      decisionTables: [],
+      testIntents: [intent("intent-no-data", ["req:workflow"])]
+    }).find((item) => item.family === "main-flow")!;
+    const binding: SemanticBinding = {
+      id: "binding-1",
+      requirementSetId: "requirement-1",
+      systemId: "system-1",
+      expectedSemanticId: "action:approve",
+      observedSemanticId: "action:approve",
+      type: "exact",
+      conditions: {},
+      confidence: 1,
+      status: "confirmed",
+      evidenceRefs: ["system-observation:approve"]
+    };
+
+    const contract = buildScenarioAssurance({
+      scenario,
+      systemId: "system-1",
+      systemSnapshot: snapshot(),
+      semanticBindings: [binding]
+    });
+
+    expect(contract).toEqual(expect.objectContaining({
+      systemBinding: "unique",
+      testDataReadiness: "blocked",
+      verdict: "blocked"
+    }));
+    expect(contract.reasons).toContain("No scenario-scoped test data profiles are declared.");
   });
 
   it("promotes only after three unchanged strong runs and downgrades on evidence changes", () => {

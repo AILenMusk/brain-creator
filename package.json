@@ -32,6 +32,8 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "verify:order-fixture": "playwright test --config=playwright.order-fixture.config.ts",
+    "verify:order-brain-smoke": "node --loader ts-node/esm scripts/orderFixtureBrainCreatorSmoke.ts",
     "build": "tsc -p tsconfig.build.json && node scripts/writeBuildIdentity.mjs",
     "prepack": "npm run build",
     "mcp": "npm run build && node dist/cli/brainCreatorMcp.js",
@@ -47,7 +49,9 @@
     "verify:host-agent-document-suite": "node --loader ts-node/esm scripts/hostAgentDocumentSuiteSmoke.ts",
     "verify:codex-native-entry": "node --loader ts-node/esm scripts/codexNativeEntrySmoke.ts",
     "verify:codex-plugin-install": "node --loader ts-node/esm scripts/codexPluginInstallSmoke.ts",
-    "verify:installed-mcp": "node --loader ts-node/esm scripts/verifyInstalledMcpSmoke.ts",
+    "verify:installed-mcp": "npm run verify:package-install",
+    "verify:source-mcp-identity": "node --loader ts-node/esm scripts/verifySourceMcpIdentitySmoke.ts",
+    "verify:source-workspace-isolation": "node --loader ts-node/esm scripts/verifySourceWorkspaceIsolationSmoke.ts",
     "verify:requirement-eval": "node --loader ts-node/esm scripts/requirementEval.ts",
     "verify:autonomy-baseline": "node --loader ts-node/esm scripts/autonomyBaseline.ts",
     "verify:l3-eval": "node --loader ts-node/esm scripts/l3Eval.ts",
@@ -67,6 +71,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@playwright/test": "^1.57.0",
     "adm-zip": "^0.5.18",
+    "fast-xml-parser": "^5.11.2",
     "pdf-parse": "^2.4.5",
     "zod": "^4.1.12"
   },

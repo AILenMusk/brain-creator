@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runBrainCreatorCli, type BrainCreatorCliDependencies } from "./brainCreator.js";
+
+const testRuntimeIdentity = {
+  packageVersion: "2.1.1",
+  commit: "unknown",
+  buildId: "test-build",
+  builtAt: "unknown",
+  dirty: "unknown" as const,
+  pid: process.pid,
+  startedAt: new Date().toISOString(),
+  workspace: "C:\\project",
+  schemaVersion: 21,
+  provider: "disabled",
+  processKind: "cli" as const
+};
 
 function createIo() {
   return {
@@ -24,7 +41,7 @@ function dependencies(
     inspectMcpConfig: vi.fn(async () => ({
       path: "C:\\project\\.mcp.json",
       exists: true,
-      server: { command: "npx", args: ["brain-creator-mcp"], env: {} }
+      server: { command: "npx", args: ["--yes", "--package=brain-creator", "brain-creator-mcp"], env: {} }
     })),
     installCodexPlugin: vi.fn(async () => ({
       marketplaceRoot: "C:\\project\\node_modules\\brain-creator",
@@ -57,11 +74,17 @@ function dependencies(
       bytes: 128
     })),
     runRunner: vi.fn(async () => ({
+      runtimeIdentity: testRuntimeIdentity,
       status: "completed" as const,
       owner: "ci",
       processedRuns: 1,
       runs: []
     })),
+    captureAuth: vi.fn(async () => ({
+      profile: { id: "auth_1", status: "succeeded" },
+      verification: { status: "valid", finalUrl: "https://system.example.test/home", title: "System" }
+    })) as never,
+    waitForManualLogin: vi.fn(async () => undefined),
     ...overrides
   };
 }
@@ -92,6 +115,7 @@ describe("Brain Creator CLI", () => {
       expect(output).toContain("brain-creator export");
       expect(output).toContain("brain-creator artifacts");
       expect(output).toContain("brain-creator runner");
+      expect(output).toContain("brain-creator auth capture");
       expect(output).toContain("brain-creator mcp");
       expect(output).not.toContain("brain-creator-install-assets");
       expect(io.stderr).not.toHaveBeenCalled();
@@ -108,7 +132,7 @@ describe("Brain Creator CLI", () => {
     expect(output).toContain("Compatibility aliases");
   });
 
-  it.each(["init", "doctor", "config", "plugin", "export", "artifacts", "runner", "mcp"])(
+  it.each(["init", "doctor", "config", "plugin", "export", "artifacts", "runner", "auth", "mcp"])(
     "prints focused help for the %s command",
     async (command) => {
       const io = createIo();
@@ -118,6 +142,39 @@ describe("Brain Creator CLI", () => {
       expect(io.stderr).not.toHaveBeenCalled();
     }
   );
+
+  it("captures auth only for the selected system profile and reports verified status", async () => {
+    const io = createIo();
+    const deps = dependencies();
+
+    expect(await runBrainCreatorCli(
+      ["auth", "capture", "--system", "system-test5", "--profile", "auth-current", "--target", "C:\\project", "--json"],
+      io,
+      deps
+    )).toBe(0);
+
+    expect(deps.captureAuth).toHaveBeenCalledWith({
+      targetDir: "C:\\project",
+      systemId: "system-test5",
+      authProfileId: "auth-current",
+      waitForManualLogin: deps.waitForManualLogin
+    });
+    expect(io.stdout).toHaveBeenCalledWith(expect.stringContaining('"command": "auth capture"'));
+    expect(io.stderr.mock.calls.join("\n")).not.toMatch(/cookie|password|token/i);
+  });
+
+  it("does not report auth capture success when verification fails", async () => {
+    const io = createIo();
+    const deps = dependencies({ captureAuth: vi.fn(async () => { throw new Error("fresh-context verification failed"); }) as never });
+
+    expect(await runBrainCreatorCli(
+      ["auth", "capture", "--system", "system-test5", "--profile", "auth-current"],
+      io,
+      deps
+    )).toBe(1);
+    expect(io.stdout).not.toHaveBeenCalled();
+    expect(io.stderr.mock.calls.join("\n")).toContain("fresh-context verification failed");
+  });
 
   it("initializes assets and MCP config in one idempotent command", async () => {
     const io = createIo();
@@ -235,10 +292,30 @@ describe("Brain Creator CLI", () => {
     });
   });
 
+  it("includes the running process identity in scheduled Runner output", async () => {
+    const workDir = await mkdtemp(join(tmpdir(), "bc-runner-identity-"));
+    try {
+      const io = createIo();
+      expect(await runBrainCreatorCli([
+        "runner", "run", "--owner", "identity-smoke", "--target", workDir, "--json"
+      ], io)).toBe(0);
+      const payload = JSON.parse(io.stdout.mock.calls[0]![0]);
+      expect(payload.data.runtimeIdentity).toMatchObject({
+        pid: process.pid,
+        workspace: workDir,
+        processKind: "cli"
+      });
+      expect(payload.data.runtimeIdentity.buildId).not.toBe("unknown");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a retryable exit code when the Runner is waiting", async () => {
     const io = createIo();
     const deps = dependencies({
       runRunner: vi.fn(async () => ({
+        runtimeIdentity: testRuntimeIdentity,
         status: "waiting" as const,
         owner: "scheduler",
         processedRuns: 1,
