@@ -2019,3 +2019,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - PR #186 CI run 469 completed successfully on head `c264377b0385855c9995569433f3260fbc40f84b` for both Node 20 and Node 22. Each job passed full tests, type check, package build, docs build, package contents, repository hygiene, and fresh package-install smoke. The Documentation workflow also passed. The docs build retains its existing large-chunk warning.
 - This establishes candidate CI evidence only. The PR is still draft and unmerged, so implementation acceptance remains **0/6**. The Test5 EvaluationTrial count is 0; real business completion and autonomy remain **not measured**. No real Test5 write/cleanup or npm publication occurred.
+
+## 2026-10-26 Package Acceptance Audit: A Runtime Identity
+
+- Rechecked PR #186 head `35a1e0e` against the A-package requirement that the scheduled execution entrypoint identify its running build. `doctor` and `bc_status` returned runtime identity, but CLI `runner run` and MCP `bc_run` scheduler results did not include it. This left scheduler execution output without direct process/build provenance.
+- Added runtime identity to CLI Runner results and all MCP `bc_run` responses, using the active workspace, Store schema, Provider, PID/start time and process kind. Added regression assertions for CLI Runner JSON output and MCP schedule preview/claim output.
+- Focused CLI and MCP knowledge-flow suites pass 69/69; `npx tsc --noEmit` passes. This is local candidate evidence only; the changes are not yet committed or in CI. A remains **not accepted** pending independent audit of the remaining A criteria and full candidate checks. Overall accepted delivery remains **0/6**. Real business and autonomy measures remain **not measured**.

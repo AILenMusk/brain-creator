@@ -3276,6 +3276,7 @@ describe("Brain Creator requirement-first facade", () => {
     }));
     expect(preview).toEqual(expect.objectContaining({
       status: "control-preview",
+      runtimeIdentity: expect.objectContaining({ processKind: "mcp" }),
       scheduledRuns: [expect.objectContaining({ id: run.id })]
     }));
 
@@ -3290,6 +3291,7 @@ describe("Brain Creator requirement-first facade", () => {
     }));
     expect(claimed).toEqual(expect.objectContaining({
       status: "scheduled-control-applied",
+      runtimeIdentity: expect.objectContaining({ processKind: "mcp" }),
       requirementSuiteRun: expect.objectContaining({
         id: run.id,
         stabilitySchedule: expect.objectContaining({ leaseOwner: "external-cron" })

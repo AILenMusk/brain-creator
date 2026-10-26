@@ -33,6 +33,7 @@ import {
   resolveBrainCreatorWorkspace
 } from "../shared/workspace.js";
 import { BRAIN_CREATOR_VERSION } from "../version.js";
+import { readRuntimeIdentity } from "../shared/runtimeIdentity.js";
 import { isCliEntryPoint } from "./entrypoint.js";
 import { captureAuthState } from "../agent/authStateCapture.js";
 
@@ -597,7 +598,15 @@ async function runRunnerFromWorkspace(input: {
         throw new Error(message || "Runner Facade execution failed");
       }
     }
-  });
+  }).then((result) => ({
+    ...result,
+    runtimeIdentity: readRuntimeIdentity({
+      workspace,
+      schemaVersion: context.repository.schemaVersion,
+      provider: context.agentBridge?.provider ?? context.runtimeConfiguration?.bridgeProvider ?? "disabled",
+      processKind: "cli"
+    })
+  }));
 }
 
 async function captureAuthForWorkspace(input: {

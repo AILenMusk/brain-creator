@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runBrainCreatorCli, type BrainCreatorCliDependencies } from "./brainCreator.js";
+
+const testRuntimeIdentity = {
+  packageVersion: "2.1.1",
+  commit: "unknown",
+  buildId: "test-build",
+  builtAt: "unknown",
+  dirty: "unknown" as const,
+  pid: process.pid,
+  startedAt: new Date().toISOString(),
+  workspace: "C:\\project",
+  schemaVersion: 21,
+  provider: "disabled",
+  processKind: "cli" as const
+};
 
 function createIo() {
   return {
@@ -57,6 +74,7 @@ function dependencies(
       bytes: 128
     })),
     runRunner: vi.fn(async () => ({
+      runtimeIdentity: testRuntimeIdentity,
       status: "completed" as const,
       owner: "ci",
       processedRuns: 1,
@@ -274,10 +292,30 @@ describe("Brain Creator CLI", () => {
     });
   });
 
+  it("includes the running process identity in scheduled Runner output", async () => {
+    const workDir = await mkdtemp(join(tmpdir(), "bc-runner-identity-"));
+    try {
+      const io = createIo();
+      expect(await runBrainCreatorCli([
+        "runner", "run", "--owner", "identity-smoke", "--target", workDir, "--json"
+      ], io)).toBe(0);
+      const payload = JSON.parse(io.stdout.mock.calls[0]![0]);
+      expect(payload.data.runtimeIdentity).toMatchObject({
+        pid: process.pid,
+        workspace: workDir,
+        processKind: "cli"
+      });
+      expect(payload.data.runtimeIdentity.buildId).not.toBe("unknown");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a retryable exit code when the Runner is waiting", async () => {
     const io = createIo();
     const deps = dependencies({
       runRunner: vi.fn(async () => ({
+        runtimeIdentity: testRuntimeIdentity,
         status: "waiting" as const,
         owner: "scheduler",
         processedRuns: 1,

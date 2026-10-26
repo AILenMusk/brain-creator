@@ -535,7 +535,10 @@ export async function handleBrainCreatorTool(
         }, input);
       case "bc_run":
         return facadeTextResult(
-          await runWithProgress(context, input, request),
+          {
+            ...await runWithProgress(context, input, request),
+            runtimeIdentity: evaluationRuntimeIdentity(context)
+          },
           input
         );
       case "bc_review":
