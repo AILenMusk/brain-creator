@@ -1118,6 +1118,100 @@ describe("KnowledgeService", () => {
     );
   });
 
+  it("does not trust a stored Reporter result that differs from its persisted artifact", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const knowledgeDir = await tempDir();
+    const service = new KnowledgeService(repository, knowledgeDir);
+    const project = await service.createProject({ name: "Reporter binding", key: "reporter-binding", defaultLocale: "en-US" });
+    repository.systemProfiles.push({
+      id: "system-reporter-binding",
+      name: "Reporter binding",
+      environment: "test",
+      baseUrl: "https://reporter-binding.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://reporter-binding.example.test"],
+      executionProvenance: "real-system",
+      status: "succeeded",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    service.bindSystem(project.id, "system-reporter-binding");
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("reporter-binding", "The approval state is approved.")
+    });
+    const design = await service.generateTestDesign(ingested.requirementSet.id);
+    service.approveRequirementSet(ingested.requirementSet.id);
+    const executableCase = service.compileExecutableCases(design.testIntents[0].id).executableCase;
+    const evidence = service.createExecutionEvidence({
+      projectId: project.id,
+      systemId: "system-reporter-binding",
+      executableCaseId: executableCase.id,
+      testCaseId: "test-reporter-binding",
+      contextPackPath: "context/reporter-binding.json"
+    });
+    const assertionStep = evidence.steps.find((step) => step.action === "assert");
+    if (!assertionStep) throw new Error("Expected a compiled assertion step");
+    evidence.assertionContracts = [{
+      id: "approval-state",
+      stepId: assertionStep.stepId,
+      type: "state",
+      strength: "strong",
+      expected: "approved",
+      requirementRefs: ["requirement:approval-state"],
+      evidenceRequirements: ["actual-value"],
+      oracle: {
+        operator: "equals",
+        expected: "approved",
+        applicability: { mode: "unconditional" },
+        applicabilityRefs: ["requirement:approval-state"]
+      }
+    }];
+    const reporterResult = {
+      status: "passed" as const,
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      durationMs: 1,
+      assertions: [{
+        id: "approval-state",
+        stepId: assertionStep.stepId,
+        status: "passed" as const,
+        expected: "approved",
+        actual: "approved",
+        evidenceRefs: ["evidence/actual.json"]
+      }],
+      steps: evidence.steps.map((step) => ({
+        id: step.stepId,
+        title: step.stepId,
+        status: "passed" as const,
+        evidenceRefs: ["evidence/actual.json"]
+      })),
+      attachments: [],
+      consoleErrors: [],
+      networkFailures: []
+    };
+    await mkdir(join(knowledgeDir, "evidence"), { recursive: true });
+    await writeFile(join(knowledgeDir, "evidence", "actual.json"), "{\"state\":\"approved\"}", "utf8");
+    await writeFile(join(knowledgeDir, "evidence", "reporter.json"), JSON.stringify({ ...reporterResult, assertions: [] }), "utf8");
+
+    const completed = await service.completeExecutionEvidence(evidence.id, {
+      status: "passed",
+      actualResult: "approved",
+      artifactPaths: ["evidence/actual.json", "evidence/reporter.json"],
+      evidenceRootDir: knowledgeDir,
+      reporterPath: "evidence/reporter.json",
+      reporterResult
+    });
+
+    expect(completed.artifactValidation?.status).toBe("valid");
+    expect(completed.assuranceLevel).toBe("limited");
+    expect(completed.evidenceWarnings).toContain(
+      "Structured Reporter artifact does not match the stored Reporter result."
+    );
+  });
+
   it("downgrades assurance and records a warning when a declared trace is missing", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const knowledgeDir = await tempDir();

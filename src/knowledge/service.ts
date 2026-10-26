@@ -1,6 +1,6 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   AttachmentAnalysis,
@@ -2130,6 +2130,7 @@ export class KnowledgeService {
         : [])
     ];
     const referencedArtifacts = uniqueStrings([
+      ...(evidence.reporterPath ? [evidence.reporterPath] : []),
       ...(evidence.reporterResult?.attachments ?? []),
       ...(evidence.reporterResult?.assertions ?? []).flatMap((item) => item.evidenceRefs),
       ...(reporterSteps ?? []).flatMap((item) => [...item.evidenceRefs, ...(item.traceRefs ?? [])]),
@@ -2140,7 +2141,15 @@ export class KnowledgeService {
       Object.fromEntries((evidence.artifactValidation?.files ?? []).map((item) => [item.path, item.sha256]))
     );
     evidence.evidenceWarnings.push(...evidence.artifactValidation.reasons);
+    const reporterArtifactReason = await validateStructuredReporterArtifact({
+      root: input.evidenceRootDir,
+      path: evidence.reporterPath,
+      reporter: evidence.reporterResult,
+      artifactValidation: evidence.artifactValidation
+    });
+    if (reporterArtifactReason) evidence.evidenceWarnings.push(reporterArtifactReason);
     if (evidence.artifactValidation.status !== "valid" && evidence.assuranceLevel === "strong") evidence.assuranceLevel = "limited";
+    if (reporterArtifactReason && evidence.assuranceLevel === "strong") evidence.assuranceLevel = "limited";
     if ((missingStepEvidence.length || missingTraceEvidence.length) && evidence.assuranceLevel === "strong") {
       evidence.assuranceLevel = "limited";
     }
@@ -3902,6 +3911,47 @@ function redactReporterResult(
     consoleErrors: reporter.consoleErrors.map(redact),
     networkFailures: reporter.networkFailures.map(redact)
   };
+}
+
+async function validateStructuredReporterArtifact(input: {
+  root?: string;
+  path?: string;
+  reporter?: ExecutionEvidence["reporterResult"];
+  artifactValidation: NonNullable<ExecutionEvidence["artifactValidation"]>;
+}) {
+  if (!input.reporter) return undefined;
+  if (!input.path) return "Structured Reporter result has no persisted artifact path.";
+  if (!input.root || input.artifactValidation.status !== "valid" ||
+      !input.artifactValidation.files.some((file) => file.path === input.path)) {
+    return "Structured Reporter artifact is missing or was not validated with this execution.";
+  }
+  let parsed: unknown;
+  try {
+    const bytes = await readFile(resolve(input.root, input.path));
+    const validatedFile = input.artifactValidation.files.find((file) => file.path === input.path)!;
+    if (createHash("sha256").update(bytes).digest("hex") !== validatedFile.sha256) {
+      return "Structured Reporter artifact changed after file validation.";
+    }
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return "Structured Reporter artifact is unreadable or invalid JSON.";
+  }
+  if (stableJson(parsed) !== stableJson(input.reporter)) {
+    return "Structured Reporter artifact does not match the stored Reporter result.";
+  }
+  return undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function coverageClassificationReason(input: {

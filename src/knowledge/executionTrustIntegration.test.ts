@@ -93,10 +93,12 @@ describe("execution evidence and scenario trust integration", () => {
 
     const executionEvidence = evidence(project.id);
     await writeFile(join(knowledgeDir, "actual-value"), JSON.stringify({ status: "approved" }));
+    await writeFile(join(knowledgeDir, "reporter.json"), JSON.stringify(executionEvidence.reporterResult));
     repository.executionEvidence.push(executionEvidence);
     const result = await service.completeExecutionEvidence(executionEvidence.id, {
       status: "passed",
-      artifactPaths: [],
+      artifactPaths: ["reporter.json"],
+      reporterPath: "reporter.json",
       reporterResult: executionEvidence.reporterResult,
       evidenceRootDir: knowledgeDir,
       observationMode: "observe"
@@ -125,7 +127,8 @@ describe("execution evidence and scenario trust integration", () => {
     repository.executionEvidence.push(draftEvidence);
     await service.completeExecutionEvidence(draftEvidence.id, {
       status: "passed",
-      artifactPaths: [],
+      artifactPaths: ["reporter.json"],
+      reporterPath: "reporter.json",
       reporterResult: draftEvidence.reporterResult,
       evidenceRootDir: knowledgeDir,
       observationMode: "observe"
