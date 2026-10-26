@@ -2009,3 +2009,13 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - PR #186 CI run 468 on head `81a908b` passed the test step on Node 20 and Node 22, then both jobs failed `verify:repository-hygiene`. The checker correctly found the real Test5/SSO hostnames embedded in the ledger and tests; package contents had 176 entries / 1,686,821 bytes and passed before the hygiene step. This failure is retained, not suppressed.
 - Replaced those tracked documentation/test URLs with reserved `example.test` hosts while preserving redirect and allowlist behavior in the fixtures. `npm run verify:repository-hygiene` now passes for 365 tracked files; focused auth capture, system URL allowlist, handler, and ledger suites pass 128/128. Remote CI on the sanitized head is pending; PR stays draft until it is green. Accepted delivery remains **0/6**; real Trial and business/autonomy measures remain **not measured**.
+
+## 2026-10-26 Sanitized Candidate Head
+
+- Committed and pushed the sanitation repair as `c264377b0385855c9995569433f3260fbc40f84b`. The remote branch `codex/trust-closure-main` now points to that commit; `origin/main` remains `62d7487dded6bb444eb9eb32ef6c4363fa3f3238`. Draft PR #186 is open and unmerged with this head.
+- On this sanitized candidate, local full validation passed: 141 files / 1,178 tests, TypeScript check, docs build, targeted auth/configuration/service/handler/ledger tests 128/128, and repository hygiene for 365 tracked files. The package contents step on the preceding CI head passed with 176 entries / 1,686,821 bytes. Full CI on `c264377` is still pending; the PR remains draft. No real Trial, Test5 write/cleanup, or npm publication occurred; accepted delivery remains **0/6** and real business/autonomy remain **not measured**.
+
+## 2026-10-26 Sanitized Candidate CI Acceptance
+
+- PR #186 CI run 469 completed successfully on head `c264377b0385855c9995569433f3260fbc40f84b` for both Node 20 and Node 22. Each job passed full tests, type check, package build, docs build, package contents, repository hygiene, and fresh package-install smoke. The Documentation workflow also passed. The docs build retains its existing large-chunk warning.
+- This establishes candidate CI evidence only. The PR is still draft and unmerged, so implementation acceptance remains **0/6**. The Test5 EvaluationTrial count is 0; real business completion and autonomy remain **not measured**. No real Test5 write/cleanup or npm publication occurred.
