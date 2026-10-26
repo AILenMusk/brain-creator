@@ -5,6 +5,8 @@
 候选基线：`origin/main` / PR #185，`62d7487dded6bb444eb9eb32ef6c4363fa3f3238`
 
 候选实现：`codex/trust-closure-main`，提交 `aba3744`
+
+候选分支头：PR #186，提交 `5f367ae`（包含实现提交和本策略文档）
 正式需求源：用户指定的 GHR 需求主文档，`lark-cli` 最近读取 revision `2045`
 
 ## 1. 验收目的与结论口径
@@ -101,7 +103,7 @@
 ## 5. 当前状态与下一步执行顺序
 
 1. **候选代码验证：已通过。** 本策略记录的 141/141 文件、1,178/1,178 测试和工程 smoke 是本地候选证据；订单夹具是 synthetic。
-2. **合入验收：未完成。** 候选提交 `aba3744` 尚未成为 `origin/main`，所以 accepted 仍为 `0/6`。
+2. **合入验收：未完成。** 候选分支已推送并以 PR #186 草稿提交评审，head 为 `5f367ae`；尚未合入 `origin/main`，所以 accepted 仍为 `0/6`。
 3. **真实 Trial：未开始。** 最近 AuthProfile 校验未通过；系统后置 verifier 与 TestData provider 未配置；当前 Scenario Assurance 仍为 blocked，缺系统绑定和结构化 Oracle；EvaluationTrial 数为 0。
 4. **当前仅能继续：** 评审候选代码、完善流程/Oracle 标注、修复本策略中被评审发现的实现问题。进入真实系统执行需重新满足 Gate 0 与 Gate 3，不跳过门禁。
 
