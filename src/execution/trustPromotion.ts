@@ -45,29 +45,35 @@ export function evaluateScenarioExecutionTrust(
 ): ScenarioExecutionTrustResult {
   // Never trust a caller-provided assurance label. The structured reporter is
   // the source of truth for whether assertions were actually observed.
-  const assuranceLevel = input.evidence.provenance !== "synthetic" && input.evidence.reporterResult
+  const assuranceLevel = input.evidence.provenance === "real-system" && input.evidence.reporterResult
     ? determineAssuranceLevel(
         input.evidence.assertionContracts ?? [],
         input.evidence.reporterResult
       )
     : "none";
   const reasons: string[] = [];
+  const reporterResult = input.evidence.reporterResult;
   const conformance = evaluateConformance({
     scenarioId: input.record.scenarioId,
     executionEvidenceId: "trust-evaluation",
     status: input.evidence.status === "running" ? "blocked" : input.evidence.status,
     assuranceLevel,
     contracts: input.evidence.assertionContracts,
-    reporter: input.evidence.reporterResult,
+    reporter: reporterResult,
     artifactValidation: input.evidence.artifactValidation,
     provenance: input.evidence.provenance,
     expectationRefs: (input.evidence.assertionContracts ?? []).flatMap((contract) => contract.requirementRefs),
-    observationRefs: [],
-    executionRefs: []
+    observationRefs: unique([
+      ...(reporterResult?.attachments ?? []),
+      ...(reporterResult?.assertions ?? []).flatMap((assertion) => assertion.evidenceRefs),
+      ...input.evidence.steps.flatMap((step) => [...(step.evidenceRefs ?? []), ...(step.traceRefs ?? [])])
+    ]),
+    executionRefs: ["trust-evaluation"]
   });
   if (conformance.verdict !== "conform") reasons.push(`Business conformance is ${conformance.verdict}; it cannot promote trust.`);
   if (input.evidence.artifactValidation?.status !== "valid") reasons.push("Artifact files have not passed integrity validation.");
   if (input.evidence.provenance === "synthetic") reasons.push("Synthetic evidence cannot promote a real scenario.");
+  else if (input.evidence.provenance !== "real-system") reasons.push("Unverified evidence provenance cannot promote a real scenario.");
   const changed = input.record.lastRequirementHash !== input.requirementHash ||
     input.record.lastSystemSnapshotHash !== input.systemSnapshotHash ||
     input.record.lastDataPlanHash !== input.dataPlanHash;
@@ -141,4 +147,8 @@ export function evaluateScenarioExecutionTrust(
     ? "promoted"
     : "downgraded";
   return { decision, assuranceLevel, record, reasons };
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }

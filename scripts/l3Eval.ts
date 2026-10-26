@@ -22,7 +22,8 @@ if (json) {
 } else {
   console.log("Brain Creator L3 golden evaluation");
   console.log(`Seed: ${report.seed}`);
-  console.log(`Samples: ${report.measuredSampleCount}/${report.sampleCount} measured`);
+  console.log(`Real-trial samples: ${report.measuredSampleCount}/${report.realSampleCount} measured`);
+  console.log(`Synthetic fixture samples: ${report.syntheticScoredSampleCount}/${report.syntheticSampleCount} scored`);
   console.log("");
   for (const sample of report.sampleResults) {
     const result = sample.passed === null ? "NOT-MEASURED" : sample.passed ? "PASS" : "FAIL";
@@ -30,8 +31,15 @@ if (json) {
     for (const failure of sample.failures) console.log(`  - ${failure}`);
   }
   console.log("");
+  console.log("Real-trial metrics:");
   for (const [dimension, metric] of Object.entries(report.metrics)) {
     const rate = metric.rate === null ? "not measured" : `${(metric.rate * 100).toFixed(1)}%`;
+    console.log(`${metric.status.toUpperCase()} ${dimension}: ${rate} (${metric.passed}/${metric.total})`);
+  }
+  console.log("");
+  console.log("Synthetic fixture metrics (not product capability measurements):");
+  for (const [dimension, metric] of Object.entries(report.syntheticMetrics)) {
+    const rate = metric.rate === null ? "not scored" : `${(metric.rate * 100).toFixed(1)}%`;
     console.log(`${metric.status.toUpperCase()} ${dimension}: ${rate} (${metric.passed}/${metric.total})`);
   }
   console.log("");
@@ -39,10 +47,13 @@ if (json) {
   for (const blocker of report.releaseGate.blockers) console.log(`  - ${blocker}`);
 }
 
-const measuredFailure = Object.values(report.metrics).some((metric) =>
+const realMetricFailure = Object.values(report.metrics).some((metric) =>
   metric.status === "measured" && metric.rate !== null && metric.rate < metric.threshold
 );
-if (measuredFailure || (process.argv.includes("--strict") && report.releaseGate.status !== "candidate")) {
+const syntheticMetricFailure = Object.values(report.syntheticMetrics).some((metric) =>
+  metric.status === "scored" && metric.rate !== null && metric.rate < metric.threshold
+);
+if (realMetricFailure || syntheticMetricFailure || (process.argv.includes("--strict") && report.releaseGate.status !== "candidate")) {
   process.exitCode = 1;
 }
 

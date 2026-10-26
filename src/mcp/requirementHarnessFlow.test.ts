@@ -190,6 +190,55 @@ describe("Requirement Host Harness facade", () => {
     expect(context.repository.businessObjectModels).toHaveLength(1);
   });
 
+  it("surfaces a needs-review adjudication in the test-design summary", async () => {
+    const workDir = await mkdtemp(join(tmpdir(), "brain-creator-design-review-summary-"));
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json"),
+      knowledgeDir: join(workDir, ".brain-creator", "knowledge")
+    });
+    const fixture = requirementFixture();
+    context.repository.knowledgeProjects.push(fixture.project);
+    context.repository.requirementSources.push(fixture.source);
+    context.repository.requirementSets.push(fixture.requirementSet);
+
+    let response = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-analysis",
+      requirementSetId: fixture.requirementSet.id,
+      provider: "host-agent"
+    }));
+    response = await submit(context, response.task.id, documentMap());
+    response = await submit(context, response.task.id, clauses());
+    response = await submit(context, response.task.id, models());
+    response = await submit(context, response.task.id, {
+      ...critic(),
+      verdict: "needs-review",
+      score: 0.5,
+      reasons: ["The target approver role is not confirmed."],
+      missingActors: ["target approver"],
+      requiredActions: ["Confirm the target approver role before approval."]
+    } satisfies CoverageCriticOutput);
+
+    expect(response.result.evaluation.verdict).toBe("needs-review");
+    const summary = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-test-design",
+      requirementSetId: fixture.requirementSet.id,
+      provider: "host-agent",
+      responseMode: "summary"
+    }));
+
+    expect(summary).toEqual(expect.objectContaining({
+      status: "needs-review",
+      review: expect.objectContaining({
+        verdict: "needs-review",
+        reasons: expect.arrayContaining(["coverage-critic isolated-critic: The target approver role is not confirmed."]),
+        nextActions: expect.arrayContaining(["Confirm unresolved requirement questions"])
+      })
+    }));
+    expect(fixture.requirementSet.status).toBe("draft");
+    expect(context.repository.approvalReceipts).toHaveLength(0);
+  });
+
   it("normalizes Host Skill output but still requires independent modeling and Critic stages", async () => {
     const workDir = await mkdtemp(join(tmpdir(), "brain-creator-host-skill-analysis-"));
     const context = createBrainCreatorMcpContext({

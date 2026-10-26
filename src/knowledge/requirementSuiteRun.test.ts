@@ -421,6 +421,66 @@ describe("RequirementSuiteRunService", () => {
     ]);
   });
 
+  it("keeps a completed case waiting while additional cleanup tasks remain", () => {
+    const fixture = suiteFixture();
+    const run = fixture.service.create({
+      knowledgeProjectId: "knowledge-orders",
+      systemId: "system-orders",
+      executionPlans: fixture.plans.slice(0, 2),
+      continueOnBlocked: false,
+      allowCreateTestData: true
+    });
+    const started = fixture.service.beginNext(run.id);
+    const executableCaseId = started.caseRun!.executableCaseId;
+    fixture.repository.testDataTasks.push({
+      id: "cleanup-task-2",
+      knowledgeProjectId: "knowledge-orders",
+      systemId: "system-orders",
+      executableCaseId,
+      profileId: "profile-order",
+      field: "Order",
+      action: "cleanup",
+      status: "pending",
+      idempotencyKey: "system-orders:case-1:profile-order:cleanup:lease-order",
+      operationPhase: "prepared",
+      allowCreate: false,
+      cleanup: "delete-created",
+      leaseId: "lease-order",
+      contextPath: "cleanup-2.context.json",
+      promptPath: "cleanup-2.prompt.md",
+      sourceRefs: ["case:order"],
+      outputSourceRefs: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    });
+
+    fixture.service.markWaitingForTestData(run.id, executableCaseId, {
+      taskId: "cleanup-task-1",
+      phase: "cleanup",
+      pendingOutcome: { status: "passed", chainRunId: "chain-1", gapIds: [] }
+    });
+    const waiting = fixture.service.completeTestDataTask(run.id, executableCaseId, "cleanup-task-2");
+
+    expect(waiting).toEqual(expect.objectContaining({
+      status: "waiting-for-test-data",
+      currentExecutableCaseId: executableCaseId,
+      passed: 0
+    }));
+    expect(waiting.caseRuns[0]).toEqual(expect.objectContaining({
+      status: "waiting-for-test-data",
+      testDataTaskId: "cleanup-task-2",
+      testDataPhase: "cleanup",
+      pendingOutcome: expect.objectContaining({ status: "passed" })
+    }));
+
+    const completed = fixture.service.completeTestDataTask(run.id, executableCaseId);
+    expect(completed).toEqual(expect.objectContaining({
+      status: "running",
+      passed: 1,
+      currentExecutableCaseId: undefined
+    }));
+  });
+
   it("retries a blocked test-data task on the same case", () => {
     const fixture = suiteFixture();
     const run = fixture.service.create({

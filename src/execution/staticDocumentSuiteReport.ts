@@ -21,6 +21,17 @@ export type DocumentSuiteReportInput = {
   runs: CaseSuiteRun[];
   locale?: string;
   progress?: DocumentSuiteProgress;
+  actionEvidence?: Array<{
+    caseId?: string;
+    phase: string;
+    actionKey: string;
+    actionSemantic: string;
+    entityReference?: string;
+    postcondition?: string;
+    evidenceRefs: string[];
+    evidenceArtifacts: Array<{ path: string; sha256: string }>;
+  }>;
+  sourceWarning?: string;
   bugs?: Array<{ id: string; status: string; caseNo?: string; actualResult: string }>;
   gaps?: Array<{ id: string; status: string; caseNo?: string; reason: string }>;
   protectedSecrets?: Record<string, string>;
@@ -35,6 +46,14 @@ export async function writeStaticDocumentSuiteReport(input: DocumentSuiteReportI
 }
 
 export function renderStaticDocumentSuiteReport(input: DocumentSuiteReportInput) {
+  const html = renderStaticDocumentSuiteReportBody(input);
+  const labels = documentReportLabels(input.locale);
+  const actionSection = renderActionEvidenceSection(input);
+  const caseHeading = `<h2>${labels.cases}</h2>`;
+  return html.replace(caseHeading, `${actionSection}${caseHeading}`);
+}
+
+function renderStaticDocumentSuiteReportBody(input: DocumentSuiteReportInput) {
   const labels = documentReportLabels(input.locale);
   const redact = (value: string) => input.protectedSecrets
     ? redactSensitiveText(value, input.protectedSecrets)
@@ -58,7 +77,29 @@ export function renderStaticDocumentSuiteReport(input: DocumentSuiteReportInput)
   const bugs = listItems(input.bugs, (item) => `${item.id} ${item.status}: ${redact(item.actualResult)}`, labels.none);
   const gaps = listItems(input.gaps, (item) => `${item.id} ${item.status}: ${redact(item.reason)}`, labels.none);
   const runIds = input.runs.map((run) => run.id).join(", ") || labels.none;
-  return `<!doctype html><html lang="${labels.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title><style>body{font:14px system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#17202a}header{border-bottom:1px solid #ddd;margin-bottom:1rem}input{width:100%;padding:.6rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}.passed{color:#087f5b}.failed{color:#c92a2a}.blocked{color:#a15c00}.waiting-for-agent{color:#a15c00}.pending,.muted{color:#667085}.progress{border:1px solid #ddd;padding:1rem;margin:1rem 0}</style></head><body><header><h1>${escapeHtml(input.title)}</h1><p>${labels.suiteStatus}: <strong>${escapeHtml(input.suite.status)}</strong> | ${labels.total}: ${selectedCases.length} | ${labels.attempted}: ${results.length} | ${labels.passed}: ${counts.passed} | ${labels.failed}: ${counts.failed} | ${labels.blocked}: ${counts.blocked} | ${labels.waiting}: ${counts.waiting}</p><p>${labels.suite}: ${escapeHtml(input.suite.id)} | ${labels.system}: ${escapeHtml(input.suite.systemId)} | ${labels.source}: ${escapeHtml(input.suite.sourceId)}</p><p>${labels.runs}: ${escapeHtml(runIds)}</p></header>${progress}<label for="search">${labels.search}</label><input id="search" type="search" placeholder="${labels.searchPlaceholder}" oninput="filterReport(this.value)"><h2>${labels.cases}</h2><table><thead><tr><th>#</th><th>${labels.caseNo}</th><th>${labels.title}</th><th>${labels.module}</th><th>${labels.priority}</th><th>${labels.status}</th><th>${labels.result}</th><th>${labels.references}</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="muted">${labels.noCases}</td></tr>`}</tbody></table><h2>${labels.bugs}</h2><ul>${bugs}</ul><h2>${labels.gaps}</h2><ul>${gaps}</ul><script>function filterReport(q){q=q.toLowerCase();document.querySelectorAll('.searchable-row').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(q))}</script></body></html>`;
+  const sourceWarning = input.sourceWarning
+    ? `<p class="blocked">${escapeHtml(input.sourceWarning)}</p>`
+    : "";
+  return `<!doctype html><html lang="${labels.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title><style>body{font:14px system-ui,sans-serif;max-width:1400px;margin:2rem auto;padding:0 1rem;color:#17202a}header{border-bottom:1px solid #ddd;margin-bottom:1rem}input{width:100%;padding:.6rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:top}.passed{color:#087f5b}.failed{color:#c92a2a}.blocked{color:#a15c00}.waiting-for-agent{color:#a15c00}.pending,.muted{color:#667085}.progress{border:1px solid #ddd;padding:1rem;margin:1rem 0}</style></head><body><header><h1>${escapeHtml(input.title)}</h1><p>${labels.suiteStatus}: <strong>${escapeHtml(input.suite.status)}</strong> | ${labels.total}: ${selectedCases.length} | ${labels.attempted}: ${results.length} | ${labels.passed}: ${counts.passed} | ${labels.failed}: ${counts.failed} | ${labels.blocked}: ${counts.blocked} | ${labels.waiting}: ${counts.waiting}</p><p>${labels.suite}: ${escapeHtml(input.suite.id)} | ${labels.system}: ${escapeHtml(input.suite.systemId)} | ${labels.source}: ${escapeHtml(input.suite.sourceId)}</p><p>${labels.runs}: ${escapeHtml(runIds)}</p>${sourceWarning}</header>${progress}<label for="search">${labels.search}</label><input id="search" type="search" placeholder="${labels.searchPlaceholder}" oninput="filterReport(this.value)"><h2>${labels.cases}</h2><table><thead><tr><th>#</th><th>${labels.caseNo}</th><th>${labels.title}</th><th>${labels.module}</th><th>${labels.priority}</th><th>${labels.status}</th><th>${labels.result}</th><th>${labels.references}</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="muted">${labels.noCases}</td></tr>`}</tbody></table><h2>${labels.bugs}</h2><ul>${bugs}</ul><h2>${labels.gaps}</h2><ul>${gaps}</ul><script>function filterReport(q){q=q.toLowerCase();document.querySelectorAll('.searchable-row').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(q))}</script></body></html>`;
+}
+
+function renderActionEvidenceSection(input: DocumentSuiteReportInput) {
+  const zh = input.locale?.toLowerCase().startsWith("zh");
+  const safe = (value: string) => escapeHtml(input.protectedSecrets
+    ? redactSensitiveText(value, input.protectedSecrets)
+    : value);
+  const rows = (input.actionEvidence ?? []).map((action) =>
+    `<tr class="searchable-row"><td>${safe(action.caseId ?? "None")}</td><td>${safe(action.phase)}</td><td>${safe(action.actionKey)}</td><td>${safe(action.actionSemantic)}</td><td>${safe(action.entityReference ?? "None")}</td><td>${safe(action.postcondition ?? "None")}</td><td>${safe(action.evidenceRefs.join(", "))}</td><td>${action.evidenceArtifacts.map((artifact) => `<a href="${safe(documentArtifactHref(artifact.path))}">${safe(artifact.path)}</a> <code>${safe(artifact.sha256)}</code>`).join("<br>") || "None"}</td></tr>`
+  ).join("");
+  return `<section><h2>${zh ? "恢复与写操作证据" : "Recovery and write-action evidence"}</h2><p>${zh ? "账本动作状态和操作人产物是审计证据，不单独构成业务符合性结论。" : "Ledger action phases and operator artifacts support auditability; they are not by themselves a business conformance verdict."}</p><table><thead><tr><th>${zh ? "用例" : "Case"}</th><th>${zh ? "动作阶段" : "Action phase"}</th><th>${zh ? "动作键" : "Action key"}</th><th>${zh ? "动作" : "Action"}</th><th>${zh ? "实体" : "Entity"}</th><th>${zh ? "后置条件" : "Postcondition"}</th><th>${zh ? "证据引用" : "Evidence refs"}</th><th>${zh ? "产物" : "Artifacts"}</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="muted">${zh ? "暂无动作证据" : "No action evidence"}</td></tr>`}</tbody></table></section>`;
+}
+
+function documentArtifactHref(path: string) {
+  const normalized = path.replaceAll("\\", "/");
+  if (/^[A-Za-z]:\//.test(normalized)) return `file:///${normalized}`;
+  if (normalized.startsWith("/")) return `file://${normalized}`;
+  if (/^[a-z][a-z\d+.-]*:/i.test(normalized) || normalized.startsWith("//")) return "#";
+  return normalized;
 }
 
 function latestCaseResults(runs: CaseSuiteRun[]) {

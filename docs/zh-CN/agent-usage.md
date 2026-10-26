@@ -4,7 +4,7 @@
 
 升级后先查看 `bc_status.runtimeIdentity`，确认 MCP 进程实际加载的构建。`doctor` 展示的是自身 CLI 进程，不能据此认定 MCP 已更新；旧包缺少身份记录时显示未知。
 
-Reporter 必须准确引用断言合同和步骤。执行完成时检查实际文件、hash、截图解码和 trace 内容。业务符合性另行比较有来源的预期和实际业务值，不能仅凭通过标签晋升可信。合成浏览器测试不计入真实业务完成度；当前限制见[交付台账](../quality/trust-convergence.md)。
+Reporter 必须准确引用断言合同和步骤。执行完成时检查实际文件、hash、截图解码和 trace 内容。符合性会根据明确的无条件 Oracle，或由 Reporter 提供实际值及有效证据的结构化条件规则重新判断适用性；适用性和预期引用必须属于对应合同，Oracle 的实体引用也必须与报告实体一致。仅有历史布尔适用标签不能晋升。业务符合性另行比较有来源的预期和实际业务值，不能仅凭通过标签晋升可信。合成浏览器测试不计入真实业务完成度；当前限制见[交付台账](../quality/trust-convergence.md)。
 
 用户只需在 Claude Code 或 Codex 中描述测试目标；Agent 选择 Facade MCP 工具，并保持审批边界可见。
 
@@ -70,7 +70,7 @@ Agent 创建/选择系统与绑定关系，配置鉴权，再调用 `explore-sys
 
 编译结果包含当前 TestIntent 的 `testDataPlan`。默认复用已有数据；创建数据需要用户显式设置 `allowCreateTestData=true`，并配置 `delete-created` 或 `restore`。
 
-宿主 Agent 查询或创建数据后，通过 `submit-test-data` 提交稳定引用、非敏感值和 `sourceRefs`。失败会创建数据 Gap，不得填入任意值绕过。
+宿主 Agent 执行外部写入前，先用返回的 `taskId` 调用 `bc_prepare action=mark-test-data-sent`，随后只能执行已批准的操作并提交稳定引用与证据。清理前必须先向用户发送返回的提前通知，说明准确租用实体、清理策略、预期影响和计划时间；随后调用 `bc_prepare action=confirm-cleanup-notice` 并传入通知中的 `cleanupNoticeSha256`。确认成功前任务不能标记为已发送。若用户要求保留数据，停止清理并保持运行阻塞。如果响应丢失或会话中断，再次调用 `prepare-test-data`；返回 `reconciliation-required` 时必须先只读查询目标系统。若目标结果已存在，提交同一实体引用；若确认没有生效，先用 `reconcile-test-data-no-effect` 记录只读证据，再次清理前重新通知用户。不能仅因响应缺失而重复创建、流转或清理。成功后通过 `submit-test-data` 提交 `taskStatus=succeeded`、数据决策、稳定引用、非敏感值及非空 `sourceRefs`。创建数据必须配置 `delete-created` 或 `restore`。提交失败前必须有证据确认外部写入未生效；失败会创建数据 Gap，不得填入任意值绕过。
 
 ### 8. 准备执行
 
@@ -109,9 +109,15 @@ Requirement Suite 先以 `confirm=false` 预览，用户批准后再 `confirm=tr
 | 执行已确认文档 | `bc_run mode=case-source-suite confirm=true` |
 | 回归 open Bug | `bc_run mode=bug-regression` |
 | 查看 Bug | `bc_review target="bug"`，优先展示 `reviewMarkdown` |
-| 查看 Gap | `bc_review target="gap"`，优先展示 `reviewMarkdown` |
+| 查看系统级 Gap | `bc_review target="gap" systemId=...`，优先展示 `reviewMarkdown` |
+| 查看需求项目 Gap | `bc_review target="gap" knowledgeProjectId=...`，优先展示 `reviewMarkdown` |
+| 解决、忽略或重开 Gap | `bc_prepare action=resolve-gap|dismiss-gap|reopen-gap`；只能使用匹配的 `systemId` 或 `knowledgeProjectId` 之一；先预览，再携带人工说明和至少一个证据引用确认 |
 | 记录外部阻塞 | `bc_report_gap` |
 | 显示快捷帮助 | `/bc help` |
+
+所选系统没有有效 AuthProfile 时，`bc_status` 会将就绪状态标记为阻塞：没有配置时建议调用 `bc_configure target=auth`；已有 Profile 只有 `status=succeeded` 才满足鉴权就绪，待验证或验证失败时会建议通过可见浏览器运行 `brain-creator auth capture --system <system-id> --profile <auth-profile-id>`。`ready` 还要求没有待处理的用户操作；它不代表需求基线已批准或允许执行。
+
+创建系统时可设置 `executionProvenance`：仅对已明确选定的真实业务系统设置 `real-system`，本地浏览器夹具设置 `synthetic`；未设置时按 `unknown` 处理。运行开始时会把系统分类复制到执行证据，完成请求不能改写该来源；未知和合成结果不会计入真实符合性或真实 Trial 成功数。
 
 Facade 请求被拒绝或取消后，不得使用底层同义工具重试。
 
@@ -161,7 +167,9 @@ Planner、Generator、Reporter 和 Suite 产物统一归属到 `.brain-creator/a
 
 文档用例套件也使用同一套离线产物约定。报告位于 `.brain-creator/artifacts/<system>/document-<source>/<suite>/report/suite-report.html`，`bc_run` 和 `bc_status` 会返回 `reportPath`；套件等待或恢复时，报告仍会保留待执行用例及其未执行原因。
 
-所有可能改变业务状态的浏览器或接口动作，都要使用稳定的 `actionKey` 记录生命周期：发送前记录 `planned`，请求发出后记录 `sent`，只有观察到后置状态后才能记录 `confirmed` 或 `reconciliation-required`。如果在 `sent` 之后进程或浏览器中断，Brain Creator 会在 `bc_status.executionTasks.active.pendingAction` 中展示待核对动作，并让 `bc_run` 停在 `reconcile-action`，不会直接重复提交。查询目标系统后，使用 `bc_prepare action=reconcile-execution-action confirm=true`，提交 `actionPostcondition` 和不含敏感信息的 `actionEvidenceRefs`。响应丢失本身既不能证明成功，也不能证明失败。运行时可以注入后置条件验证器，使用同一动作并传入 `autoVerify=true` 自动核对；如果没有配置验证器，或验证器无法以证据确认后置状态，动作会继续等待人工复核，不会被标记为成功。
+所有可能改变业务状态的浏览器或接口动作，都要使用稳定的 `actionKey` 记录生命周期：发送前记录 `planned`，请求发出后记录 `sent`。不能直接把动作标记为 `confirmed`；只有 `reconcile-execution-action` 校验目标证据后才能解除待处理动作。`sent` 动作必须已在 Run Ledger 中记录预期后置条件。如果在 `sent` 之后进程或浏览器中断，Brain Creator 会在 `bc_status.executionTasks.active.pendingAction` 中展示待核对动作，并让 `bc_run` 停在 `reconcile-action`，不会直接重复提交。只读查询目标系统后，使用 `bc_prepare action=reconcile-execution-action confirm=true`，提交原后置条件、不含敏感信息的 `actionEvidenceRefs`、明确的 `operator`，以及 `.brain-creator/` 下可读取文件的路径和 SHA-256（`actionEvidenceArtifacts`）。JSON 观察必须使用 `manual-execution-postcondition-observation` 类型，并准确绑定系统、动作键／语义、实体、原后置条件、已确认的实际结果、核对时间和操作人；截图必须可解码，trace ZIP 必须包含可读事件。人工恢复会校验真实文件并把哈希绑定到账本动作；仅有引用不能解除待处理状态。响应丢失本身既不能证明成功，也不能证明失败。运行时可以注入后置条件验证器，使用同一动作并传入 `autoVerify=true` 自动核对。自动核对必须提供运行时证据目录下可读取的结构化 JSON 观察文件、匹配的 SHA-256，以及与系统、动作、实体、后置条件和实际结果完全一致的绑定信息；仅有验证器响应不够。如果没有配置验证器，或其产物无法通过校验，动作会继续等待，直到人工提交可验证的产物。
+
+如果 Trial 范围内发生未由 Trial 绑定 Suite 动作自动记录的人工恢复，使用 `bc_prepare action=record-evaluation-intervention`，填写 `interventionCategory=manual-recovery`、操作者、简要原因、证据引用及准确受影响的冻结 `businessScenarioIds`。不要猜测场景归属：归因不确定时留空，系统会将自主度标为未测量，而不会把受影响场景算作自主完成。最后使用 `complete-intervention-capture` 对冻结的完整场景范围进行收尾确认。
 
 `observationMode` 只控制进度消息粒度，不会打开浏览器窗口。用户明确要求旁观时，预览和确认执行都传入 `browserMode=observe`。运行中的 Suite 不允许切换模式；Host Agent 续跑、Healer 重试、文档套件续跑和 Bug 回归都会继承已选模式。观察模式必须运行在交互式桌面会话中；CI、Windows 服务会话或缺少 `DISPLAY/WAYLAND_DISPLAY` 的 Linux 会返回可操作的能力阻断，不会静默降级。可见窗口只能辅助判断执行轨迹，最终结论仍以 Reporter、断言、截图和 trace 为准。
 
@@ -218,4 +226,9 @@ npm run verify:host-agent-document-suite
 
 ## 固定范围的 Trial 测量
 
-新需求套件可通过 `evaluationTrialId` 显式绑定固定系统、需求版本和选定业务场景，不能把旧的未绑定套件事后挂入新 Trial。阻塞与未执行场景保留在分母中，合成或未知来源证据不计真实成功；新一轮等待状态不能沿用旧成功结果。一个场景包含多条用例时，在完整聚合能力补齐前保持“结论不足”。没有完整人工介入记录时，自主率显示“未测量”。这些控制仍是部分实现，详见[交付台账](../quality/trust-convergence.md)和[公开开发决策](../quality/development-collaboration.md)。
+新需求套件可通过 `evaluationTrialId` 显式绑定固定系统、需求版本和选定业务场景，不能把旧的未绑定套件事后挂入新 Trial。阻塞与未执行场景保留在分母中，合成或未知来源证据不计真实成功；新一轮等待状态不能沿用旧成功结果。同一场景中的多个 TestIntent 仅在每个意图都唯一映射到可执行用例时按“全部通过”聚合，存在歧义时结论不足。用户澄清、鉴权/登录和人工恢复应分别使用对应介入类别，并带上 `businessScenarioIds`。鉴权检查点会区分“首次授权”（AuthProfile 从未验证）和“会话恢复”（AuthProfile 曾成功验证）；`bc_review target=evaluation-trial` 分别显示两类计数，历史或未分类记录单独统计。首次授权/登录单独报告，不会单独使原本符合条件的场景失去自主完成计数；执行中的会话恢复和未分类鉴权仍算人工介入。已完成且绑定 Trial 的鉴权检查点必须对应 `user-authentication` 介入记录；缺失时会阻止 `complete-intervention-capture`、由 `bc_review` 列出，并使自主度保持未测量。Trial 完成后，使用 `bc_prepare action=complete-intervention-capture` 提交完整冻结场景 ID 集合与复核证据；仅当该确认仍覆盖所有介入记录和来源事件时才测量自主率。自主完成分子只统计真实系统符合且没有除首次授权以外的归属人工介入的场景，阻塞和未执行场景仍留在分母。`bc_review target=evaluation-trial` 的捕获状态中，`missing` 表示未提交确认，`invalid` 表示签名无法验证，`stale` 表示签名有效但捕获后介入记录集已变化，只有签名和当前记录集都匹配时才是 `valid`。不可比较但仍有冻结场景范围的 Trial 继续显示其分母，测量值和比率为空；没有冻结范围的旧 Trial 不伪造分母。复核 Trial 时检查 `artifactRevalidation` 和 `semanticSnapshotRevalidation`；文件缺失或变化、hash 不符、合同或结果被改写的证据均不能形成符合性结论。这些控制仍是部分实现，详见[交付台账](../quality/trust-convergence.md)和[公开开发决策](../quality/development-collaboration.md)。
+
+缺少执行时语义快照的历史 Trial 证据默认不能用于符合性测量。若要重评完整历史产物，使用 `bc_prepare action=reevaluate-legacy-execution-evidence`，并提供仍有效的已完成 Trial、准确证据 ID、复核人、复核说明和 `confirm=true`。操作要求唯一绑定 Trial 的 Suite/用例/场景及当前不可变执行计划，重新计算可读产物的 hash，并核对保存的结构化 Reporter JSON 与记录结果一致。旧 ConformanceResult 保留，同时新增签名的历史复核结果；人工复核记为归属场景的介入事件，需要重新完成全量介入捕获后才能测量自主率。产物不完整、已变化、合成来源、未绑定或计划已过期的历史结果仍为不可判定。
+# Trial 介入来源审计
+
+除已完成的鉴权检查点外，Trial 绑定套件动作若以人工方式协调，也必须有匹配的 `manual-recovery` 介入记录。Run Ledger 会记录协调方式为自动或人工。来源记录缺失时，`bc_review` 会列出并阻止完成介入捕获，自主度保持未测量。

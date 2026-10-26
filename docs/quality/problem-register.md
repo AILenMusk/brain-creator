@@ -61,7 +61,7 @@ production acceptance conditions are closed.
 | F3 | One JSON file grew without partitioning | resolved | PR B | Schema 17 sharded repository, atomic writes, migration backup, missing-shard detection, and index rebuild are covered |
 | F4 | Local assets had no collaboration model | deferred | post-2.2 | Revisit only when remote multi-writer collaboration is required |
 | F5 | Multiple requirements could contaminate assets | partial | PR A/PR B/PR C | System-owned shards now isolate page/evidence/knowledge observations and indexes carry requirement ownership; execution ContextPack retrieval filters both `systemId` and `requirementSetId`; mixed requirement suites now use an explicit `multi-requirement` artifact segment, preserve all requirement revision IDs in the manifest/source refs, and list them in the static report; complete same-system multi-requirement Eval/report reconciliation remains |
-| G1 | Facade responses consumed excessive context | partial | PR A/PR C/PR E | `responseMode=summary` and explicit paging now cover CompileRun plus requirement, TestIntent, ExecutableCase, ExecutionPlan, SuiteRun, Ledger, exploration, and evidence reviews; `observationMode=summary|step-by-step` keeps routine progress bounded while allowing explicit detail, and step mode caps one notification replay to the latest 50 events; broader nested suite payloads still need additional domain-specific summary contracts |
+| G1 | Facade responses consumed excessive context | partial | PR A/PR C/PR E | `responseMode=summary` and explicit paging now cover CompileRun plus requirement, TestIntent, ExecutableCase, ExecutionPlan, SuiteRun, Ledger, exploration, and evidence reviews; `observationMode=summary|step-by-step` keeps routine progress bounded while allowing explicit detail, and step mode caps one notification replay to the latest 50 events; requirement-design adjudication summaries preserve `needs-review` verdicts, reasons, and next actions rather than exposing only generation success; broader nested suite payloads still need additional domain-specific summary contracts |
 | G2 | Documentation and runtime behavior diverged | partial | every PR | Package Skill, English docs, and Chinese docs must be checked in the same PR |
 | G3 | Internal concepts dominated the user experience | partial | observation-mode follow-up/post-2.2 | Users can now ask to execute with a visible browser without knowing Playwright flags; `browserMode=observe` is persisted, shown in status/report, and fails explicitly when no desktop exists, while broader natural-language role-oriented review remains |
 | G4 | Error and time presentation was not localized | partial | PR A/PR C | New errors are bilingual and static reports are searchable; static suite reports now format created/updated timestamps using the owning system locale with an `en-US` fallback and render readable Chinese chrome without rewriting evidence/bug text, while common runtime failures expose bilingual recovery messages; the complete error catalog remains |
@@ -82,7 +82,7 @@ This register closes only through its stated acceptance checks. A passing featur
 
 | ID | Sanitized problem | Status | Target | Acceptance condition / check |
 |---|---|---|---|---|
-| H1 | 需求分析报告直接暴露内部英文字段，且缺少 BusinessScenario 审核结果；用户难以仅凭需求分析和测试意图文档判断业务范围 | partial | Readable requirement reports | `analysis.md` 使用面向用户的中文章节和业务描述，`test-intents.md` 独立承载完整测试意图，业务场景在分析报告中可审核；对应 `reportWriter.test.ts` 与 `service.test.ts` |
+| H1 | 需求分析报告直接暴露内部英文字段，且缺少 BusinessScenario 审核结果；用户难以仅凭需求分析和测试意图文档判断业务范围 | partial | Readable requirement reports | `analysis.md` 有中文章节、分维度覆盖及可审核的 BusinessScenario 表；`test-intents.md` 独立承载完整意图。报告不再对自由文本做原始证据引用的全局子串替换，会标记叙述文本内的内部证据编号，并按 `builtin`/`host-agent`/`host-skill` 正确标注分析来源；`reportWriter.test.ts` 和 `service.test.ts` 覆盖生成路径。仍需复核真实需求草稿中的英文内容与业务表述质量 |
 
 ## L3 Requirement Host Harness calibration
 
@@ -146,14 +146,15 @@ login until their returned storage state is verified against the target system.
 ## Current implementation slice: L3 golden evaluation delivery
 
 PR N adds a deterministic, sanitized L3 corpus and a release-gate report. The
-corpus measures requirement understanding, workflow/state coverage, scenario
-coverage, cross-role journeys, same-system multi-requirement isolation,
-structured runtime evidence, and a 20-iteration synthetic Runner sample. Each
-dimension records its numerator, denominator, threshold, sample IDs, and notes.
+corpus scores synthetic checks for requirement understanding, workflow/state
+coverage, scenario coverage, cross-role journeys, same-system multi-requirement
+isolation, structured runtime evidence, and a 20-iteration synthetic Runner
+sample. Each dimension records its numerator, denominator, threshold, sample
+IDs, and notes; these scores are not product capability measurements.
 
 This slice deliberately does not close the remaining production claims. The
-report keeps real-system regression and historical Bug replay as
-`not-measured`, and labels the long-run result as synthetic. Run
+report keeps real-Trial metrics, real-system regression, and historical Bug
+replay as `not-measured`, and labels synthetic checks as `scored`. Run
 `npm run verify:l3-eval` for the normal deterministic check; use the explicit
 `npm run verify:l3-eval:strict` script only when a deployment is ready to enforce
 the release gate. No real-system URL,

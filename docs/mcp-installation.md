@@ -68,7 +68,7 @@ Then configure Claude Code or Codex MCP in the business project:
   "mcpServers": {
     "brain-creator": {
       "command": "npx",
-      "args": ["brain-creator-mcp"],
+      "args": ["--yes", "--package=brain-creator", "brain-creator-mcp"],
       "env": {
         "BRAIN_CREATOR_WORKSPACE": ".",
         "BRAIN_CREATOR_TOOL_PROFILE": "facade",
@@ -166,7 +166,7 @@ The repo-local Codex plugin is available under `plugins/brain-creator` and is re
 It provides:
 
 - `.codex-plugin/plugin.json` for Codex `/plugin` discovery.
-- `.mcp.json` that registers the `brain-creator` MCP server with `npx brain-creator-mcp` and defaults to `BRAIN_CREATOR_AGENT_PROVIDER=host-agent`.
+- `.mcp.json` that runs the `brain-creator-mcp` binary from the `brain-creator` npm package via `npx --yes --package=brain-creator brain-creator-mcp` and defaults to `BRAIN_CREATOR_AGENT_PROVIDER=host-agent`.
 - `skills/` containing the Brain Creator workflow entrypoint and supporting skill guidance.
 - Three Codex-compatible starter prompts: shortcut help plus status, system connection, and test-document preview.
 - Remaining suite, bug/gap, and doctor workflows are discoverable through `/bc help`.

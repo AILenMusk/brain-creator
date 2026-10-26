@@ -93,6 +93,14 @@ The archive contains the owned source, analysis, cases, specs, tests, evidence, 
 
 ## Structured execution evidence
 
+Page evidence may omit `screenshotPath` when a host can provide only a read-only
+DOM/accessibility observation. Such a capture is typed as
+`host-accessibility-observation`, never receives a synthetic screenshot ID,
+has limited locator confidence, and records the missing screenshot in its
+ProbeResult. It can support bounded exploration,
+but it is not execution evidence or a strong business assertion. Real browser
+captures should include a validated screenshot artifact when available.
+
 Execution evidence now distinguishes process success from requirement assurance. Each evidence record may contain:
 
 - `assertionContracts`: typed expectations with requirement references and required evidence.
@@ -120,3 +128,7 @@ quarantined scenario evidence.
 ## Authentication secret handling
 
 New auth ciphertext uses a random local key at `.brain-creator/secret.key`. Set `BRAIN_CREATOR_SECRET_KEY` for an externally managed key, or `BRAIN_CREATOR_SECRET_KEY_FILE` for a managed key file path. The environment variable has priority. Existing `enc:v1` values are decrypted and re-encrypted as `enc:v2` when the profile is read. Generated token/cookie seeds reference `BRAIN_CREATOR_AUTH_TOKEN` or `BRAIN_CREATOR_AUTH_COOKIE`; they never contain the credential value. All artifact stages scan known protected credential values and high-confidence credential patterns such as private keys, JWTs, Bearer tokens, and literal password/token/cookie fields.
+
+## Evidence-integrity key custody and rotation
+
+HMAC signatures for runtime projections and execution semantic snapshots use the workspace secret by default. For independent custody, configure exactly one of `BRAIN_CREATOR_INTEGRITY_KEY` or `BRAIN_CREATOR_INTEGRITY_KEY_FILE`; `BRAIN_CREATOR_INTEGRITY_KEY_ID` identifies the active key (defaults to `external-current`). New signatures include the key ID as `v1:<key-id>:<digest>`. During rotation, keep retired verification keys in `BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS` as a JSON object mapping key IDs to secret values. The signer always uses only the active key; verification accepts tagged signatures by their key ID and legacy untagged signatures while their old key is available. Restart MCP/CLI processes after changing key configuration. Remove a retired key only after all retained evidence has been re-signed or intentionally made ineligible; records signed by a removed key become unverifiable and cannot support trust promotion. Secret values must come from protected environment injection or an access-controlled key file and are never included in reports or logs. Verification does not create a missing key.

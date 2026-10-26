@@ -7,10 +7,10 @@ import type {
 } from "../domain/types.js";
 import { randomUUID } from "node:crypto";
 import { id } from "../shared/id.js";
-import { decryptSecrets } from "../shared/crypto.js";
+import { decryptSecrets, type IntegrityAuthenticator } from "../shared/crypto.js";
 import { redactSensitiveText } from "../shared/secretScan.js";
 
-type AppendRunLedgerEntryInput = Omit<RunLedgerEntry, "id" | "createdAt">;
+type AppendRunLedgerEntryInput = Omit<RunLedgerEntry, "id" | "createdAt" | "previousIntegrityTag" | "integrityTag">;
 
 type AppendExecutionProgressInput = {
   runType?: "requirement-suite" | "document-suite";
@@ -40,6 +40,8 @@ export type RecordExecutionActionInput = {
   runType?: "requirement-suite" | "document-suite";
   knowledgeProjectId?: string;
   systemId: string;
+  evaluationTrialId?: string;
+  businessScenarioId?: string;
   requirementSuiteRunId?: string;
   caseSuiteId?: string;
   caseSourceId?: string;
@@ -50,10 +52,12 @@ export type RecordExecutionActionInput = {
   stepTitle?: string;
   actionKey: string;
   phase: RunLedgerActionPhase;
+  recoveryMode?: "automatic" | "manual";
   actionSemantic: string;
   entityReference?: string;
   postcondition?: string;
   evidenceRefs?: string[];
+  evidenceArtifacts?: Array<{ path: string; sha256: string }>;
   operator?: string;
   provider?: string;
   sessionId?: string;
@@ -74,7 +78,8 @@ export class RunLedgerService {
   constructor(
     private readonly repository: InMemoryBrainCreatorRepository,
     private readonly now: () => string = () => new Date().toISOString(),
-    private readonly nowMs: () => number = () => Date.now()
+    private readonly nowMs: () => number = () => Date.now(),
+    private readonly integrityAuthenticator?: IntegrityAuthenticator
   ) {}
 
   append(input: AppendRunLedgerEntryInput): RunLedgerEntry {
@@ -93,6 +98,10 @@ export class RunLedgerService {
     const entityReference = redact(input.entityReference);
     const actionPostcondition = redact(input.actionPostcondition);
     const actionEvidenceRefs = input.actionEvidenceRefs?.map((reference) => redact(reference)!);
+    const actionEvidenceArtifacts = input.actionEvidenceArtifacts?.map((artifact) => ({
+      path: redact(artifact.path)!,
+      sha256: artifact.sha256
+    }));
     const pageUrl = input.pageUrl
       ? sanitizePageUrl(redact(input.pageUrl)!)
       : undefined;
@@ -131,9 +140,15 @@ export class RunLedgerService {
       ...(entityReference === undefined ? {} : { entityReference }),
       ...(actionPostcondition === undefined ? {} : { actionPostcondition }),
       ...(actionEvidenceRefs === undefined ? {} : { actionEvidenceRefs }),
+      ...(actionEvidenceArtifacts === undefined ? {} : { actionEvidenceArtifacts }),
       ...(pageUrl === undefined ? {} : { pageUrl }),
       createdAt
     };
+    if (this.integrityAuthenticator) {
+      const previousEntry = [...runEntries].sort(compareRunLedgerEntries).at(-1);
+      entry.previousIntegrityTag = previousEntry?.integrityTag;
+      entry.integrityTag = this.integrityAuthenticator.sign(runLedgerEntryIntegrityPayload(entry));
+    }
     this.repository.runLedgerEntries.push(entry);
     this.repository.persist();
     return entry;
@@ -167,6 +182,37 @@ export class RunLedgerService {
 
     const previous = this.latestActionForRun(runIdFromInput(input), actionKey);
     validateActionTransition(previous?.actionPhase, input.phase);
+    if (previous?.actionPhase && previous.actionSemantic !== actionSemantic) {
+      throw new Error("Execution action semantic cannot change after it is planned");
+    }
+    if (previous?.entityReference && input.entityReference &&
+        previous.entityReference !== input.entityReference) {
+      throw new Error("Execution action entity reference cannot change after it is planned");
+    }
+    if (previous?.actionPostcondition && !input.postcondition &&
+        input.phase === "planned") {
+      throw new Error("Execution action postcondition cannot be removed after it is planned");
+    }
+    if (previous?.actionPostcondition && input.postcondition &&
+        previous.actionPostcondition !== input.postcondition) {
+      throw new Error("Execution action postcondition cannot change after it is planned");
+    }
+    const evaluationTrialId = input.evaluationTrialId ?? previous?.evaluationTrialId;
+    const businessScenarioId = input.businessScenarioId ?? previous?.businessScenarioId;
+    if (businessScenarioId && !evaluationTrialId) {
+      throw new Error("Execution action business scenario requires an evaluation Trial binding");
+    }
+    if (previous?.evaluationTrialId && evaluationTrialId !== previous.evaluationTrialId) {
+      throw new Error("Execution action Trial binding cannot change after it is planned");
+    }
+    if (previous?.businessScenarioId && businessScenarioId !== previous.businessScenarioId) {
+      throw new Error("Execution action business scenario binding cannot change after it is planned");
+    }
+    const entityReference = input.entityReference ?? previous?.entityReference;
+    const postcondition = input.postcondition ?? previous?.actionPostcondition;
+    if (input.phase === "sent" && !postcondition?.trim()) {
+      throw new Error("Sent execution action requires a frozen postcondition");
+    }
 
     const event = actionEvent(input.phase);
     const waiting = input.phase === "sent" || input.phase === "reconciliation-required";
@@ -174,6 +220,8 @@ export class RunLedgerService {
       runType: input.runType,
       knowledgeProjectId: input.knowledgeProjectId,
       systemId: input.systemId,
+      evaluationTrialId,
+      businessScenarioId,
       requirementSuiteRunId: input.requirementSuiteRunId,
       caseSuiteId: input.caseSuiteId,
       caseSourceId: input.caseSourceId,
@@ -184,10 +232,12 @@ export class RunLedgerService {
       stepTitle: input.stepTitle,
       actionKey,
       actionPhase: input.phase,
+      recoveryMode: input.recoveryMode,
       actionSemantic,
-      entityReference: input.entityReference,
-      actionPostcondition: input.postcondition,
+      entityReference,
+      actionPostcondition: postcondition,
       actionEvidenceRefs: input.evidenceRefs,
+      actionEvidenceArtifacts: input.evidenceArtifacts,
       event,
       scope: input.executableCaseId || input.caseNo ? "case" : "suite",
       stage: "execution",
@@ -324,6 +374,62 @@ export class RunLedgerService {
       stalledAfterMs
     };
   }
+}
+
+export function hasValidRunLedgerEntryIntegrity(
+  entry: RunLedgerEntry,
+  authenticator: IntegrityAuthenticator
+) {
+  return Boolean(entry.integrityTag &&
+    authenticator.verify(runLedgerEntryIntegrityPayload(entry), entry.integrityTag));
+}
+
+export function verifyRunLedgerIntegrityChains(
+  entries: RunLedgerEntry[],
+  authenticator: IntegrityAuthenticator
+) {
+  const groups = new Map<string, RunLedgerEntry[]>();
+  for (const entry of entries) {
+    const runId = entry.requirementSuiteRunId ?? entry.caseSuiteId;
+    if (!runId) continue;
+    const key = `${entry.runType ?? "requirement-suite"}:${runId}`;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  const validity = new Map<string, boolean>();
+  for (const runEntries of groups.values()) {
+    const ordered = [...runEntries].sort(compareRunLedgerEntries);
+    let previousTag: string | undefined;
+    let chainValid = true;
+    ordered.forEach((entry, index) => {
+      chainValid = chainValid && entry.sequence === index + 1 &&
+        entry.previousIntegrityTag === previousTag &&
+        hasValidRunLedgerEntryIntegrity(entry, authenticator);
+      validity.set(entry.id, chainValid);
+      previousTag = entry.integrityTag;
+    });
+  }
+  return validity;
+}
+
+function compareRunLedgerEntries(left: RunLedgerEntry, right: RunLedgerEntry) {
+  return (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER) ||
+    left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function runLedgerEntryIntegrityPayload(entry: RunLedgerEntry) {
+  const { integrityTag: _integrityTag, ...payload } = entry;
+  return canonicalJson(payload);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function protectedSecrets(

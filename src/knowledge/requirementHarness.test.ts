@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { HarnessRuntime } from "../brain/harness.js";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type { AttachmentAnalysis, KnowledgeProject, RequirementSet, RequirementSource } from "../domain/types.js";
+import { RequirementGateService } from "../evaluation/requirementGate.js";
 import {
   RequirementAnalysisHostHarness,
   type BusinessModelerOutput,
@@ -92,6 +93,66 @@ describe("RequirementAnalysisHostHarness", () => {
     expect(fixture.repository.gaps).toContainEqual(blocked.gap);
   });
 
+  it("rejects fabricated source line references even when they use the correct source prefix", async () => {
+    const fixture = await createFixture();
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir,
+      new RequirementGateService(fixture.repository)
+    );
+
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    const response = await coordinator.submit({
+      taskId: mapper.task.id,
+      output: { ...documentMap(), sourceRefs: ["source:req-source#line:999"] }
+    });
+
+    expect(response).toEqual(expect.objectContaining({
+      status: "needs-host-analysis",
+      stage: "document-mapper",
+      retry: true
+    }));
+    expect(fixture.repository.stageEvalRecords).toContainEqual(expect.objectContaining({
+      evaluator: "schema-validator",
+      reasons: ["Unsupported sourceRef: source:req-source#line:999"]
+    }));
+  });
+
+  it("keeps the current stage resumable when the next-stage context exceeds budget", async () => {
+    const fixture = await createFixture();
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    const originalAttachmentMarkdown = fixture.repository.attachmentAnalyses[0]!.markdown;
+    fixture.repository.attachmentAnalyses[0]!.markdown = "x".repeat(50_000);
+
+    await expect(coordinator.submit({ taskId: mapper.task.id, output: documentMap() }))
+      .rejects.toThrow("Structured requirement context exceeds the Harness budget");
+    expect(fixture.repository.brainTasks).toHaveLength(1);
+    expect(fixture.repository.brainTasks[0]).toEqual(expect.objectContaining({
+      id: mapper.task.id,
+      state: "waiting-provider",
+      outputRefs: []
+    }));
+
+    fixture.repository.attachmentAnalyses[0]!.markdown = originalAttachmentMarkdown;
+    const recovered = await coordinator.submit({ taskId: mapper.task.id, output: documentMap() });
+    expect(recovered).toEqual(expect.objectContaining({
+      status: "needs-host-analysis",
+      stage: "clause-analyst"
+    }));
+    expect(fixture.repository.brainTasks).toHaveLength(2);
+    expect(fixture.repository.brainTasks[0]).toEqual(expect.objectContaining({
+      id: mapper.task.id,
+      state: "completed",
+      status: "succeeded"
+    }));
+  });
+
   it("blocks completeness when a critical process image has not been confirmed", async () => {
     const fixture = await createFixture({ attachmentStatus: "downloaded", includeAnalysis: false });
     const coordinator = new RequirementAnalysisHostHarness(
@@ -142,7 +203,7 @@ describe("RequirementAnalysisHostHarness", () => {
       text: `Long block ${index + 1}: ${"x".repeat(900)}`,
       level: index % 4,
       order: index + 1,
-      sourceRef: `source:req-source#block:${index + 1}`,
+      sourceRef: `source:req-source#block:${"x".repeat(60)}${index + 1}`,
       sourceRefs: [`source:req-source#block:${index + 1}`],
       table: index % 3 === 0
         ? {
@@ -161,7 +222,8 @@ describe("RequirementAnalysisHostHarness", () => {
 
     expect(mapper.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
     expect(mapper.task.contextPack!.content).toContain("sourceRef");
-    expect(mapper.task.contextPack!.content).toContain("source:req-source#block:1");
+    expect(mapper.task.contextPack!.content).toContain(`"sourceRefPrefix":"source:req-source#block:${"x".repeat(60)}"`);
+    expect(mapper.task.contextPack!.content).toContain('"sourceRef":"1"');
     expect(mapper.task.contextPack!.content).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(mapper.task.contextPack!.references).toContainEqual(expect.objectContaining({
       ref: "source:req-source#line:1"
@@ -170,6 +232,7 @@ describe("RequirementAnalysisHostHarness", () => {
 
   it("keeps later harness stages within budget after structured output is added", async () => {
     const fixture = await createFixture();
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment flow facts. ".repeat(120);
     fixture.repository.requirementSources[0].content = Array.from(
       { length: 180 },
       (_, index) => `Requirement line ${index + 1}: ${"x".repeat(500)}`
@@ -198,12 +261,167 @@ describe("RequirementAnalysisHostHarness", () => {
       openQuestions: []
     };
     const analyst = await coordinator.submit({ taskId: mapper.task.id, output: documentMap() });
+    expect(analyst.stage).toBe("clause-analyst");
+    expect(analyst.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(analyst.task.contextPack!.content).toContain('"omittedAfterDocumentMapping":true');
+    expect(analyst.task.contextPack!.content).not.toContain('"id":"block-1"');
+    expect(analyst.task.contextPack!.content).toContain("Requirement line 180:");
+    expect(analyst.task.contextPack!.content).toContain("source lines excerpted; full requirement remains pinned by references");
+    expect(analyst.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:180"
+    }));
     const modeler = await coordinator.submit({ taskId: analyst.task.id, output: analystOutput });
 
     expect(modeler.stage).toBe("business-modeler");
     expect(modeler.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
     expect(modeler.task.contextPack!.content).toContain("clause-1");
     expect(modeler.task.contextPack!.content).toContain("source:req-source#line:1");
+    expect(modeler.task.contextPack!.content).toContain("Requirement line 40:");
+    expect(modeler.task.contextPack!.content).not.toContain("Requirement line 41:");
+    expect(modeler.task.contextPack!.content).toContain("source line excerpt; full requirement remains pinned by reference");
+    expect(modeler.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:41"
+    }));
+  });
+
+  it("keeps the frozen source and confirmed attachments within budget for a large document", async () => {
+    const fixture = await createFixture();
+    fixture.repository.requirementSources[0].content = Array.from(
+      { length: 211 },
+      (_, index) => `Requirement line ${index + 1}: ${"source text ".repeat(4)}`
+    ).join("\n");
+    const blockTypes = [
+      ...Array.from({ length: 28 }, () => "heading"),
+      ...Array.from({ length: 12 }, () => "list-item"),
+      ...Array.from({ length: 56 }, () => "paragraph"),
+      ...Array.from({ length: 34 }, () => "table-row")
+    ];
+    fixture.repository.requirementSources[0].blocks = blockTypes.map((type, index) => ({
+      id: `block-${"x".repeat(12)}${index + 1}`,
+      type,
+      text: `Block ${index + 1} content`,
+      level: index % 3,
+      order: index + 1,
+      sourceRef: `source:req-source#block:${"x".repeat(60)}${index + 1}`
+    }));
+    const attachmentMarkdownLengths = [1173, 7608, 5938, 1905, 1954];
+    fixture.repository.attachmentAnalyses = attachmentMarkdownLengths.map((length, index) => ({
+      ...attachmentAnalysis("2026-08-30T00:00:00.000Z"),
+      id: `attachment-analysis-${index + 1}`,
+      attachmentId: `attachment-${index + 1}`,
+      kind: index === 4 ? "flowchart" : "table",
+      markdown: "x".repeat(length),
+      nodes: index === 4
+        ? Array.from({ length: 22 }, (_, nodeIndex) => ({ id: `node-${nodeIndex + 1}`, type: "action", label: `Action ${nodeIndex + 1}` }))
+        : [],
+      edges: index === 4
+        ? Array.from({ length: 30 }, (_, edgeIndex) => ({ from: `node-${edgeIndex + 1}`, to: `node-${edgeIndex + 2}` }))
+        : [],
+      sourceRefs: [`attachment:attachment-${index + 1}`]
+    }));
+    fixture.repository.requirementSources[0].attachments = attachmentMarkdownLengths.map((_, index) => ({
+      id: `attachment-${index + 1}`,
+      sourceId: "req-source",
+      name: `source-${index + 1}.xlsx`,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      status: "confirmed"
+    }));
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+
+    expect(mapper.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(mapper.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:211"
+    }));
+    expect(mapper.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: `source:req-source#block:${"x".repeat(60)}130`
+    }));
+    expect(mapper.task.contextPack!.content).toContain("attachment-analysis-5");
+    expect(mapper.task.contextPack!.content).toMatch(/Source line labels L<n> map to source:req-source#line:<n>|source:req-source#line:211/);
+  });
+
+  it("fits the independent Critic context while retaining full source references", async () => {
+    const fixture = await createFixture();
+    fixture.repository.requirementSources[0].content = Array.from(
+      { length: 211 },
+      (_, index) => `Requirement line ${index + 1}: ${"source text ".repeat(4)}`
+    ).join("\n");
+    fixture.repository.requirementSources[0].blocks = Array.from({ length: 130 }, (_, index) => ({
+      id: `block-${"x".repeat(12)}${index + 1}`,
+      type: index < 28 ? "heading" : index < 40 ? "list-item" : index < 96 ? "paragraph" : "table-row",
+      text: `Block ${index + 1} content`,
+      level: index % 3,
+      order: index + 1,
+      sourceRef: `source:req-source#block:${"x".repeat(60)}${index + 1}`
+    }));
+    const attachmentMarkdownLengths = [1173, 7608, 5938, 1905, 1954];
+    fixture.repository.attachmentAnalyses = attachmentMarkdownLengths.map((length, index) => ({
+      ...attachmentAnalysis("2026-08-30T00:00:00.000Z"),
+      id: `attachment-analysis-${index + 1}`,
+      attachmentId: `attachment-${index + 1}`,
+      kind: index === 4 ? "flowchart" : "table",
+      markdown: "x".repeat(length),
+      nodes: index === 4
+        ? Array.from({ length: 22 }, (_, nodeIndex) => ({ id: `node-${nodeIndex + 1}`, type: "action", label: `Action ${nodeIndex + 1}` }))
+        : [],
+      edges: index === 4
+        ? Array.from({ length: 30 }, (_, edgeIndex) => ({ from: `node-${edgeIndex + 1}`, to: `node-${edgeIndex + 2}` }))
+        : [],
+      sourceRefs: [`attachment:attachment-${index + 1}`]
+    }));
+    fixture.repository.requirementSources[0].attachments = attachmentMarkdownLengths.map((_, index) => ({
+      id: `attachment-${index + 1}`,
+      sourceId: "req-source",
+      name: `source-${index + 1}.xlsx`,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      status: "confirmed"
+    }));
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+
+    let next = await coordinator.start(fixture.requirementSet.id);
+    next = await coordinator.submit({ taskId: next.task.id, output: documentMap() });
+    const clauseOutput = clauses();
+    clauseOutput.clauses = Array.from({ length: 15 }, (_, index) => ({
+      ...clauses().clauses[index % clauses().clauses.length]!,
+      id: `clause-${index + 1}`,
+      index: index + 1,
+      text: `Source-backed clause ${index + 1}: ${"explicit requirement detail ".repeat(5)}`,
+      sourceRefs: [`source:req-source#line:${index + 1}`, `source:req-source#line:${index + 2}`]
+    }));
+    next = await coordinator.submit({ taskId: next.task.id, output: clauseOutput });
+    const modelOutput = businessModels();
+    modelOutput.invariants = Array.from({ length: 5 }, (_, index) => `Invariant ${index + 1}: ${"preserve source-backed business behavior ".repeat(4)}`);
+    modelOutput.decisionTableModels = Array.from({ length: 4 }, (_, tableIndex) => ({
+      localId: `decision-${tableIndex + 1}`,
+      title: `Decision table ${tableIndex + 1}`,
+      conditions: ["condition A", "condition B", "condition C"],
+      actions: ["action A", "action B"],
+      rules: Array.from({ length: 20 }, (_, ruleIndex) => ({
+        conditionValues: { conditionA: `${ruleIndex % 2 === 0}`, conditionB: `${ruleIndex % 3 === 0}` },
+        expectedActions: [`Apply source-backed action ${ruleIndex + 1}`],
+        sourceRefs: ["source:req-source#line:1", "source:req-source#line:2", "source:req-source#line:3"]
+      })),
+      sourceRefs: ["source:req-source#line:1", "source:req-source#line:2", "source:req-source#line:3"]
+    }));
+
+    const critic = await coordinator.submit({ taskId: next.task.id, output: modelOutput });
+
+    expect(critic.stage).toBe("coverage-critic");
+    expect(critic.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(critic.task.contextPack!.content).toContain("Structured source reference encoding");
+    expect(critic.task.contextPack!.content).toContain('"sourceRefs":["#line:1"');
+    expect(critic.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:211"
+    }));
   });
 });
 

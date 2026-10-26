@@ -173,6 +173,34 @@ describe("ShardedFileBrainCreatorRepository", () => {
     expect(existsSync(join(storeDir, ".transaction.json"))).toBe(false);
   });
 
+  it("keeps nested repository transactions inside the outer atomic commit", async () => {
+    const root = await tempDir();
+    const storeDir = join(root, "store");
+    const legacyPath = join(root, "legacy.json");
+    const repository = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    const service = new BrainCreatorService(repository);
+    service.createSystemProfile({
+      name: "Stable",
+      environment: "test",
+      baseUrl: "https://stable.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://stable.example.test"]
+    });
+
+    expect(() => repository.transaction(() => {
+      repository.systemProfiles[0]!.name = "Partially changed";
+      repository.transaction(() => {
+        repository.onboardingPlans.push({ id: "nested-onboarding" } as never);
+        repository.persist();
+      });
+      throw new Error("abort outer transaction");
+    })).toThrow("abort outer transaction");
+
+    const restored = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    expect(restored.systemProfiles[0]!.name).toBe("Stable");
+    expect(restored.onboardingPlans).toEqual([]);
+  });
+
   it("restores an earlier schema 17 store that predates optional requirement analysis shards", async () => {
     const root = await tempDir();
     const storeDir = join(root, "store");

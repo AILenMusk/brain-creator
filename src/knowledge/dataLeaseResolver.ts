@@ -14,7 +14,8 @@ export function findActiveTestDataLease(
   repository: InMemoryBrainCreatorRepository,
   executableCase: ExecutableCase,
   systemId: string,
-  operation: Pick<ExecutableCaseDataOperation, "profileId" | "reference" | "entityReference">
+  operation: Pick<ExecutableCaseDataOperation, "profileId" | "reference" | "entityReference">,
+  requirementSuiteRunId?: string
 ): TestDataLease | undefined {
   const direct = repository.testDataLeases.find(
     (lease) =>
@@ -24,6 +25,7 @@ export function findActiveTestDataLease(
       lease.profileId === operation.profileId &&
       operation.reference !== undefined &&
       lease.reference === operation.reference &&
+      (!requirementSuiteRunId || lease.requirementSuiteRunId === requirementSuiteRunId) &&
       lease.status === "active"
   );
   if (direct) return direct;
@@ -61,6 +63,7 @@ export function findActiveTestDataLease(
       lease.systemId === systemId &&
       producerCaseIds.has(lease.executableCaseId) &&
       lease.entityReference === operation.entityReference &&
+      (!requirementSuiteRunId || lease.requirementSuiteRunId === requirementSuiteRunId) &&
       lease.status === "active"
   );
   return candidates.length === 1 ? candidates[0] : undefined;

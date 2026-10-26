@@ -15,7 +15,8 @@ import {
 } from "./l3Evaluation.js";
 
 export type AutonomyBaselineMetric = {
-  status: "measured" | "not-measured";
+  status: "synthetic" | "not-measured";
+  sourceKind: "sanitized-synthetic";
   passed: number;
   total: number;
   rate: number | null;
@@ -24,7 +25,7 @@ export type AutonomyBaselineMetric = {
 };
 
 export type AutonomyBaselineReport = {
-  schemaVersion: 21;
+  schemaVersion: 22;
   generatedAt: string;
   seed: string;
   metrics: {
@@ -81,19 +82,19 @@ export function buildAutonomyBaselineReport(input: {
   });
 
   return {
-    schemaVersion: 21,
+    schemaVersion: 22,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     seed: input.seed ?? "brain-creator-l3-baseline",
     metrics: {
-      requirementGolden: measuredMetric(
+      requirementGolden: syntheticMetric(
         requirementResults.filter((result) => result.passed).length,
         requirementResults.length,
         ["Deterministic HR and non-HR requirement policy samples"]
       ),
-      processModel: measuredMetric(processPassed ? 1 : 0, 1, [
+      processModel: syntheticMetric(processPassed ? 1 : 0, 1, [
         "Synthetic image-derived workflow and state-machine coverage"
       ]),
-      requirementHostHarness: measuredMetric(
+      requirementHostHarness: syntheticMetric(
         hostHarnessChecks.filter(Boolean).length,
         hostHarnessChecks.length,
         [
@@ -101,11 +102,11 @@ export function buildAutonomyBaselineReport(input: {
         ]
       ),
       scenarioDefectDetection: {
-        ...measuredMetric(
+        ...syntheticMetric(
           mutationEvaluation.caught,
           mutationEvaluation.totalEvaluated,
           [
-            "Synthetic PR E scenario portfolio: mutation detection is measured; historical Bug replay remains separate."
+            "Synthetic PR E scenario portfolio: mutation detection is scored; historical Bug replay remains separate."
           ]
         ),
         threshold: mutationEvaluation.threshold
@@ -116,15 +117,16 @@ export function buildAutonomyBaselineReport(input: {
     openCapabilityGaps: [
       ...l3GoldenCorpus.releaseGate.blockers,
       "Historical Bug replay and real-system mutation detection still require a larger evidence corpus",
-      "Requirement Host Harness structure is measured; semantic Critic quality still needs a larger real defect corpus",
+      "Requirement Host Harness structure is scored from synthetic fixtures; semantic Critic quality still needs a larger real defect corpus",
       "Optional cross-provider evaluation is not measured yet"
     ]
   };
 }
 
-function measuredMetric(passed: number, total: number, notes: string[]): AutonomyBaselineMetric {
+function syntheticMetric(passed: number, total: number, notes: string[]): AutonomyBaselineMetric {
   return {
-    status: "measured",
+    status: "synthetic",
+    sourceKind: "sanitized-synthetic",
     passed,
     total,
     rate: total === 0 ? 0 : passed / total,

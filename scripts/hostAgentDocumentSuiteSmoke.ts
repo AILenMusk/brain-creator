@@ -1,6 +1,6 @@
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -8,7 +8,25 @@ import { createConfiguredAgentBridge } from "../src/agent/bridgeProvider.js";
 import { spawnCommand } from "../src/agent/orchestrator.js";
 import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "../src/mcp/handlers.js";
 
-const temporaryDir = await mkdtemp(join(tmpdir(), "brain-host-agent-suite-"));
+const smokeRoot = join(process.cwd(), ".brain-creator-test");
+await mkdir(smokeRoot, { recursive: true });
+const temporaryDir = await mkdtemp(join(smokeRoot, "host-agent-suite-"));
+const packageDir = join(temporaryDir, "package");
+await mkdir(packageDir, { recursive: true });
+await writeFile(join(temporaryDir, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+await runNpm(["pack", "--pack-destination", packageDir], process.cwd(), 180_000);
+const packageTarball = (await readdir(packageDir)).find((file) => file.endsWith(".tgz"));
+assert(packageTarball, "npm pack did not create the package used by the document-suite smoke");
+await runNpm(
+  ["install", "--no-audit", "--no-fund", "--prefer-offline", join(packageDir, packageTarball)],
+  temporaryDir,
+  300_000
+);
+await writeFile(
+  join(temporaryDir, "playwright.config.ts"),
+  await readFile(join(process.cwd(), "playwright.config.ts"), "utf8"),
+  "utf8"
+);
 const generatedPaths = new Set<string>();
 let authStateDir: string | undefined;
 const server = createServer((request, response) => {
@@ -64,13 +82,14 @@ try {
 
   const context = createBrainCreatorMcpContext({
     dataFilePath: join(temporaryDir, "assets.json"),
-    workDir: process.cwd(),
+    workDir: temporaryDir,
     agentBridge: createConfiguredAgentBridge({
       env: { BRAIN_CREATOR_AGENT_PROVIDER: "host-agent" }
     }),
     runner: (command, args, options) =>
       spawnCommand(command, [...args, "--output", join(temporaryDir, "playwright-results")], {
         ...options,
+        env: process.env,
         timeoutMs: 120_000
       })
   });
@@ -85,7 +104,7 @@ try {
       urlAllowlist: [baseUrl]
     })
   );
-  authStateDir = join(process.cwd(), ".brain-creator", "auth", system.id);
+  authStateDir = join(temporaryDir, ".brain-creator", "auth", system.id);
   const storageStatePath = join(authStateDir, "storage-state.json");
   await mkdir(authStateDir, { recursive: true });
   await writeFile(
@@ -114,7 +133,7 @@ try {
     role: "qa-agent",
     loginMethod: "script",
     secrets: {
-      storageStatePath: relative(process.cwd(), storageStatePath).replace(/\\/g, "/")
+      storageStatePath: relative(temporaryDir, storageStatePath).replace(/\\/g, "/")
     }
   });
 
@@ -165,9 +184,18 @@ try {
     );
   }
 
-  assert(handoff.status === "completed", `Suite did not complete: ${handoff.status}`);
+  assert(
+    handoff.status === "completed",
+    `Suite did not complete: ${JSON.stringify({ status: handoff.status, suite: handoff.suite, suiteRun: handoff.suiteRun, testResult: handoff.testResult })}`
+  );
   assert(executedCases.join(",") === "TC-001,TC-002", "Suite did not execute cases in document order");
   assert(handoff.testResult?.exitCode === 0, "Final real Playwright run did not pass");
+  assert(typeof handoff.reportPath === "string", "Completed suite did not return its report path");
+  const report = await readFile(handoff.reportPath, "utf8");
+  assert(
+    report.includes("TC-001") && report.includes("TC-002") && report.includes("completed"),
+    "Completed suite report is missing selected cases or its terminal status"
+  );
   const suiteRuns = context.service.listCaseSuiteRuns(system.id);
   assert(suiteRuns.length === 2, "Each document case should have one persisted suite run");
   assert(suiteRuns.every((run) => run.status === "completed"), "A persisted suite run did not pass");
@@ -256,4 +284,39 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+async function runNpm(args: string[], cwd: string, timeoutMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn("npm", args, {
+      cwd,
+      env: process.env,
+      shell: process.platform === "win32"
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error(`npm ${args.join(" ")} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(timeout);
+      if (exitCode === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error([
+        `npm ${args.join(" ")} failed with exit code ${exitCode}`,
+        `cwd: ${cwd}`,
+        `stdout:\n${stdout}`,
+        `stderr:\n${stderr}`
+      ].join("\n")));
+    });
+  });
 }

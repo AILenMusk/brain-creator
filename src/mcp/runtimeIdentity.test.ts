@@ -15,6 +15,12 @@ it("returns running identity before system selection in both status response mod
       const payload = JSON.parse(block.text);
       expect(payload.success).toBe(true);
       expect(payload.data.runtimeIdentity).toMatchObject({ pid: process.pid, workspace: workDir, schemaVersion: 21, processKind: "mcp" });
+      expect(payload.data.recoveryCapabilities).toEqual({
+        automaticPostconditionVerification: "not-configured"
+      });
+      expect(payload.data.runtimeCapabilities).toEqual({
+        testDataProvider: "synthetic-test-only"
+      });
     }
   } finally { await rm(workDir, { recursive: true, force: true }); }
 });

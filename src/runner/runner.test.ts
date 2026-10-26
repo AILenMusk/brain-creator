@@ -70,6 +70,116 @@ describe("scheduled Runner", () => {
     }));
   });
 
+  it("rejects an invalid scheduled Trial binding before claiming a lease", async () => {
+    const run = scheduledRun();
+    run.evaluationTrialId = "trial-1";
+    const controller = {
+      listDueStabilityRuns: vi.fn(() => [run]),
+      claimScheduled: vi.fn(),
+      get: vi.fn(() => run),
+      releaseScheduledLease: vi.fn()
+    };
+    const validateRun = vi.fn(() => {
+      throw new Error("Evaluation trial binding is invalid: code revision changed");
+    });
+    const execute = vi.fn();
+
+    const result = await runScheduledSuites({
+      controller,
+      owner: "ci",
+      validateRun,
+      now: new Date("2026-01-01T00:01:00.000Z"),
+      execute
+    });
+
+    expect(validateRun).toHaveBeenCalledWith(run);
+    expect(controller.claimScheduled).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.runs).toEqual([expect.objectContaining({
+      runId: run.id,
+      status: "claim-failed",
+      error: expect.stringContaining("binding is invalid")
+    })]);
+  });
+
+  it("revalidates the claimed Trial binding and releases a lease if it changed", async () => {
+    const dueRun = scheduledRun();
+    dueRun.evaluationTrialId = "trial-1";
+    const claimedRun = structuredClone(dueRun);
+    claimedRun.systemId = "changed-system";
+    claimedRun.stabilitySchedule = {
+      ...claimedRun.stabilitySchedule!,
+      leaseId: "lease-1",
+      leaseOwner: "ci",
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+      attemptCount: 3,
+      nextRunAt: undefined
+    };
+    const controller = {
+      listDueStabilityRuns: vi.fn(() => [dueRun]),
+      claimScheduled: vi.fn(() => claimedRun),
+      get: vi.fn(() => claimedRun),
+      releaseScheduledLease: vi.fn(() => claimedRun)
+    };
+    const validateRun = vi.fn((run: RequirementSuiteRun) => {
+      if (run.systemId !== "system-1") throw new Error("Evaluation trial binding changed after claim");
+    });
+    const execute = vi.fn();
+
+    const result = await runScheduledSuites({
+      controller,
+      owner: "ci",
+      validateRun,
+      retryBackoffMs: 1_000,
+      maxRetryBackoffMs: 3_000,
+      clock: () => Date.parse("2026-01-01T00:01:00.000Z"),
+      now: new Date("2026-01-01T00:01:00.000Z"),
+      execute
+    });
+
+    expect(validateRun).toHaveBeenCalledTimes(2);
+    expect(controller.releaseScheduledLease).toHaveBeenCalledWith(
+      claimedRun.id,
+      expect.objectContaining({
+        owner: "ci",
+        nextRunAt: "2026-01-01T00:01:03.000Z",
+        lastError: "Evaluation trial binding changed after claim"
+      }),
+      expect.any(Date)
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.runs).toEqual([expect.objectContaining({
+      runId: dueRun.id,
+      status: "claim-failed",
+      error: "Evaluation trial binding changed after claim"
+    })]);
+  });
+
+  it("requires a binding validator for Trial-bound scheduled runs", async () => {
+    const run = scheduledRun();
+    run.evaluationTrialId = "trial-1";
+    const controller = {
+      listDueStabilityRuns: vi.fn(() => [run]),
+      claimScheduled: vi.fn(),
+      get: vi.fn(() => run),
+      releaseScheduledLease: vi.fn()
+    };
+
+    const result = await runScheduledSuites({
+      controller,
+      owner: "ci",
+      now: new Date("2026-01-01T00:01:00.000Z"),
+      execute: vi.fn()
+    });
+
+    expect(controller.claimScheduled).not.toHaveBeenCalled();
+    expect(result.runs).toEqual([expect.objectContaining({
+      runId: run.id,
+      status: "claim-failed",
+      error: expect.stringContaining("require a runtime binding validator")
+    })]);
+  });
+
   it("releases the lease when execution must wait for a provider", async () => {
     const run = scheduledRun();
     const controller = {
@@ -163,6 +273,60 @@ describe("scheduled Runner", () => {
       durationMs: expect.any(Number)
     }));
     expect(result.runs[0].leaseRenewals).toBeGreaterThan(0);
+  });
+
+  it("waits for an in-flight lease renewal before releasing a waiting run", async () => {
+    const run = scheduledRun();
+    let markRenewalStarted!: () => void;
+    const renewalStarted = new Promise<void>((resolve) => {
+      markRenewalStarted = resolve;
+    });
+    let finishRenewal!: () => void;
+    const renewalGate = new Promise<void>((resolve) => {
+      finishRenewal = resolve;
+    });
+    const controller = {
+      listDueStabilityRuns: vi.fn(() => [run]),
+      claimScheduled: vi.fn(() => {
+        run.stabilitySchedule = {
+          ...run.stabilitySchedule!,
+          leaseId: "lease-1",
+          leaseOwner: "ci",
+          leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+          nextRunAt: undefined
+        };
+        return run;
+      }),
+      renewScheduledLease: vi.fn(async () => {
+        markRenewalStarted();
+        await renewalGate;
+        return run;
+      }),
+      get: vi.fn(() => run),
+      releaseScheduledLease: vi.fn(() => run)
+    };
+    const resultPromise = runScheduledSuites({
+      controller,
+      owner: "ci",
+      leaseMs: 100,
+      leaseRenewalMs: 5,
+      execute: async () => {
+        await renewalStarted;
+        run.status = "waiting-for-agent";
+      }
+    });
+
+    try {
+      await renewalStarted;
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      expect(controller.releaseScheduledLease).not.toHaveBeenCalled();
+    } finally {
+      finishRenewal();
+    }
+
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({ status: "waiting" }));
+    expect(controller.releaseScheduledLease).toHaveBeenCalledOnce();
+    expect(controller.renewScheduledLease).toHaveBeenCalledOnce();
   });
 
   it("stops before starting another case when the wall-time budget is exhausted", async () => {

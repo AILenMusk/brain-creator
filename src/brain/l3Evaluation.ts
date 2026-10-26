@@ -11,7 +11,7 @@ export type L3EvaluationDimension =
 
 export type L3GoldenCheck = {
   dimension: L3EvaluationDimension;
-  status: "measured" | "not-measured";
+  status: "scored" | "not-measured";
   passed: number;
   total: number;
   threshold: number;
@@ -22,7 +22,7 @@ export type L3GoldenSample = {
   id: string;
   domain: "hr" | "order-approval" | "image-state-machine" | "cross-role" | "multi-requirement" | "long-run" | "historical-bug";
   title: string;
-  sourceKind: "sanitized-synthetic" | "external-real-system";
+  sourceKind: "sanitized-synthetic";
   checks: L3GoldenCheck[];
 };
 
@@ -36,7 +36,7 @@ export type L3GoldenSampleResult = {
 };
 
 export type L3EvaluationMetric = {
-  status: "measured" | "not-measured";
+  status: "measured" | "scored" | "not-measured";
   passed: number;
   total: number;
   rate: number | null;
@@ -56,9 +56,13 @@ export type L3GoldenCorpusReport = {
   generatedAt: string;
   seed: string;
   sampleCount: number;
+  realSampleCount: number;
   measuredSampleCount: number;
+  syntheticSampleCount: number;
+  syntheticScoredSampleCount: number;
   sampleResults: L3GoldenSampleResult[];
   metrics: Record<L3EvaluationDimension, L3EvaluationMetric>;
+  syntheticMetrics: Record<L3EvaluationDimension, L3EvaluationMetric>;
   releaseGate: L3ReleaseGate;
 };
 
@@ -69,10 +73,10 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "Intern headcount rule and approval flow",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("requirement-understanding", 10, 10, 0.9, "Rules, conditional fields, defaults, and constraints are source-backed."),
-      measured("workflow-state-coverage", 8, 8, 0.9, "Create, submit, approve, and terminal states are represented."),
-      measured("scenario-coverage", 8, 8, 0.9, "Main path, rule branches, and invalid configuration scenarios are designed."),
-      measured("runtime-evidence", 8, 8, 0.95, "Every sample scenario has structured step evidence."),
+      scored("requirement-understanding", 10, 10, 0.9, "Rules, conditional fields, defaults, and constraints are source-backed."),
+      scored("workflow-state-coverage", 8, 8, 0.9, "Create, submit, approve, and terminal states are represented."),
+      scored("scenario-coverage", 8, 8, 0.9, "Main path, rule branches, and invalid configuration scenarios are designed."),
+      scored("runtime-evidence", 8, 8, 0.95, "Every sample scenario has structured step evidence."),
     ]
   },
   {
@@ -81,11 +85,11 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "Order approval with rejection and finance handoff",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("requirement-understanding", 8, 8, 0.9, "Actors, amount rule, approval state, and rejection behavior are modeled."),
-      measured("workflow-state-coverage", 10, 10, 0.9, "Submit, approve, reject, and finance transitions are covered."),
-      measured("scenario-coverage", 10, 10, 0.9, "Threshold, approval, rejection, and integration paths are designed."),
-      measured("multi-role", 4, 4, 0.9, "Buyer, manager, and finance role transitions are explicit."),
-      measured("runtime-evidence", 8, 8, 0.95, "Role and state changes have replayable evidence."),
+      scored("requirement-understanding", 8, 8, 0.9, "Actors, amount rule, approval state, and rejection behavior are modeled."),
+      scored("workflow-state-coverage", 10, 10, 0.9, "Submit, approve, reject, and finance transitions are covered."),
+      scored("scenario-coverage", 10, 10, 0.9, "Threshold, approval, rejection, and integration paths are designed."),
+      scored("multi-role", 4, 4, 0.9, "Buyer, manager, and finance role transitions are explicit."),
+      scored("runtime-evidence", 8, 8, 0.95, "Role and state changes have replayable evidence."),
     ]
   },
   {
@@ -94,9 +98,9 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "State machine extracted from a requirement image",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("requirement-understanding", 4, 4, 0.9, "Image nodes and transition conditions are source-linked."),
-      measured("workflow-state-coverage", 6, 6, 0.9, "Every confirmed state transition has a positive scenario."),
-      measured("scenario-coverage", 6, 6, 0.9, "Invalid transition and missing-precondition scenarios are present."),
+      scored("requirement-understanding", 4, 4, 0.9, "Image nodes and transition conditions are source-linked."),
+      scored("workflow-state-coverage", 6, 6, 0.9, "Every confirmed state transition has a positive scenario."),
+      scored("scenario-coverage", 6, 6, 0.9, "Invalid transition and missing-precondition scenarios are present."),
     ]
   },
   {
@@ -105,9 +109,9 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "Requester to approver handoff",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("workflow-state-coverage", 6, 6, 0.9, "The handoff and final state are linked to the workflow model."),
-      measured("multi-role", 6, 6, 0.9, "Actor sequence and AuthProfile mapping are explicit."),
-      measured("runtime-evidence", 6, 6, 0.95, "Each role transition has step-level evidence."),
+      scored("workflow-state-coverage", 6, 6, 0.9, "The handoff and final state are linked to the workflow model."),
+      scored("multi-role", 6, 6, 0.9, "Actor sequence and AuthProfile mapping are explicit."),
+      scored("runtime-evidence", 6, 6, 0.95, "Each role transition has step-level evidence."),
     ]
   },
   {
@@ -116,9 +120,9 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "Three requirement revisions in one system",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("requirement-understanding", 9, 9, 0.9, "Each revision retains its own source and semantic baseline."),
-      measured("scenario-coverage", 9, 9, 0.9, "Affected scenarios are recompiled without duplicating superseded cases."),
-      measured("multi-requirement", 3, 3, 0.95, "Requirement ownership remains isolated within one system."),
+      scored("requirement-understanding", 9, 9, 0.9, "Each revision retains its own source and semantic baseline."),
+      scored("scenario-coverage", 9, 9, 0.9, "Affected scenarios are recompiled without duplicating superseded cases."),
+      scored("multi-requirement", 3, 3, 0.95, "Requirement ownership remains isolated within one system."),
     ]
   },
   {
@@ -127,8 +131,8 @@ export const L3_GOLDEN_CORPUS: L3GoldenSample[] = [
     title: "Twenty deterministic Runner iterations",
     sourceKind: "sanitized-synthetic",
     checks: [
-      measured("runtime-evidence", 20, 20, 0.95, "All iterations have structured evidence and no open leases."),
-      measured("long-run-stability", 20, 20, 0.95, "The synthetic suite meets the 20-iteration stability sample."),
+      scored("runtime-evidence", 20, 20, 0.95, "All iterations have structured evidence and no open leases."),
+      scored("long-run-stability", 20, 20, 0.95, "The synthetic suite meets the 20-iteration stability sample."),
     ]
   },
   {
@@ -149,50 +153,58 @@ export function evaluateL3GoldenCorpus(input: {
   samples?: L3GoldenSample[];
 } = {}): L3GoldenCorpusReport {
   const samples = input.samples ?? L3_GOLDEN_CORPUS;
+  if (samples.some((sample) => sample.sourceKind !== "sanitized-synthetic")) {
+    throw new Error("The static L3 golden evaluator accepts sanitized synthetic samples only; real evidence must come from a verified Trial.");
+  }
   const sampleResults = samples.map(evaluateSample);
-  const metrics = aggregateMetrics(samples);
-  const releaseGate = buildReleaseGate(metrics, sampleResults);
+  const metrics = aggregateMetrics([]);
+  const syntheticMetrics = aggregateMetrics(samples, "scored");
+  const releaseGate = buildReleaseGate(metrics, syntheticMetrics, sampleResults);
   return {
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     seed: input.seed ?? "brain-creator-l3-baseline",
     sampleCount: sampleResults.length,
-    measuredSampleCount: sampleResults.filter((sample) => sample.passed !== null).length,
+    realSampleCount: 0,
+    measuredSampleCount: 0,
+    syntheticSampleCount: samples.length,
+    syntheticScoredSampleCount: sampleResults.filter((sample) => sample.passed !== null).length,
     sampleResults,
     metrics,
+    syntheticMetrics,
     releaseGate
   };
 }
 
 function evaluateSample(sample: L3GoldenSample): L3GoldenSampleResult {
-  const measuredChecks = sample.checks.filter((check) => check.status === "measured");
-  const failures = measuredChecks
+  const scoredChecks = sample.checks.filter((check) => check.status === "scored");
+  const failures = scoredChecks
     .filter((check) => check.total <= 0 || check.passed / check.total < check.threshold)
     .map((check) => `${check.dimension} is below threshold (${check.passed}/${check.total}; required ${check.threshold}).`);
   return {
     sampleId: sample.id,
     domain: sample.domain,
     sourceKind: sample.sourceKind,
-    passed: measuredChecks.length === 0 ? null : failures.length === 0,
+    passed: scoredChecks.length === 0 ? null : failures.length === 0,
     failures,
     checks: sample.checks
   };
 }
 
-function aggregateMetrics(samples: L3GoldenSample[]): Record<L3EvaluationDimension, L3EvaluationMetric> {
+function aggregateMetrics(samples: L3GoldenSample[], scoreStatus?: "scored"): Record<L3EvaluationDimension, L3EvaluationMetric> {
   const metrics = {} as Record<L3EvaluationDimension, L3EvaluationMetric>;
   for (const dimension of dimensions()) {
     const checks = samples.flatMap((sample) => sample.checks.filter((check) => check.dimension === dimension));
-    const measuredChecks = checks.filter((check) => check.status === "measured");
-    const passed = measuredChecks.reduce((total, check) => total + check.passed, 0);
-    const total = measuredChecks.reduce((count, check) => count + check.total, 0);
-    const threshold = measuredChecks.length === 0
+    const scoredChecks = checks.filter((check) => check.status === "scored");
+    const passed = scoredChecks.reduce((total, check) => total + check.passed, 0);
+    const total = scoredChecks.reduce((count, check) => count + check.total, 0);
+    const threshold = scoredChecks.length === 0
       ? 1
-      : Math.max(...measuredChecks.map((check) => check.threshold));
+      : Math.max(...scoredChecks.map((check) => check.threshold));
     metrics[dimension] = {
-      status: measuredChecks.length === 0 ? "not-measured" : "measured",
+      status: scoredChecks.length === 0 ? "not-measured" : scoreStatus ?? "scored",
       passed,
       total,
-      rate: measuredChecks.length === 0 ? null : total === 0 ? 0 : passed / total,
+      rate: scoredChecks.length === 0 ? null : total === 0 ? 0 : passed / total,
       threshold,
       sampleIds: checks.length === 0 ? [] : samples
         .filter((sample) => sample.checks.some((check) => check.dimension === dimension))
@@ -205,6 +217,7 @@ function aggregateMetrics(samples: L3GoldenSample[]): Record<L3EvaluationDimensi
 
 function buildReleaseGate(
   metrics: Record<L3EvaluationDimension, L3EvaluationMetric>,
+  syntheticMetrics: Record<L3EvaluationDimension, L3EvaluationMetric>,
   sampleResults: L3GoldenSampleResult[]
 ): L3ReleaseGate {
   const measuredDimensions = dimensions().filter((dimension) => metrics[dimension].status === "measured");
@@ -216,8 +229,9 @@ function buildReleaseGate(
   if (metrics["historical-bug-replay"].status === "not-measured") {
     blockers.push("Historical Bug replay detection is not measured.");
   }
-  if (metrics["long-run-stability"].status === "measured") {
-    blockers.push("Long-run stability is measured only with the synthetic Runner fixture.");
+  if (syntheticMetrics["long-run-stability"].status === "scored" &&
+      metrics["long-run-stability"].status === "not-measured") {
+    blockers.push("Long-run stability has synthetic-only coverage; real production stability is not measured.");
   }
   for (const dimension of measuredDimensions) {
     const metric = metrics[dimension];
@@ -226,7 +240,7 @@ function buildReleaseGate(
     }
   }
   for (const sample of sampleResults.filter((item) => item.passed === false)) {
-    blockers.push(`Golden sample ${sample.sampleId} is below one or more thresholds.`);
+    blockers.push(`Synthetic golden sample ${sample.sampleId} is below one or more thresholds.`);
   }
   return {
     status: blockers.length === 0 ? "candidate" : "blocked",
@@ -250,14 +264,14 @@ function dimensions(): L3EvaluationDimension[] {
   ];
 }
 
-function measured(
+function scored(
   dimension: L3EvaluationDimension,
   passed: number,
   total: number,
   threshold: number,
   note: string
 ): L3GoldenCheck {
-  return { dimension, status: "measured", passed, total, threshold, note };
+  return { dimension, status: "scored", passed, total, threshold, note };
 }
 
 function notMeasured(dimension: L3EvaluationDimension, note: string): L3GoldenCheck {

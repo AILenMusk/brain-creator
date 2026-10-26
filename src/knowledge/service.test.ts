@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryBrainCreatorRepository, JsonFileBrainCreatorRepository } from "../domain/repository.js";
-import type { RequirementContentPackage, TestDataProfile } from "../domain/types.js";
-import { encryptSecrets } from "../shared/crypto.js";
+import type { RequirementContentPackage, StateMachineModel, TestDataProfile } from "../domain/types.js";
+import { createWorkspaceIntegrityAuthenticator, encryptSecrets } from "../shared/crypto.js";
 import { SemanticSpineService } from "../brain/semanticSpine.js";
+import { hasValidExecutionEvidenceSnapshot } from "../execution/evidenceSnapshot.js";
 import { KnowledgeService } from "./service.js";
+import { RequirementSuiteRunService } from "./requirementSuiteRun.js";
 
 const tempDirs: string[] = [];
 
@@ -17,6 +19,93 @@ afterEach(async () => {
 });
 
 describe("KnowledgeService", () => {
+  it("resumes state-action exploration with the explicitly selected confirmed path", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({ name: "State path", key: "state-path", defaultLocale: "en-US" });
+    const system = {
+      id: "system-state-path",
+      name: "Orders",
+      environment: "test",
+      baseUrl: "https://orders.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://orders.example.test"],
+      status: "succeeded" as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    repository.systemProfiles.push(system);
+    service.bindSystem(project.id, system.id);
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("state-path", "Orders can be submitted and approved.")
+    });
+    const design = await service.generateTestDesign(ingested.requirementSet.id);
+    service.approveRequirementSet(ingested.requirementSet.id);
+    const intent = design.testIntents[0];
+    intent.preconditions = ["Order state is Draft"];
+    intent.expectedResults = ["Order state is Approved"];
+    intent.processModelRefs = ["order-state-path"];
+    intent.updatedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    const model: StateMachineModel = {
+      id: "order-state-path",
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id,
+      title: "Order approval paths",
+      states: [
+        { id: "draft", label: "Draft", initial: true, terminal: false, sourceRefs: ["requirement:state-path"] },
+        { id: "submitted", label: "Submitted", initial: false, terminal: false, sourceRefs: ["requirement:state-path"] },
+        { id: "review", label: "In review", initial: false, terminal: false, sourceRefs: ["requirement:state-path"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["requirement:state-path"] }
+      ],
+      transitions: [
+        { id: "submit", from: "draft", to: "submitted", trigger: "submit order", validity: "legal", sourceRefs: ["requirement:state-path"] },
+        { id: "send-review", from: "draft", to: "review", trigger: "request review", validity: "legal", sourceRefs: ["requirement:state-path"] },
+        { id: "approve-submitted", from: "submitted", to: "approved", trigger: "approve order", validity: "legal", sourceRefs: ["requirement:state-path"] },
+        { id: "approve-review", from: "review", to: "approved", trigger: "approve reviewed order", validity: "legal", sourceRefs: ["requirement:state-path"] }
+      ],
+      sourceRefs: ["requirement:state-path"],
+      confidence: 1,
+      status: "confirmed",
+      createdAt: now,
+      updatedAt: now
+    };
+    repository.stateMachineModels.push(model);
+
+    const ambiguous = service.compileExecutableCases(intent.id, system.id).executableCase;
+    expect(ambiguous.status).toBe("ambiguous");
+    const exploration = repository.explorationTasks.find((task) => task.kind === "state-action" && task.status === "pending");
+    expect(exploration).toBeDefined();
+    const selectedTransitionRefs = [
+      "state-machine:order-state-path#transition:submit",
+      "state-machine:order-state-path#transition:approve-submitted"
+    ];
+
+    expect(() => service.resolveExplorationTask({
+      taskId: exploration!.id,
+      outcome: "resolved",
+      evidenceRefs: ["requirement:state-path"],
+      selectedTransitionRefs: ["state-machine:foreign#transition:submit"]
+    })).toThrow("Selected transitions are outside the exploration scope");
+    expect(exploration!.status).toBe("pending");
+
+    const resolved = service.resolveExplorationTask({
+      taskId: exploration!.id,
+      outcome: "resolved",
+      evidenceRefs: ["requirement:state-path"],
+      selectedTransitionRefs
+    });
+
+    expect(exploration!.selectedTransitionRefs).toEqual(selectedTransitionRefs);
+    expect(intent.selectedTransitionRefs).toEqual(selectedTransitionRefs);
+    expect(resolved.resumed?.executableCase.compilationStages?.find((stage) => stage.stage === "requirement-path")?.verdict).toBe("ready");
+    expect(selectedTransitionRefs.every((reference) =>
+      resolved.resumed?.executableCase.steps.some((step) => step.sourceRefs.includes(reference))
+    )).toBe(true);
+    expect(repository.explorationTasks.some((task) => task.kind === "state-action" && task.status === "pending")).toBe(false);
+  });
+
   it("creates a knowledge project before a runtime system is bound", async () => {
     const knowledgeDir = await tempDir();
     const service = new KnowledgeService(new InMemoryBrainCreatorRepository(), knowledgeDir);
@@ -528,7 +617,8 @@ describe("KnowledgeService", () => {
     const root = await tempDir();
     const dataFile = join(root, "assets.json");
     const knowledgeDir = join(root, "knowledge");
-    const first = new KnowledgeService(new JsonFileBrainCreatorRepository(dataFile), knowledgeDir);
+    const repository = new JsonFileBrainCreatorRepository(dataFile);
+    const first = new KnowledgeService(repository, knowledgeDir);
     const project = await first.createProject({
       name: "Order Workflow",
       key: "order-eval-gate",
@@ -562,10 +652,8 @@ describe("KnowledgeService", () => {
       "Requirement Eval actions must be confirmed before approval"
     );
 
-    const restored = new KnowledgeService(
-      new JsonFileBrainCreatorRepository(dataFile),
-      knowledgeDir
-    );
+    const restoredRepository = new JsonFileBrainCreatorRepository(dataFile);
+    const restored = new KnowledgeService(restoredRepository, knowledgeDir);
     expect(restored.listRequirementSets(project.id)[0].evaluationGate?.actions[0].status).toBe("pending");
     await expect(
       restored.confirmEvaluationActions({
@@ -605,11 +693,41 @@ describe("KnowledgeService", () => {
     );
     expect(confirmationReport).toContain("If approval does not occur");
     expect(confirmationReport).toContain("reviewer@example.test");
+    expect(confirmed.evaluationGate.actions[0].resolutionNodeId).toBeTruthy();
+    expect(restored.listTestIntents(project.id).flatMap((intent) => intent.expectedResults)).not.toContain(
+      "Confirmed Eval resolution: If approval does not occur, the order remains in draft."
+    );
+    expect(
+      restoredRepository.knowledgeNodes.find(
+        (node) => node.id === confirmed.evaluationGate.actions[0].resolutionNodeId
+      )
+    ).toEqual(expect.objectContaining({
+      type: "requirement",
+      origin: "derived",
+      content: "If approval does not occur, the order remains in draft."
+    }));
     expect(restored.approveRequirementSet(ingested.requirementSet.id).status).toBe("approved");
     const compiled = restored.compileExecutableCases(design.testIntents[0].id).executableCase;
     expect(compiled.steps.every((step) =>
       step.sourceRefs.some((sourceRef) => sourceRef.includes("#eval-action-"))
     )).toBe(true);
+  });
+
+  it("removes legacy Eval-resolution notes from TestIntent oracles during scenario regeneration", async () => {
+    const service = new KnowledgeService(new InMemoryBrainCreatorRepository(), await tempDir());
+    const project = await service.createProject({ name: "Scope review", key: "scope-review", defaultLocale: "en-US" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("scope-review", "Users create and submit a request.")
+    });
+    const design = await service.generateTestDesign(ingested.requirementSet.id);
+    const intent = design.testIntents[0];
+    const originalExpectedResults = [...intent.expectedResults];
+    intent.expectedResults.push("Confirmed Eval resolution: A scope clarification, not an expected business result.");
+
+    await service.generateTestDesign(ingested.requirementSet.id);
+
+    expect(intent.expectedResults).toEqual(originalExpectedResults);
   });
 
   it("compiles only the selected intent instead of guessing hidden workflow actions", async () => {
@@ -754,14 +872,17 @@ describe("KnowledgeService", () => {
       confirm: true
     });
 
-    expect(design.gaps[0].status).toBe("resolved");
+    expect(design.gaps[0].status).toBe("open");
     expect(confirmation.evaluationGate.actions[0].resolutionNodeId).toEqual(expect.any(String));
+    expect(confirmation.resolvedGapIds).toEqual([]);
     expect(
       repository.knowledgeNodes.find(
         (node) => node.id === confirmation.evaluationGate.actions[0].resolutionNodeId
       )
     ).toEqual(expect.objectContaining({ content: "The invoice approval threshold is 1000." }));
-    expect(service.approveRequirementSet(ingested.requirementSet.id).status).toBe("approved");
+    expect(() => service.approveRequirementSet(ingested.requirementSet.id)).toThrow(
+      "Requirement clarification gaps must be resolved before approval"
+    );
   });
 
   it("blocks baseline approval when requirement clauses contradict each other", async () => {
@@ -872,6 +993,7 @@ describe("KnowledgeService", () => {
       updatedAt: new Date().toISOString()
     });
     service.bindSystem(project.id, "system-evidence");
+    repository.systemProfiles[0]!.executionProvenance = "synthetic";
     const ingested = await service.ingestRequirement({
       projectId: project.id,
       contentPackage: requirementPackage("evidence", "Users create an order form.")
@@ -879,13 +1001,34 @@ describe("KnowledgeService", () => {
     const design = await service.generateTestDesign(ingested.requirementSet.id);
     service.approveRequirementSet(ingested.requirementSet.id);
     const compiled = service.compileExecutableCases(design.testIntents[0].id).executableCase;
+    const runs = new RequirementSuiteRunService(repository);
+    const run = runs.create({
+      knowledgeProjectId: project.id,
+      systemId: "system-evidence",
+      cases: [{ executableCaseId: compiled.id, title: compiled.title }],
+      continueOnBlocked: true
+    });
+    runs.beginNext(run.id);
+    expect(() => service.createExecutionEvidence({
+      projectId: project.id,
+      systemId: "system-evidence",
+      executableCaseId: compiled.id,
+      requirementSuiteRunId: "missing-run",
+      testCaseId: "test-case-evidence",
+      contextPackPath: "context/evidence.json"
+    })).toThrow("does not match the active suite case");
     const evidence = service.createExecutionEvidence({
       projectId: project.id,
       systemId: "system-evidence",
       executableCaseId: compiled.id,
+      requirementSuiteRunId: run.id,
       testCaseId: "test-case-evidence",
       contextPackPath: "context/evidence.json"
     });
+    expect(evidence.requirementSuiteRunId).toBe(run.id);
+    expect(evidence.provenance).toBe("synthetic");
+    repository.systemProfiles[0]!.executionProvenance = "real-system";
+    expect(evidence.provenance).toBe("synthetic");
 
     const completed = await service.completeExecutionEvidence(evidence.id, {
       status: "failed",
@@ -1283,7 +1426,16 @@ describe("KnowledgeService", () => {
 
   it("does not claim conformance for legacy paths without files or an oracle", async () => {
     const repository = new InMemoryBrainCreatorRepository();
-    const service = new KnowledgeService(repository, await tempDir());
+    const workDir = await tempDir();
+    const integrityAuthenticator = createWorkspaceIntegrityAuthenticator(workDir);
+    const service = new KnowledgeService(
+      repository,
+      join(workDir, "knowledge"),
+      workDir,
+      undefined,
+      undefined,
+      integrityAuthenticator
+    );
     const project = await service.createProject({ name: "Conformance", key: "conformance", defaultLocale: "en-US" });
     repository.systemProfiles.push({
       id: "system-conformance",
@@ -1351,6 +1503,11 @@ describe("KnowledgeService", () => {
     });
 
     expect(completed.assuranceLevel).toBe("limited");
+    const conformance = repository.conformanceResults.find((item) => item.executionEvidenceId === evidence.id);
+    expect(completed.semanticSnapshotHash).toMatch(/^v1:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[a-f0-9]{64}$/);
+    expect(hasValidExecutionEvidenceSnapshot(completed, conformance, integrityAuthenticator)).toBe(true);
+    completed.reporterResult!.assertions[0].actual = "forged result";
+    expect(hasValidExecutionEvidenceSnapshot(completed, conformance, integrityAuthenticator)).toBe(false);
     expect(repository.conformanceResults).toEqual([
       expect.objectContaining({
         executionEvidenceId: evidence.id,

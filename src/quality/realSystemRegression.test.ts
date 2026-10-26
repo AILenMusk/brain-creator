@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomInt } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -208,6 +209,7 @@ describe("real system regression samples", () => {
         allowCreate: true
       });
       expect(prepared.status).toBe("needs-agent-execution");
+      context.testDataProvider.markSent(prepared.task!.id);
       const created = context.testDataProvider.submit({
         taskId: prepared.task!.id,
         status: "succeeded",
@@ -242,6 +244,10 @@ describe("real system regression samples", () => {
         allowCreate: true
       });
       expect(cleanup.task?.action).toBe("cleanup");
+      const cleanupNotice = context.testDataProvider.cleanupNotice(cleanup.task!.id);
+      expect(cleanupNotice.message).toContain("demand:regression-001");
+      context.testDataProvider.acknowledgeCleanupNotice(cleanup.task!.id, cleanupNotice.sha256);
+      context.testDataProvider.markSent(cleanup.task!.id);
       const released = context.testDataProvider.submit({
         taskId: cleanup.task!.id,
         status: "succeeded",
@@ -388,7 +394,29 @@ async function startRegressionSystem() {
     response.writeHead(200);
     response.end('<title>Recruiting home</title><a href="/module">Open recruitment module</a>');
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let listening = false;
+  for (let attempt = 0; attempt < 8 && !listening; attempt += 1) {
+    const port = randomInt(49_152, 65_536);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(port, "127.0.0.1");
+      });
+      listening = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    }
+  }
+  if (!listening) throw new Error("Could not start the local regression server on a free high port.");
   const address = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${address.port}/`,

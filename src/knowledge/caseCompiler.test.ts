@@ -34,6 +34,193 @@ describe("Agent executable case compiler", () => {
     expect(validateStepProvenance(result.steps)).toEqual({ valid: true, invalidStepIds: [] });
   });
 
+  it("compiles a unique confirmed state path from the declared precondition to the target state", () => {
+    const model = stateModel();
+    const pathModel: StateMachineModel = {
+      ...model,
+      states: [
+        model.states[0],
+        { id: "submitted", label: "Submitted", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [
+        {
+          ...model.transitions[0],
+          to: "submitted",
+          trigger: "submit",
+          actor: "requester",
+          businessObject: "order",
+          sideEffects: ["submission timestamp is recorded", "manager queue receives the order"]
+        },
+        { ...model.transitions[0], id: "transition-approve", from: "submitted", to: "approved", trigger: "approve", actor: "approver" }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({ preconditions: ["Order state is Draft"], expectedResults: ["Order state is Approved"], processModelRefs: [pathModel.id] }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.source).toBe("state-machine");
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.steps).toHaveLength(6);
+    expect(result.steps[1].instruction).toContain("Draft to Submitted as requester");
+    expect(result.steps[1].instruction).toContain("Business object: order");
+    expect(result.steps[1].instruction).toContain("Business side effect: submission timestamp is recorded");
+    expect(result.steps[1].instruction).toContain("Business side effect: manager queue receives the order");
+    expect(result.steps[4].instruction).toContain("Submitted to Approved as approver");
+    expect(result.steps[4].sourceRefs).toContain("state-machine:state-model-1#transition:transition-approve");
+  });
+
+  it("resolves a long confirmed state path without recursive stack growth", () => {
+    const model = stateModel();
+    const intermediateStates = Array.from({ length: 6000 }, (_, index) => ({
+      id: `stage-${index}`,
+      label: `Stage ${index}`,
+      initial: false,
+      terminal: false,
+      sourceRefs: ["attachment:long-process"]
+    }));
+    const states = [model.states[0], ...intermediateStates, model.states[1]];
+    const pathTransitions = states.slice(0, -1).map((state, index) => ({
+      ...model.transitions[0],
+      id: `transition-${index}`,
+      from: state.id,
+      to: states[index + 1].id,
+      sourceRefs: ["attachment-analysis:long-process#edge"]
+    }));
+    const pathModel: StateMachineModel = { ...model, states, transitions: pathTransitions };
+
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Submitted"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.steps).toHaveLength(pathTransitions.length * 3);
+  });
+
+  it("does not select one of multiple confirmed state paths", () => {
+    const model = stateModel();
+    const pathModel: StateMachineModel = {
+      ...model,
+      states: [
+        model.states[0],
+        { id: "submitted", label: "Submitted", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "review", label: "In review", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "submit", to: "submitted" },
+        { ...model.transitions[0], id: "review", to: "review" },
+        { ...model.transitions[0], id: "approve-submitted", from: "submitted", to: "approved" },
+        { ...model.transitions[0], id: "approve-review", from: "review", to: "approved" }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({ preconditions: ["Order state is Draft"], expectedResults: ["Order state is Approved"], processModelRefs: [pathModel.id] }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("Multiple confirmed state paths");
+    expect(result.ambiguity?.sourceRefs).toEqual(expect.arrayContaining([
+      "state-machine:state-model-1#transition:approve-submitted",
+      "state-machine:state-model-1#transition:approve-review"
+    ]));
+  });
+
+  it("compiles only the explicitly selected confirmed path after review", () => {
+    const model = stateModel();
+    const pathModel: StateMachineModel = {
+      ...model,
+      states: [
+        model.states[0],
+        { id: "submitted", label: "Submitted", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "review", label: "In review", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "submit", to: "submitted" },
+        { ...model.transitions[0], id: "review", to: "review" },
+        { ...model.transitions[0], id: "approve-submitted", from: "submitted", to: "approved" },
+        { ...model.transitions[0], id: "approve-review", from: "review", to: "approved" }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"],
+        processModelRefs: [pathModel.id],
+        selectedTransitionRefs: [
+          "state-machine:state-model-1#transition:submit",
+          "state-machine:state-model-1#transition:approve-submitted"
+        ]
+      }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.steps).toHaveLength(6);
+    expect(result.processPathSourceRefs).toContain("state-machine:state-model-1#transition:submit");
+    expect(result.processPathSourceRefs).toContain("state-machine:state-model-1#transition:approve-submitted");
+    expect(result.processPathSourceRefs).not.toContain("state-machine:state-model-1#transition:review");
+  });
+
+  it("does not compile when a selected transition reference is outside the confirmed model", () => {
+    const model = stateModel();
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"],
+        processModelRefs: [model.id],
+        selectedTransitionRefs: ["state-machine:another-model#transition:submit"]
+      }),
+      workflowModels: [],
+      stateMachineModels: [model],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("not all present in the confirmed model scope");
+  });
+
+  it("does not fall back to generic clause steps when explicit states have no confirmed route", () => {
+    const model = stateModel();
+    const disconnectedModel: StateMachineModel = {
+      ...model,
+      states: [
+        model.states[0],
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: []
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"]
+      }),
+      workflowModels: [],
+      stateMachineModels: [disconnectedModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("will not replace a missing path with generic clause steps");
+    expect(result.processPathSourceRefs).toContain("state-machine:state-model-1");
+  });
+
   it("does not invent a hidden create action for an unrelated fill intent", () => {
     const result = compileIntentSemanticSteps({
       intent: intent({ objective: "Fill the customer form", expectedResults: ["The form is accepted"] }),

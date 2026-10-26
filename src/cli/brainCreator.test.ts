@@ -24,7 +24,7 @@ function dependencies(
     inspectMcpConfig: vi.fn(async () => ({
       path: "C:\\project\\.mcp.json",
       exists: true,
-      server: { command: "npx", args: ["brain-creator-mcp"], env: {} }
+      server: { command: "npx", args: ["--yes", "--package=brain-creator", "brain-creator-mcp"], env: {} }
     })),
     installCodexPlugin: vi.fn(async () => ({
       marketplaceRoot: "C:\\project\\node_modules\\brain-creator",
@@ -62,6 +62,11 @@ function dependencies(
       processedRuns: 1,
       runs: []
     })),
+    captureAuth: vi.fn(async () => ({
+      profile: { id: "auth_1", status: "succeeded" },
+      verification: { status: "valid", finalUrl: "https://system.example.test/home", title: "System" }
+    })) as never,
+    waitForManualLogin: vi.fn(async () => undefined),
     ...overrides
   };
 }
@@ -92,6 +97,7 @@ describe("Brain Creator CLI", () => {
       expect(output).toContain("brain-creator export");
       expect(output).toContain("brain-creator artifacts");
       expect(output).toContain("brain-creator runner");
+      expect(output).toContain("brain-creator auth capture");
       expect(output).toContain("brain-creator mcp");
       expect(output).not.toContain("brain-creator-install-assets");
       expect(io.stderr).not.toHaveBeenCalled();
@@ -108,7 +114,7 @@ describe("Brain Creator CLI", () => {
     expect(output).toContain("Compatibility aliases");
   });
 
-  it.each(["init", "doctor", "config", "plugin", "export", "artifacts", "runner", "mcp"])(
+  it.each(["init", "doctor", "config", "plugin", "export", "artifacts", "runner", "auth", "mcp"])(
     "prints focused help for the %s command",
     async (command) => {
       const io = createIo();
@@ -118,6 +124,39 @@ describe("Brain Creator CLI", () => {
       expect(io.stderr).not.toHaveBeenCalled();
     }
   );
+
+  it("captures auth only for the selected system profile and reports verified status", async () => {
+    const io = createIo();
+    const deps = dependencies();
+
+    expect(await runBrainCreatorCli(
+      ["auth", "capture", "--system", "system-test5", "--profile", "auth-current", "--target", "C:\\project", "--json"],
+      io,
+      deps
+    )).toBe(0);
+
+    expect(deps.captureAuth).toHaveBeenCalledWith({
+      targetDir: "C:\\project",
+      systemId: "system-test5",
+      authProfileId: "auth-current",
+      waitForManualLogin: deps.waitForManualLogin
+    });
+    expect(io.stdout).toHaveBeenCalledWith(expect.stringContaining('"command": "auth capture"'));
+    expect(io.stderr.mock.calls.join("\n")).not.toMatch(/cookie|password|token/i);
+  });
+
+  it("does not report auth capture success when verification fails", async () => {
+    const io = createIo();
+    const deps = dependencies({ captureAuth: vi.fn(async () => { throw new Error("fresh-context verification failed"); }) as never });
+
+    expect(await runBrainCreatorCli(
+      ["auth", "capture", "--system", "system-test5", "--profile", "auth-current"],
+      io,
+      deps
+    )).toBe(1);
+    expect(io.stdout).not.toHaveBeenCalled();
+    expect(io.stderr.mock.calls.join("\n")).toContain("fresh-context verification failed");
+  });
 
   it("initializes assets and MCP config in one idempotent command", async () => {
     const io = createIo();

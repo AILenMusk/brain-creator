@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createInterface } from "node:readline/promises";
 import { buildDoctorReport, formatDoctorReport } from "./doctor.js";
 import { installBrainCreatorAssets } from "./installAssets.js";
 import { installBrainCreatorCodexPlugin } from "./installCodexPlugin.js";
@@ -9,7 +10,11 @@ import {
   type BrainCreatorAgentProvider
 } from "./writeMcpConfig.js";
 import { startBrainCreatorServer } from "../mcp/server.js";
-import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "../mcp/handlers.js";
+import {
+  createBrainCreatorMcpContext,
+  handleBrainCreatorTool,
+  validateScheduledTrialBinding
+} from "../mcp/handlers.js";
 import { runScheduledSuites } from "../runner/runner.js";
 import { exportCaseSuiteArchive } from "../storage/artifactArchive.js";
 import {
@@ -29,6 +34,7 @@ import {
 } from "../shared/workspace.js";
 import { BRAIN_CREATOR_VERSION } from "../version.js";
 import { isCliEntryPoint } from "./entrypoint.js";
+import { captureAuthState } from "../agent/authStateCapture.js";
 
 type CliIo = {
   stdout: (message: string) => void;
@@ -48,6 +54,8 @@ export type BrainCreatorCliDependencies = {
   rollbackArtifactMigration: typeof rollbackArtifactMigrationFromWorkspace;
   retainArtifacts: typeof retainArtifactsFromWorkspace;
   runRunner: typeof runRunnerFromWorkspace;
+  captureAuth: typeof captureAuthForWorkspace;
+  waitForManualLogin: () => Promise<void>;
 };
 
 const defaultDependencies: BrainCreatorCliDependencies = {
@@ -62,7 +70,9 @@ const defaultDependencies: BrainCreatorCliDependencies = {
   migrateArtifacts: migrateArtifactsFromWorkspace,
   rollbackArtifactMigration: rollbackArtifactMigrationFromWorkspace,
   retainArtifacts: retainArtifactsFromWorkspace,
-  runRunner: runRunnerFromWorkspace
+  runRunner: runRunnerFromWorkspace,
+  captureAuth: captureAuthForWorkspace,
+  waitForManualLogin: promptForManualLogin
 };
 
 const help = `Brain Creator ${BRAIN_CREATOR_VERSION}
@@ -70,6 +80,7 @@ const help = `Brain Creator ${BRAIN_CREATOR_VERSION}
 Usage:
   brain-creator init [--provider <provider>] [--with-plugin] [--target <path>]
   brain-creator doctor [--json]
+  brain-creator auth capture --system <system-id> --profile <auth-profile-id> [--target <path>] [--json]
   brain-creator config [show] [--target <path>] [--json]
   brain-creator config write [--provider <provider>] [--global] [--target <path>]
   brain-creator plugin install [--target <path>]
@@ -101,6 +112,7 @@ const commandHelp: Record<string, string> = {
   export: `Usage: brain-creator export --suite <suite-run-id> [--target <path>] [--output <path>] [--json]\n\nExports a portable Suite archive with evidence manifest and hashes.`,
   artifacts: `Usage:\n  brain-creator artifacts migrate [--target <path>] [--confirm]\n  brain-creator artifacts rollback --migration <id> --confirm [--target <path>]\n  brain-creator artifacts retention --older-than-days <days> [--system <id>] [--target <path>] [--confirm]\n\nMigration and retention are dry-run by default. Mutations require --confirm.`,
   runner: `Usage: brain-creator runner run --owner <name> [--project <id>] [--system <id>] [--lease-ms <n>] [--lease-renewal-ms <n>] [--max-wall-time-ms <n>] [--max-runs <n>] [--max-cases <n>] [--target <path>] [--json]\n\nClaims due stability suites, renews long-running leases, enforces a wall-time budget, continues approved cases through the existing Runner/Facade path, and releases the lease when execution must wait.`,
+  auth: `Usage: brain-creator auth capture --system <system-id> --profile <auth-profile-id> [--target <path>] [--json]\n\nOpens a dedicated browser for user-operated sign-in, blocks top-level navigation outside the system allowlist, encrypts captured state at rest, and verifies it in a fresh browser context.`,
   mcp: `Usage: brain-creator mcp\n\nStarts the Brain Creator MCP server over stdio.`
 };
 
@@ -159,6 +171,9 @@ export async function runBrainCreatorCli(
     }
     if (command === "runner") {
       return await runRunner(commandArgs, json, io, dependencies);
+    }
+    if (command === "auth") {
+      return await runAuth(commandArgs, json, io, dependencies);
     }
     if (command === "migrate" && commandArgs[0] === "artifacts") {
       return await runArtifacts(["migrate", ...commandArgs.slice(1)], json, io, dependencies);
@@ -423,6 +438,49 @@ async function runRunner(
   return runnerExitCode(result.status);
 }
 
+async function runAuth(
+  args: string[],
+  json: boolean,
+  io: CliIo,
+  dependencies: BrainCreatorCliDependencies
+) {
+  if (args[0] !== "capture") {
+    throw new Error("Unknown auth command. Use: brain-creator auth capture");
+  }
+  const actionArgs = args.slice(1);
+  assertAllowedArgs(actionArgs, ["--target", "--system", "--profile"], []);
+  const systemId = optionValue(actionArgs, "--system");
+  const authProfileId = optionValue(actionArgs, "--profile");
+  if (!systemId) throw new Error("--system requires a value");
+  if (!authProfileId) throw new Error("--profile requires a value");
+
+  io.stderr("A dedicated browser window will open. Sign in there; credentials are never entered in this terminal or chat.");
+  const result = await dependencies.captureAuth({
+    targetDir: optionValue(actionArgs, "--target"),
+    systemId,
+    authProfileId,
+    waitForManualLogin: dependencies.waitForManualLogin
+  });
+  writeSuccess(
+    io,
+    json,
+    "auth capture",
+    result,
+    `Authentication profile ${result.profile.id} was verified in a fresh browser context.`
+  );
+  return 0;
+}
+
+async function promptForManualLogin() {
+  if (!process.stdin.isTTY) throw new Error("auth capture requires an interactive terminal");
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    await prompt.question("After signing in to the allowlisted target in the browser, return here and press Enter. Do not enter credentials in this terminal or chat. ");
+  } finally {
+    prompt.close();
+  }
+}
+
 async function exportSuiteFromWorkspace(input: {
   suiteRunId: string;
   targetDir?: string;
@@ -511,6 +569,7 @@ async function runRunnerFromWorkspace(input: {
   });
   return runScheduledSuites({
     controller: context.requirementSuiteRuns,
+    validateRun: (run) => validateScheduledTrialBinding(context, run),
     owner: input.owner,
     knowledgeProjectId: input.knowledgeProjectId,
     systemId: input.systemId,
@@ -538,6 +597,29 @@ async function runRunnerFromWorkspace(input: {
         throw new Error(message || "Runner Facade execution failed");
       }
     }
+  });
+}
+
+async function captureAuthForWorkspace(input: {
+  targetDir?: string;
+  systemId: string;
+  authProfileId: string;
+  waitForManualLogin: () => Promise<void>;
+}) {
+  const workspace = resolveBrainCreatorWorkspace(input.targetDir ?? process.cwd(), process.env);
+  const context = createBrainCreatorMcpContext({ workDir: workspace });
+  const system = context.repository.systemProfiles.find((item) => item.id === input.systemId);
+  if (!system) throw new Error("Business system not found");
+  const authProfile = context.repository.authProfiles.find(
+    (item) => item.id === input.authProfileId && item.projectId === system.id
+  );
+  if (!authProfile) throw new Error("Auth profile does not belong to the selected business system");
+  return captureAuthState({
+    workDir: workspace,
+    system,
+    authProfile,
+    service: context.service,
+    waitForManualLogin: input.waitForManualLogin
   });
 }
 

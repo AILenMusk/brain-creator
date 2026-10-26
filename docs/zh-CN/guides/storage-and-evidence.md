@@ -91,6 +91,10 @@ npx brain-creator export --suite <suite-run-id> --output exports/suite.zip
 
 ## 结构化执行证据
 
+当宿主只能提供只读 DOM／无障碍树观察时，页面证据可以不包含 `screenshotPath`。
+此类采集会标记为 `host-accessibility-observation`，不会生成虚假的截图 ID；定位置信度会受限，ProbeResult 会明确记录缺少截图证据。
+它可用于有界探索，但不能作为执行证据或强业务断言。可用时，真实浏览器采集仍应附带经过校验的截图产物。
+
 执行证据现在区分“运行成功”和“需求验证强度”。一条证据可以包含：
 
 - `assertionContracts`：带需求来源引用、证据要求和类型的断言契约。
@@ -115,3 +119,7 @@ Suite 报告还会统计可信、已验证和已隔离的场景证据。
 ## 鉴权密钥处理
 
 新的鉴权密文使用 `.brain-creator/secret.key` 中的随机本地密钥。可通过 `BRAIN_CREATOR_SECRET_KEY` 使用外部托管密钥，也可通过 `BRAIN_CREATOR_SECRET_KEY_FILE` 指定密钥文件；环境变量优先。已有 `enc:v1` 数据在读取配置时会先解密，再重新加密为 `enc:v2`。生成的 token/cookie seed 只引用 `BRAIN_CREATOR_AUTH_TOKEN` 或 `BRAIN_CREATOR_AUTH_COOKIE`，不会写入凭据值。所有产物阶段都会匹配当前受保护凭据值，以及私钥、JWT、Bearer Token、明文 password/token/cookie 字段等高置信凭据模式。
+
+## 证据完整性密钥托管与轮换
+
+运行投影与执行语义快照的 HMAC 默认使用 workspace 密钥。需要独立托管时，配置 `BRAIN_CREATOR_INTEGRITY_KEY` 或 `BRAIN_CREATOR_INTEGRITY_KEY_FILE`（二选一）；`BRAIN_CREATOR_INTEGRITY_KEY_ID` 标识当前密钥，默认 `external-current`。新签名包含 key ID，格式为 `v1:<key-id>:<digest>`。轮换期间，将旧密钥放在 `BRAIN_CREATOR_INTEGRITY_PREVIOUS_KEYS` JSON 对象中，以 key ID 映射密钥值；新签名始终只使用当前密钥，验证可按 key ID 校验新签名，并在旧密钥仍可用时校验旧的无 ID 签名。更改配置后需重启 MCP/CLI 进程。仅当保留证据均已重新签名或明确失去资格后，才移除旧密钥；被移除密钥签名的记录将无法验证，不能用于可信晋升。密钥值必须通过受保护的环境注入或访问受控的密钥文件提供，不会写入报告或日志。验证缺失密钥时不会创建新密钥。

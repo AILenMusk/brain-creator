@@ -64,9 +64,14 @@ import {
 } from "../storage/artifactWorkspace.js";
 import { writeStaticSuiteExecutionReport } from "../execution/staticSuiteReport.js";
 import { writeStaticDocumentSuiteReport } from "../execution/staticDocumentSuiteReport.js";
+import { configuredPostconditionVerifier } from "../execution/configuredPostconditionVerifier.js";
 import type {
   ExecutionPostconditionVerifier,
   PostconditionVerification
+} from "../execution/postconditionVerifier.js";
+import {
+  validateManualPostconditionEvidenceArtifacts,
+  validatePostconditionVerificationArtifacts
 } from "../execution/postconditionVerifier.js";
 import {
   browserObservationCapability,
@@ -86,6 +91,7 @@ import {
 } from "../knowledge/systemExplorer.js";
 import {
   TestDataProviderService,
+  type TestDataNoEffectVerifier,
   type TestDataSubmitResult
 } from "../knowledge/testDataProvider.js";
 import { ExecutionPreflightService } from "../knowledge/executionPreflight.js";
@@ -93,7 +99,7 @@ import { StatefulExplorationPlanService } from "../knowledge/statefulExploration
 import { OnboardingPlanService } from "../knowledge/onboardingPlan.js";
 import { buildCaseDependencyGraph } from "../knowledge/caseDependencyGraph.js";
 import { RequirementSuiteRunService } from "../knowledge/requirementSuiteRun.js";
-import { RunLedgerService } from "../knowledge/runLedger.js";
+import { RunLedgerService, verifyRunLedgerIntegrityChains } from "../knowledge/runLedger.js";
 import { ExecutionDiagnosisService } from "../knowledge/executionDiagnosis.js";
 import {
   classifyEvidenceFailure,
@@ -126,7 +132,7 @@ import {
   plannerOutputFromResult
 } from "../brain/harnessSchema.js";
 import { HarnessRuntime } from "../brain/harness.js";
-import type { BrainEvalResult } from "../brain/types.js";
+import type { BrainEvalResult, EvaluationTrial } from "../brain/types.js";
 import { SemanticSpineService } from "../brain/semanticSpine.js";
 import { SystemBrainSnapshotService } from "../brain/systemSnapshot.js";
 import {
@@ -134,6 +140,7 @@ import {
   TestDataBrainService,
   type TestDataProvider
 } from "../brain/testdata.js";
+import { configuredTestDataAdapter } from "../brain/configuredTestDataAdapter.js";
 import {
   normalizeReporterExitCode,
   parsePlaywrightJsonReport
@@ -143,14 +150,22 @@ import {
   type MutationOutcome
 } from "../brain/scenarioAssurance.js";
 import { EvaluationIntegrityService } from "../evaluation/evaluationIntegrity.js";
-import { calculateEvaluationTrialMetrics } from "../evaluation/evaluationMetrics.js";
+import { authCheckpointBinding } from "../evaluation/authCheckpointBinding.js";
+import { calculateEvaluationTrialMetrics, isLinkedEvaluationRun } from "../evaluation/evaluationMetrics.js";
+import { revalidateExecutionEvidence, revalidateRunLedgerActionEvidence } from "../evaluation/evidenceRevalidation.js";
+import {
+  historicalEvidenceSourceFingerprint,
+  reevaluateHistoricalEvidence
+} from "../evaluation/historicalEvidenceReevaluation.js";
+import { validateExecutionArtifacts } from "../execution/artifactValidation.js";
+import { hasValidExecutionEvidenceSnapshot } from "../execution/evidenceSnapshot.js";
 import { RequirementGateService } from "../evaluation/requirementGate.js";
 import { parseCaseSource, summarizeDocumentCases, type ParsedCaseSource } from "../caseSource/parser.js";
 import { writeXlsxCaseSourceResults } from "../caseSource/writeBack.js";
 import { id } from "../shared/id.js";
 import { readRuntimeIdentity } from "../shared/runtimeIdentity.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
-import { decryptSecrets } from "../shared/crypto.js";
+import { createWorkspaceIntegrityAuthenticator, decryptSecrets } from "../shared/crypto.js";
 import { redactSensitiveText, scanSensitivePatterns, scanSensitiveValues } from "../shared/secretScan.js";
 import type {
   AgentRun,
@@ -171,6 +186,7 @@ import type {
   ExecutionDiagnosisVerdict,
   ExecutionPlan,
   ExecutionFailureType,
+  ExecutionProvenance,
   ExecutionPreflightCheck,
   Gap,
   RequirementSuiteCaseOutcome,
@@ -212,6 +228,7 @@ export type BrainCreatorMcpContext = {
   evaluationIntegrity: EvaluationIntegrityService;
   requirementGate: RequirementGateService;
   workDir: string;
+  testDataProviderStatus: "configured" | "not-configured" | "synthetic-test-only";
   agentBridge?: AgentBridgeWithMetadata;
   runner?: CommandRunner;
   structuredReporter?: boolean;
@@ -229,6 +246,28 @@ export type BrainCreatorMcpContext = {
     persist?: boolean;
   }) => Promise<{ configuration?: RuntimeConfiguration; bridgeProvider?: string; connectorStatus: string; path: string }>;
 };
+
+export function validateScheduledTrialBinding(
+  context: BrainCreatorMcpContext,
+  run: RequirementSuiteRun,
+  requestedTrialId?: string
+) {
+  if (requestedTrialId && run.evaluationTrialId !== requestedTrialId) {
+    throw new Error("Requirement suite run belongs to another evaluation trial");
+  }
+  if (!run.evaluationTrialId) return;
+  const binding = context.evaluationIntegrity.validateExecutionBinding({
+    trialId: run.evaluationTrialId,
+    knowledgeProjectId: run.knowledgeProjectId,
+    systemId: run.systemId,
+    executableCaseIds: run.caseRuns.map((item) => item.executableCaseId),
+    requirementSetIds: run.requirementSetIds,
+    runtimeBuildIdentity: evaluationRuntimeBuildIdentity(context)
+  });
+  if (!binding.valid) {
+    throw new Error(`Evaluation trial binding is invalid: ${binding.reasons.join("; ")}`);
+  }
+}
 
 type HostAgentTaskPackage = {
   status: "needs_agent_execution";
@@ -253,6 +292,7 @@ type CreateContextInput = {
   authRefreshRegistry?: AuthStateRefreshRegistry;
   authRefreshAdapters?: AuthRefreshAdapter[];
   testDataProviders?: TestDataProvider[];
+  testDataNoEffectVerifier?: TestDataNoEffectVerifier;
   postconditionVerifier?: ExecutionPostconditionVerifier;
   knowledgeDir?: string;
   feishuReader?: RequirementSourceReader;
@@ -265,6 +305,10 @@ export function createBrainCreatorMcpContext(
   const workDir = input.workDir ?? resolveBrainCreatorWorkspace();
   const initialRuntimeConfiguration = readRuntimeConfiguration(workDir);
   const initialRuntimeEnvironment = runtimeEnvironment(initialRuntimeConfiguration, process.env);
+  const configuredTestData = configuredTestDataAdapter(workDir);
+  if (input.testDataProviders?.length && configuredTestData.status === "configured") {
+    throw new Error("Provide Testdata providers either through context injection or the configured adapter module, not both");
+  }
   const authStateMaterializer = input.authStateMaterializer ?? materializeBrowserAuthState;
   const genericAuthRefreshAdapters: AuthRefreshAdapter[] = [
     {
@@ -304,7 +348,8 @@ export function createBrainCreatorMcpContext(
   const providerRegistry = new EvaluationProviderRegistry({
     environment: initialRuntimeEnvironment
   });
-  const evaluationIntegrity = new EvaluationIntegrityService(repository);
+  const integrityAuthenticator = createWorkspaceIntegrityAuthenticator(workDir);
+  const evaluationIntegrity = new EvaluationIntegrityService(repository, integrityAuthenticator);
   const requirementGate = new RequirementGateService(repository);
   const service = new BrainCreatorService(repository);
   const configuredAuthProviders = new Set(
@@ -324,7 +369,8 @@ export function createBrainCreatorMcpContext(
     input.knowledgeDir ?? resolveBrainCreatorKnowledgeDir(workDir),
     workDir,
     systemBrainSnapshots,
-    semanticSpine
+    semanticSpine,
+    integrityAuthenticator
   );
   const requirementAnalysisHarness = new RequirementAnalysisHostHarness(
     repository,
@@ -334,20 +380,26 @@ export function createBrainCreatorMcpContext(
   );
   const testDataBrain = new TestDataBrainService(repository, [
     ...(input.testDataProviders ?? []),
-    new InMemoryTestDataProvider("local-fixture-provider")
+    ...configuredTestData.providers,
+    ...(process.env.NODE_ENV === "test" && !input.testDataProviders?.length && configuredTestData.status !== "configured"
+      ? [new InMemoryTestDataProvider("local-fixture-provider")]
+      : [])
   ]);
   const testDataProvider = new TestDataProviderService(
     repository,
     knowledgeService,
     join(workDir, ".brain-creator"),
-    testDataBrain
+    testDataBrain,
+    input.testDataNoEffectVerifier ?? configuredTestData.noEffectVerifier
   );
   const executionPreflight = new ExecutionPreflightService(repository);
-  const runLedger = new RunLedgerService(repository);
+  const runLedger = new RunLedgerService(repository, undefined, undefined, integrityAuthenticator);
   const executionDiagnosis = new ExecutionDiagnosisService(repository);
   const requirementSuiteRuns = new RequirementSuiteRunService(
     repository,
-    runLedger
+    runLedger,
+    undefined,
+    evaluationIntegrity
   );
   const statefulExplorationPlans = new StatefulExplorationPlanService(
     repository,
@@ -386,6 +438,11 @@ export function createBrainCreatorMcpContext(
     evaluationIntegrity,
     requirementGate,
     workDir,
+    testDataProviderStatus: input.testDataProviders?.length || configuredTestData.status === "configured"
+      ? "configured"
+      : process.env.NODE_ENV === "test"
+        ? "synthetic-test-only"
+        : "not-configured",
     agentBridge:
       input.agentBridge ??
       (input.runner
@@ -397,7 +454,7 @@ export function createBrainCreatorMcpContext(
     authStateMaterializer,
     authStateRefresher: input.authStateRefresher,
     authRefreshRegistry: input.authRefreshRegistry ?? createRuntimeAuthRefreshRegistry(),
-    postconditionVerifier: input.postconditionVerifier,
+    postconditionVerifier: input.postconditionVerifier ?? configuredPostconditionVerifier(workDir),
     authVerificationCache: new Map(),
     feishuReader: input.feishuReader ?? configuredFeishuReader(initialRuntimeEnvironment),
     runtimeConfiguration: initialRuntimeConfiguration,
@@ -468,7 +525,13 @@ export async function handleBrainCreatorTool(
         return facadeTextResult({
           ...await statusFacade(context, input),
           runtimeIdentity: readRuntimeIdentity({ workspace: context.workDir, schemaVersion: context.repository.schemaVersion,
-            provider: context.agentBridge?.provider ?? context.runtimeConfiguration?.bridgeProvider ?? "disabled", processKind: "mcp" })
+          provider: context.agentBridge?.provider ?? context.runtimeConfiguration?.bridgeProvider ?? "disabled", processKind: "mcp" }),
+        recoveryCapabilities: {
+          automaticPostconditionVerification: context.postconditionVerifier ? "configured" : "not-configured"
+        },
+        runtimeCapabilities: {
+          testDataProvider: context.testDataProviderStatus
+        }
         }, input);
       case "bc_run":
         return facadeTextResult(
@@ -485,6 +548,7 @@ export async function handleBrainCreatorTool(
             name: stringArg(input, "name"),
             environment: stringArg(input, "environment"),
             baseUrl: stringArg(input, "baseUrl"),
+            executionProvenance: executionProvenanceArg(input),
             defaultLocale: optionalStringArg(input, "defaultLocale") ?? "zh-CN",
             urlAllowlist: stringArrayArg(input, "urlAllowlist")
           })
@@ -516,15 +580,29 @@ export async function handleBrainCreatorTool(
       case "bc_generate_seed":
         return textResult(await generateSeed(context, input));
       case "bc_create_auth_checkpoint":
+        {
+          const systemId = stringArg(input, "systemId");
+          const evaluationTrialId = optionalStringArg(input, "evaluationTrialId");
+          if (evaluationTrialId) {
+            const trial = context.repository.evaluationTrials.find((item) => item.id === evaluationTrialId);
+            if (!trial || trial.status !== "active" || trial.systemId !== systemId) {
+              throw new Error("Auth checkpoint Trial must be active and belong to the same business system");
+            }
+          }
         return textResult(
           context.service.createAuthCheckpoint({
-            systemId: stringArg(input, "systemId"),
+            systemId,
             authProfileId: stringArg(input, "authProfileId"),
             testCaseId: optionalStringArg(input, "testCaseId"),
+            evaluationTrialId,
+            requirementSuiteRunId: optionalStringArg(input, "requirementSuiteRunId"),
+            executableCaseId: optionalStringArg(input, "executableCaseId"),
+            businessScenarioId: optionalStringArg(input, "businessScenarioId"),
             reason: stringArg(input, "reason"),
             resumeInstruction: stringArg(input, "resumeInstruction")
           })
         );
+        }
       case "bc_list_auth_checkpoints":
         return textResult(
           context.service.listAuthCheckpoints(
@@ -533,7 +611,60 @@ export async function handleBrainCreatorTool(
           )
         );
       case "bc_complete_auth_checkpoint":
-        return textResult(context.service.completeAuthCheckpoint(stringArg(input, "checkpointId")));
+        {
+          const checkpointId = stringArg(input, "checkpointId");
+          const checkpoint = context.repository.authCheckpoints.find((item) => item.id === checkpointId);
+          if (!checkpoint) throw new Error("Auth checkpoint not found");
+          const trial = checkpoint.evaluationTrialId
+            ? context.repository.evaluationTrials.find((item) => item.id === checkpoint.evaluationTrialId)
+            : undefined;
+          if (checkpoint.evaluationTrialId && (!trial || trial.status !== "active" || trial.systemId !== checkpoint.systemId)) {
+            throw new Error("Auth checkpoint Trial is no longer active or does not match the business system");
+          }
+          const suiteRun = checkpoint.requirementSuiteRunId
+            ? context.repository.requirementSuiteRuns.find((item) => item.id === checkpoint.requirementSuiteRunId)
+            : undefined;
+          if (checkpoint.requirementSuiteRunId && (
+            !suiteRun ||
+            suiteRun.systemId !== checkpoint.systemId ||
+            suiteRun.evaluationTrialId !== checkpoint.evaluationTrialId
+          )) {
+            throw new Error("Auth checkpoint requirement suite binding is no longer valid");
+          }
+          if (checkpoint.executableCaseId && suiteRun && !suiteRun.caseRuns.some(
+            (item) => item.executableCaseId === checkpoint.executableCaseId
+          )) {
+            throw new Error("Auth checkpoint executable case is no longer in its requirement suite");
+          }
+          if (checkpoint.businessScenarioId && !trial?.executionScope?.businessScenarioIds.includes(checkpoint.businessScenarioId)) {
+            throw new Error("Auth checkpoint scenario is no longer in the frozen Trial scope");
+          }
+          const completed = context.service.completeAuthCheckpoint(checkpointId);
+          if (trial) {
+            context.evaluationIntegrity.recordIntervention({
+              trialId: trial.id,
+              category: "user-authentication",
+              actor: "user",
+              note: `Completed manual authentication checkpoint ${checkpoint.id}`,
+              evidenceRefs: [
+                `auth-checkpoint:${checkpoint.id}`,
+                ...(checkpoint.requirementSuiteRunId
+                  ? [`requirement-suite-run:${checkpoint.requirementSuiteRunId}`]
+                  : []),
+                ...(checkpoint.executableCaseId
+                  ? [`executable-case:${checkpoint.executableCaseId}`]
+                  : [])
+              ],
+              ...(checkpoint.businessScenarioId
+                ? { businessScenarioIds: [checkpoint.businessScenarioId] }
+                : {}),
+              ...(checkpoint.authenticationPhase
+                ? { authenticationPhase: checkpoint.authenticationPhase }
+                : {})
+            });
+          }
+          return textResult(completed);
+        }
       case "bc_cancel_auth_checkpoint":
         return textResult(context.service.cancelAuthCheckpoint(stringArg(input, "checkpointId")));
       case "bc_add_term":
@@ -663,11 +794,8 @@ export async function handleBrainCreatorTool(
           })
         );
       case "bc_resolve_gap":
-        return textResult(
-          context.service.resolveGap({
-            projectId: stringArg(input, "projectId"),
-            gapId: stringArg(input, "gapId")
-          })
+        throw new Error(
+          "Direct Gap resolution is disabled because it cannot preview or bind evidence. Use bc_prepare action=resolve-gap with confirm=false, then confirm=true with a confirmationNote and evidenceRefs."
         );
       case "bc_search_assets":
         return textResult(
@@ -990,6 +1118,179 @@ function intentPreviewFacade(context: BrainCreatorMcpContext, input: Record<stri
   };
 }
 
+async function reevaluateLegacyExecutionEvidence(
+  context: BrainCreatorMcpContext,
+  input: Record<string, unknown>
+) {
+  if (optionalBooleanArg(input, "confirm") !== true) {
+    throw new Error("Historical evidence re-evaluation requires confirm=true after reviewing its scope");
+  }
+  const trialId = stringArg(input, "evaluationTrialId");
+  const evidenceId = stringArg(input, "executionEvidenceId");
+  const trial = context.repository.evaluationTrials.find((item) => item.id === trialId);
+  if (!trial) throw new Error("Evaluation trial not found");
+  const evidence = context.repository.executionEvidence.find((item) => item.id === evidenceId);
+  if (!evidence) throw new Error("Execution evidence not found");
+  const trialValidation = context.evaluationIntegrity.validateTrial(trial.id, {
+    codeRevision: trial.codeRevision,
+    runtimeVersions: trial.runtimeVersions,
+    runtimeBuildIdentity: trial.runtimeBuildIdentity
+  }, false);
+  const matchingCases = context.repository.requirementSuiteRuns
+    .filter((run) => isLinkedEvaluationRun(run, trial))
+    .flatMap((run) => run.caseRuns.flatMap((caseRun) => {
+      const attempt = caseRun.attempts.find((item) => item.executionEvidenceId === evidence.id);
+      if (caseRun.executionEvidenceId !== evidence.id && !attempt) return [];
+      return [{ run, caseRun, planId: evidence.executionPlanId ?? attempt?.executionPlanId ?? caseRun.executionPlanId }];
+    }));
+  if (matchingCases.length !== 1) {
+    throw new Error("Historical evidence must map to exactly one case in a Trial-bound Requirement Suite run");
+  }
+  const { run, caseRun, planId } = matchingCases[0];
+  if (!planId) throw new Error("Historical evidence has no immutable execution plan binding");
+  const plan = context.repository.executionPlans.find((item) => item.id === planId);
+  if (!plan) throw new Error("Historical execution plan not found");
+  const planValidation = context.executionPreflight.validatePlan(plan.id);
+  const executableCase = context.repository.executableCases.find((item) => item.id === caseRun.executableCaseId);
+  if (!executableCase) throw new Error("Historical executable case not found");
+  const scenarioIds = trial.executionScope?.businessScenarioIds ?? [];
+  const scenarios = context.repository.businessScenarios.filter((item) =>
+    scenarioIds.includes(item.id) &&
+    item.knowledgeProjectId === trial.knowledgeProjectId &&
+    item.requirementSetId === trial.requirementSetId &&
+    (item.testIntentIds ?? []).includes(executableCase.testIntentId)
+  );
+  if (scenarios.length !== 1) {
+    throw new Error("Historical case must map to exactly one scenario in the frozen Trial scope");
+  }
+  const previousConformance = context.repository.conformanceResults
+    .filter((item) => item.executionEvidenceId === evidence.id)
+    .at(-1);
+  const historicalInputs = {
+    trial,
+    trialValidationReasons: trialValidation.reasons,
+    run,
+    caseRun,
+    plan,
+    planValidationReasons: planValidation.reasons,
+    executableCase,
+    scenario: scenarios[0],
+    evidence,
+    previousConformance
+  };
+  const historicalInputFingerprint = historicalEvidenceSourceFingerprint(historicalInputs);
+  const protectedSecrets = trial.systemId
+    ? protectedSecretsForSystem(context, trial.systemId)
+    : {};
+  const reviewed = await reevaluateHistoricalEvidence({
+    root: context.workDir,
+    ...historicalInputs,
+    reviewer: redactSensitiveText(stringArg(input, "historicalEvidenceReviewer"), protectedSecrets),
+    note: redactSensitiveText(stringArg(input, "historicalEvidenceNote"), protectedSecrets),
+    authenticator: createWorkspaceIntegrityAuthenticator(context.workDir)
+  });
+  const review = reviewed.evidence.historicalReevaluation!;
+  const assertHistoricalInputsUnchanged = () => {
+    const currentTrial = context.repository.evaluationTrials.find((item) => item.id === trial.id);
+    const currentEvidence = context.repository.executionEvidence.find((item) => item.id === evidence.id);
+    const currentRun = context.repository.requirementSuiteRuns.find((item) => item.id === run.id);
+    const currentCaseRun = currentRun?.caseRuns.find((item) => item.executableCaseId === caseRun.executableCaseId);
+    const currentPlan = context.repository.executionPlans.find((item) => item.id === plan.id);
+    const currentExecutableCase = context.repository.executableCases.find((item) => item.id === executableCase.id);
+    const currentScenario = context.repository.businessScenarios.find((item) => item.id === scenarios[0].id);
+    const currentPreviousConformance = context.repository.conformanceResults
+      .filter((item) => item.executionEvidenceId === evidence.id)
+      .at(-1);
+    if (!currentTrial || !currentEvidence || !currentRun || !currentCaseRun || !currentPlan ||
+        !currentExecutableCase || !currentScenario) {
+      throw new Error("Historical evidence inputs changed while re-evaluation was running");
+    }
+    const currentMatches = context.repository.requirementSuiteRuns
+      .filter((candidateRun) => isLinkedEvaluationRun(candidateRun, currentTrial))
+      .flatMap((candidateRun) => candidateRun.caseRuns.flatMap((candidateCaseRun) => {
+        const attempt = candidateCaseRun.attempts.find((item) => item.executionEvidenceId === evidence.id);
+        if (candidateCaseRun.executionEvidenceId !== evidence.id && !attempt) return [];
+        return [{
+          runId: candidateRun.id,
+          caseId: candidateCaseRun.executableCaseId,
+          planId: evidence.executionPlanId ?? attempt?.executionPlanId ?? candidateCaseRun.executionPlanId
+        }];
+      }));
+    if (currentMatches.length !== 1 || currentMatches[0]?.runId !== run.id ||
+        currentMatches[0]?.caseId !== caseRun.executableCaseId || currentMatches[0]?.planId !== plan.id) {
+      throw new Error("Historical evidence inputs changed while re-evaluation was running");
+    }
+    const currentTrialValidation = context.evaluationIntegrity.validateTrial(currentTrial.id, {
+      codeRevision: currentTrial.codeRevision,
+      runtimeVersions: currentTrial.runtimeVersions,
+      runtimeBuildIdentity: currentTrial.runtimeBuildIdentity
+    }, false);
+    const currentPlanValidation = context.executionPreflight.validatePlan(currentPlan.id);
+    if (!currentTrialValidation.valid || !currentPlanValidation.valid) {
+      throw new Error("Historical evidence inputs changed while re-evaluation was running");
+    }
+    const currentInputs = {
+      trial: currentTrial,
+      trialValidationReasons: currentTrialValidation.reasons,
+      run: currentRun,
+      caseRun: currentCaseRun,
+      plan: currentPlan,
+      planValidationReasons: currentPlanValidation.reasons,
+      executableCase: currentExecutableCase,
+      scenario: currentScenario,
+      evidence: currentEvidence,
+      previousConformance: currentPreviousConformance
+    };
+    if (historicalEvidenceSourceFingerprint(currentInputs) !== historicalInputFingerprint) {
+      throw new Error("Historical evidence inputs changed while re-evaluation was running");
+    }
+    return currentEvidence;
+  };
+  assertHistoricalInputsUnchanged();
+  const reviewedArtifacts = reviewed.evidence.artifactValidation?.files ?? [];
+  const artifactRevalidation = await validateExecutionArtifacts(
+    context.workDir,
+    reviewedArtifacts.map((artifact) => artifact.path),
+    Object.fromEntries(reviewedArtifacts.map((artifact) => [artifact.path, artifact.sha256]))
+  );
+  if (artifactRevalidation.status !== "valid" || artifactRevalidation.files.length !== reviewedArtifacts.length) {
+    throw new Error(`Historical evidence artifacts changed before commit: ${artifactRevalidation.reasons.join("; ")}`);
+  }
+  let intervention;
+  context.repository.transaction(() => {
+    const currentEvidence = assertHistoricalInputsUnchanged();
+    if (!currentEvidence || currentEvidence.semanticSnapshotHash || currentEvidence.historicalReevaluation) {
+      throw new Error("Historical evidence changed while re-evaluation was running");
+    }
+    Object.assign(currentEvidence, reviewed.evidence);
+    context.repository.conformanceResults.push(reviewed.conformance);
+    intervention = context.evaluationIntegrity.recordIntervention({
+      trialId: trial.id,
+      category: "manual-evidence-review",
+      actor: review.reviewer,
+      note: review.note,
+      evidenceRefs: [
+        `historical-evidence-review:${review.id}`,
+        `execution-evidence:${evidence.id}`,
+        ...review.artifactHashes.map((artifact) => `artifact:${artifact.path}`),
+        `conformance:${reviewed.conformance.id}`
+      ],
+      businessScenarioIds: [scenarios[0].id]
+    });
+  });
+  return {
+    status: "historical-evidence-reevaluated",
+    trialId: trial.id,
+    evidenceId: evidence.id,
+    review,
+    conformance: reviewed.conformance,
+    intervention,
+    nextAction: trial.interventionCapture
+      ? "Re-capture the complete Trial intervention set before measuring autonomy."
+      : "Review the Trial metrics; the manual evidence review is recorded as an intervention."
+  };
+}
+
 async function prepareFacade(context: BrainCreatorMcpContext, input: Record<string, unknown>) {
   const action = prepareActionArg(input, "action");
   if (action === "record-execution-action" || action === "reconcile-execution-action") {
@@ -998,6 +1299,14 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
   if (action === "start-evaluation-trial") {
     const requirementSourceId = stringArg(input, "requirementSourceId");
     const source = context.repository.requirementSources.find((item) => item.id === requirementSourceId);
+    const runtimeIdentity = evaluationRuntimeIdentity(context);
+    const runtimeCodeRevision = runtimeIdentity.commit === "unknown"
+      ? runtimeIdentity.buildId
+      : runtimeIdentity.commit;
+    const requestedCodeRevision = optionalStringArg(input, "codeRevision");
+    if (requestedCodeRevision && requestedCodeRevision !== runtimeCodeRevision) {
+      throw new Error("Evaluation trial codeRevision must match the running process build identity");
+    }
     const approvalReceiptId = optionalStringArg(input, "approvalReceiptId");
     if (approvalReceiptId) {
       if (!source?.latestRequirementSetId) throw new Error("Evaluation trial approval requires a source requirement set");
@@ -1011,9 +1320,9 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       provider: evaluationProviderArg(input, "evaluationProvider"),
       workspacePath: stringArg(input, "evaluationWorkspacePath"),
       storePath: stringArg(input, "evaluationStorePath"),
-      codeRevision: stringArg(input, "codeRevision"),
+      codeRevision: runtimeCodeRevision,
       runtimeVersions: recordArg(input, "runtimeVersions"),
-      runtimeBuildIdentity: evaluationRuntimeBuildIdentity(context),
+      runtimeBuildIdentity: runtimeIdentity.buildId,
       businessScenarioIds: stringArrayArg(input, "businessScenarioIds"),
       approvalReceiptId
     });
@@ -1050,7 +1359,47 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       category: evaluationInterventionCategoryArg(input, "interventionCategory"),
       actor: stringArg(input, "interventionActor"),
       note: stringArg(input, "interventionNote"),
+      evidenceRefs: stringArrayArg(input, "evidenceRefs"),
+      businessScenarioIds: stringArrayArg(input, "businessScenarioIds")
+    });
+  }
+  if (action === "complete-intervention-capture") {
+    return context.evaluationIntegrity.completeInterventionCapture({
+      trialId: stringArg(input, "evaluationTrialId"),
+      scenarioIds: stringArrayArg(input, "businessScenarioIds"),
+      actor: stringArg(input, "interventionActor"),
       evidenceRefs: stringArrayArg(input, "evidenceRefs")
+    });
+  }
+  if (action === "reevaluate-legacy-execution-evidence") {
+    return reevaluateLegacyExecutionEvidence(context, input);
+  }
+  if (action === "mark-test-data-sent") {
+    return context.testDataProvider.markSent(stringArg(input, "taskId"));
+  }
+  if (action === "confirm-cleanup-notice") {
+    return context.testDataProvider.acknowledgeCleanupNotice(
+      stringArg(input, "taskId"),
+      stringArg(input, "cleanupNoticeSha256")
+    );
+  }
+  if (action === "reconcile-test-data-no-effect") {
+    const task = await context.testDataProvider.reconcileNotApplied(
+      stringArg(input, "taskId"),
+      stringArrayArg(input, "sourceRefs")
+    );
+    if (task.status !== "submitted") return task;
+    const executableCase = context.repository.executableCases.find(
+      (item) => item.id === task.executableCaseId
+    );
+    if (!executableCase) throw new Error("Reconciled test-data case not found");
+    const lease = task.leaseId
+      ? context.repository.testDataLeases.find((item) => item.id === task.leaseId)
+      : undefined;
+    return continueRequirementSuiteAfterTestData(context, {
+      task,
+      executableCase,
+      ...(lease ? { lease } : {})
     });
   }
   if (action === "rollback-legacy-diagnosis") {
@@ -1479,23 +1828,40 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
     action === "dismiss-gap" ||
     action === "reopen-gap"
   ) {
-    const resolution = resolveSystemReference(context, input);
+    const knowledgeProjectId = optionalStringArg(input, "knowledgeProjectId");
+    const systemId = optionalStringArg(input, "systemId");
+    const systemName = optionalStringArg(input, "systemName");
+    if (knowledgeProjectId && (systemId || systemName)) {
+      throw new Error("Specify either knowledgeProjectId or systemId/systemName for a Gap transition");
+    }
+    if (knowledgeProjectId && !context.repository.knowledgeProjects.some((project) => project.id === knowledgeProjectId)) {
+      throw new Error(`Knowledge project not found: ${knowledgeProjectId}`);
+    }
+    const resolution = knowledgeProjectId ? undefined : resolveSystemReference(context, input);
+    const projectId = knowledgeProjectId ?? resolution!.systemId;
     const gapId = stringArg(input, "gapId");
     const gap = context.repository.gaps.find(
-      (item) => item.id === gapId && item.projectId === resolution.systemId
+      (item) => item.id === gapId && item.projectId === projectId
     );
     if (!gap) throw new Error("Gap not found");
     if (!optionalBooleanArg(input, "confirm")) {
       return {
         status: "preview",
         operation: action.replace("-gap", ""),
+        scope: knowledgeProjectId ? "knowledge-project" : "system",
         gap,
+        evidenceRefs: stringArrayArg(input, "evidenceRefs"),
+        confirmationNote: optionalStringArg(input, "confirmationNote"),
         requiresConfirmation: true,
         nextAction: "Present the Gap transition, evidence, and note before confirmation."
       };
     }
+    const evidenceRefs = stringArrayArg(input, "evidenceRefs");
+    if (evidenceRefs.length === 0) {
+      throw new Error("Gap transitions require at least one evidence reference");
+    }
     return context.service.transitionGap({
-      projectId: resolution.systemId,
+      projectId,
       gapId,
       operation:
         action === "resolve-gap"
@@ -1504,7 +1870,7 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
             ? "dismiss"
             : "reopen",
       note: stringArg(input, "confirmationNote"),
-      evidenceRefs: stringArrayArg(input, "evidenceRefs")
+      evidenceRefs
     });
   }
   if (action === "confirm-page-binding") {
@@ -1701,6 +2067,7 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
         task,
         outcome,
         evidenceRefs: stringArrayArg(input, "evidenceRefs"),
+        selectedTransitionRefs: stringArrayArg(input, "selectedTransitionRefs"),
         requiresConfirmation: true,
         nextAction: "Present the exploration evidence and outcome before confirmation."
       };
@@ -1709,6 +2076,7 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       taskId,
       outcome,
       evidenceRefs: stringArrayArg(input, "evidenceRefs"),
+        selectedTransitionRefs: stringArrayArg(input, "selectedTransitionRefs"),
       failureReason: optionalStringArg(input, "failureReason")
     });
     const resumedStatus = result.resumed?.executableCase.status;
@@ -2050,6 +2418,12 @@ async function recordExecutionActionFacade(
 
   const executableCaseId = optionalStringArg(input, "executableCaseId");
   const caseNo = optionalStringArg(input, "caseNo");
+  const requestedEvaluationTrialId = optionalStringArg(input, "evaluationTrialId");
+  const requestedBusinessScenarioId = optionalStringArg(input, "businessScenarioId");
+  if (run?.evaluationTrialId && requestedEvaluationTrialId &&
+      run.evaluationTrialId !== requestedEvaluationTrialId) {
+    throw new Error("Execution action Trial does not match its requirement suite");
+  }
   if (run && executableCaseId && !run.caseRuns.some((item) => item.executableCaseId === executableCaseId)) {
     throw new Error("Execution action case does not belong to the requirement suite");
   }
@@ -2059,14 +2433,55 @@ async function recordExecutionActionFacade(
   if (run && caseNo) throw new Error("Requirement suite actions must use executableCaseId");
   if (suite && executableCaseId) throw new Error("Document suite actions must use caseNo");
 
+  const runScenarioBinding = run?.evaluationTrialId && executableCaseId
+    ? authCheckpointBinding(context.repository, {
+        systemId: resolvedSystemId,
+        requirementSuiteRunId,
+        executableCaseId
+      }).businessScenarioId
+    : undefined;
+  if (runScenarioBinding && requestedBusinessScenarioId &&
+      runScenarioBinding !== requestedBusinessScenarioId) {
+    throw new Error("Execution action scenario does not match its uniquely mapped Trial scenario");
+  }
+  let actionEvaluationTrialId = run?.evaluationTrialId ?? requestedEvaluationTrialId;
+  let actionBusinessScenarioId = runScenarioBinding ?? requestedBusinessScenarioId;
+  const validateActionTrialBinding = () => {
+    if (!actionEvaluationTrialId) {
+      if (actionBusinessScenarioId) throw new Error("Execution action scenario requires an evaluation Trial binding");
+      return;
+    }
+    const trial = context.repository.evaluationTrials.find((item) => item.id === actionEvaluationTrialId);
+    if (!trial || trial.systemId !== resolvedSystemId) {
+      throw new Error("Execution action Trial does not match the business system");
+    }
+    if (actionBusinessScenarioId) {
+      const scenario = context.repository.businessScenarios.find((item) =>
+        item.id === actionBusinessScenarioId && item.knowledgeProjectId === trial.knowledgeProjectId
+      );
+      if (!trial.executionScope?.businessScenarioIds.includes(actionBusinessScenarioId) || !scenario) {
+        throw new Error("Execution action scenario is outside the bound Trial scope");
+      }
+    }
+  };
+  if (operation !== "reconcile-execution-action" || actionEvaluationTrialId) {
+    validateActionTrialBinding();
+  }
+
   const requestedPhase = optionalStringArg(input, "actionPhase");
   const phase = operation === "reconcile-execution-action"
     ? "reconciled" as const
     : executionActionPhaseArg(input, "actionPhase");
+  if (operation === "record-execution-action" && phase === "confirmed") {
+    throw new Error("A sent write cannot be marked confirmed directly; use reconcile-execution-action with verified target evidence");
+  }
   const actionKey = stringArg(input, "actionKey");
-  const actionSemantic = stringArg(input, "actionSemantic");
+  let actionSemantic = stringArg(input, "actionSemantic");
+  let actionEntityReference = optionalStringArg(input, "entityReference");
   let actionPostcondition = optionalStringArg(input, "actionPostcondition");
+  let actionStepId = optionalStringArg(input, "actionStepId");
   let actionEvidenceRefs = stringArrayArg(input, "actionEvidenceRefs");
+  let actionEvidenceArtifacts: Array<{ path: string; sha256: string }> = [];
   let postconditionVerification: PostconditionVerification | undefined;
   if (operation === "reconcile-execution-action") {
     if (
@@ -2091,21 +2506,70 @@ async function recordExecutionActionFacade(
     }
     const runId = requirementSuiteRunId ?? caseSuiteId!;
     const previousAction = context.runLedger.latestAction(runId, actionKey);
-    actionPostcondition = actionPostcondition ?? previousAction?.actionPostcondition;
+    if (!previousAction ||
+        (previousAction.actionPhase !== "sent" && previousAction.actionPhase !== "reconciliation-required")) {
+      throw new Error("Reconciliation requires an unresolved action from the Run Ledger");
+    }
+    if (previousAction.systemId !== resolvedSystemId ||
+        previousAction.executableCaseId !== executableCaseId ||
+        previousAction.caseNo !== caseNo) {
+      throw new Error("Reconciliation action does not match its original system and case binding");
+    }
+    if (previousAction.evaluationTrialId && actionEvaluationTrialId &&
+        previousAction.evaluationTrialId !== actionEvaluationTrialId) {
+      throw new Error("Reconciliation cannot change the original Trial binding");
+    }
+    if (previousAction.evaluationTrialId) actionEvaluationTrialId = previousAction.evaluationTrialId;
+    if (previousAction.businessScenarioId && actionBusinessScenarioId &&
+        previousAction.businessScenarioId !== actionBusinessScenarioId) {
+      throw new Error("Reconciliation cannot change the original business scenario binding");
+    }
+    if (previousAction.businessScenarioId) actionBusinessScenarioId = previousAction.businessScenarioId;
+    if (previousAction.stepId && actionStepId && previousAction.stepId !== actionStepId) {
+      throw new Error("Reconciliation cannot change the original action step binding");
+    }
+    if (previousAction.stepId) actionStepId = previousAction.stepId;
+    if (!actionEvaluationTrialId && !optionalBooleanArg(input, "autoVerify")) {
+      const activeTrials = context.repository.evaluationTrials.filter((trial) =>
+        trial.systemId === resolvedSystemId && trial.status === "active"
+      );
+      if (activeTrials.length > 1) {
+        throw new Error("Manual recovery must specify an evaluationTrialId when multiple active Trials match this system");
+      }
+      if (activeTrials.length === 1) actionEvaluationTrialId = activeTrials[0]!.id;
+    }
+    validateActionTrialBinding();
+    if (previousAction.actionSemantic && actionSemantic !== previousAction.actionSemantic) {
+      throw new Error("Reconciliation cannot change the original action semantic");
+    }
+    if (actionPostcondition && previousAction.actionPostcondition &&
+        actionPostcondition !== previousAction.actionPostcondition) {
+      throw new Error("Reconciliation cannot change the original action postcondition");
+    }
+    if (actionEntityReference && previousAction.entityReference &&
+        actionEntityReference !== previousAction.entityReference) {
+      throw new Error("Reconciliation cannot change the original entity reference");
+    }
+    actionSemantic = previousAction.actionSemantic ?? actionSemantic;
+    actionEntityReference = previousAction.entityReference ?? actionEntityReference;
+    actionPostcondition = previousAction.actionPostcondition ?? actionPostcondition;
     if (optionalBooleanArg(input, "autoVerify")) {
       if (!actionPostcondition) {
         throw new Error("Automatic reconciliation requires actionPostcondition or a pending action postcondition");
       }
-      const verification = context.postconditionVerifier
+      let verification = context.postconditionVerifier
         ? await context.postconditionVerifier({
             systemId: resolvedSystemId,
+            evaluationTrialId: actionEvaluationTrialId,
+            businessScenarioId: actionBusinessScenarioId,
             requirementSuiteRunId,
             caseSuiteId,
             executableCaseId,
             caseNo,
+            stepId: actionStepId,
             actionKey,
             actionSemantic,
-            entityReference: optionalStringArg(input, "entityReference"),
+            entityReference: actionEntityReference,
             postcondition: actionPostcondition
           }).catch((error) => ({
             status: "unavailable" as const,
@@ -2115,6 +2579,35 @@ async function recordExecutionActionFacade(
             status: "unavailable" as const,
             reason: "No postcondition verifier is configured for this runtime."
           };
+      if (verification.status === "confirmed") {
+        try {
+          actionEvidenceArtifacts = await validatePostconditionVerificationArtifacts({
+            root: join(context.workDir, ".brain-creator"),
+            verification,
+            binding: {
+              evaluationTrialId: actionEvaluationTrialId,
+              businessScenarioId: actionBusinessScenarioId,
+              requirementSuiteRunId,
+              caseSuiteId,
+              executableCaseId,
+              caseNo,
+              stepId: actionStepId
+            },
+            systemId: resolvedSystemId,
+            actionKey,
+            actionSemantic,
+            entityReference: actionEntityReference,
+            postcondition: actionPostcondition
+          });
+          verification = { ...verification, evidenceArtifacts: actionEvidenceArtifacts };
+        } catch (error) {
+          verification = {
+            status: "unavailable",
+            reason: error instanceof Error ? error.message : String(error)
+          };
+          actionEvidenceArtifacts = [];
+        }
+      }
       const safeVerification = redactPostconditionVerification(
         context,
         resolvedSystemId,
@@ -2126,17 +2619,19 @@ async function recordExecutionActionFacade(
           runType: run ? "requirement-suite" : "document-suite",
           knowledgeProjectId: run?.knowledgeProjectId,
           systemId: resolvedSystemId,
+          evaluationTrialId: actionEvaluationTrialId,
+          businessScenarioId: actionBusinessScenarioId,
           requirementSuiteRunId,
           caseSuiteId,
           caseSourceId: suite?.sourceId,
           executableCaseId,
           caseNo,
-          stepId: optionalStringArg(input, "actionStepId"),
+          stepId: actionStepId,
           stepTitle: optionalStringArg(input, "actionStepTitle"),
           actionKey,
           phase: "reconciliation-required",
           actionSemantic,
-          entityReference: optionalStringArg(input, "entityReference"),
+          entityReference: actionEntityReference,
           postcondition: actionPostcondition,
           evidenceRefs: safeVerification.evidenceRefs ?? [],
           operator: optionalStringArg(input, "operator"),
@@ -2162,6 +2657,43 @@ async function recordExecutionActionFacade(
       }
     } else if (actionEvidenceRefs.length === 0) {
       throw new Error("Action reconciliation requires actionEvidenceRefs");
+    } else {
+      const operator = optionalStringArg(input, "operator");
+      if (!operator) {
+        throw new Error("Manual action reconciliation requires an explicit operator");
+      }
+      if (!actionPostcondition) {
+        throw new Error("Manual action reconciliation requires the original postcondition");
+      }
+      const requestedArtifacts = optionalObjectArrayArg(input, "actionEvidenceArtifacts").map((artifact, index) => {
+        if (typeof artifact.path !== "string" || !artifact.path.trim() ||
+            typeof artifact.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(artifact.sha256)) {
+          throw new Error(`actionEvidenceArtifacts[${index}] requires a path and SHA-256 hash`);
+        }
+        return { path: artifact.path, sha256: artifact.sha256 };
+      });
+      if (requestedArtifacts.length === 0) {
+        throw new Error("Manual action reconciliation requires at least one hash-bound evidence artifact");
+      }
+      actionEvidenceArtifacts = await validateManualPostconditionEvidenceArtifacts({
+        root: join(context.workDir, ".brain-creator"),
+        artifacts: requestedArtifacts,
+        binding: {
+          evaluationTrialId: actionEvaluationTrialId,
+          businessScenarioId: actionBusinessScenarioId,
+          requirementSuiteRunId,
+          caseSuiteId,
+          executableCaseId,
+          caseNo,
+          stepId: actionStepId
+        },
+        systemId: resolvedSystemId,
+        actionKey,
+        actionSemantic,
+        entityReference: actionEntityReference,
+        postcondition: actionPostcondition,
+        operator
+      });
     }
     if (!actionPostcondition) throw new Error("Action reconciliation requires actionPostcondition");
   } else if (phase === "confirmed") {
@@ -2175,28 +2707,63 @@ async function recordExecutionActionFacade(
     throw new Error("Use reconcile-execution-action for the reconciled phase");
   }
 
-  const entry = context.runLedger.recordAction({
-    runType: run ? "requirement-suite" : "document-suite",
-    knowledgeProjectId: run?.knowledgeProjectId,
-    systemId: resolvedSystemId,
-    requirementSuiteRunId,
-    caseSuiteId,
-    caseSourceId: suite?.sourceId,
-    executableCaseId,
-    caseNo,
-    stepId: optionalStringArg(input, "actionStepId"),
-    stepTitle: optionalStringArg(input, "actionStepTitle"),
-    actionKey,
-    phase: operation === "reconcile-execution-action" ? "reconciled" : phase,
-    actionSemantic,
-    entityReference: optionalStringArg(input, "entityReference"),
-    postcondition: actionPostcondition,
-    evidenceRefs: actionEvidenceRefs,
-    operator: optionalStringArg(input, "operator"),
-    provider: optionalStringArg(input, "provider"),
-    sessionId: optionalStringArg(input, "sessionId"),
-    traceId: optionalStringArg(input, "traceId")
-  });
+  const manualRecoveryBinding = operation === "reconcile-execution-action" && actionEvaluationTrialId &&
+      optionalBooleanArg(input, "autoVerify") !== true
+    ? {
+        evaluationTrialId: actionEvaluationTrialId,
+        businessScenarioId: actionBusinessScenarioId
+      }
+    : undefined;
+  const recordAction = () => {
+    const entry = context.runLedger.recordAction({
+      runType: run ? "requirement-suite" : "document-suite",
+      knowledgeProjectId: run?.knowledgeProjectId,
+      systemId: resolvedSystemId,
+      evaluationTrialId: actionEvaluationTrialId,
+      businessScenarioId: actionBusinessScenarioId,
+      requirementSuiteRunId,
+      caseSuiteId,
+      caseSourceId: suite?.sourceId,
+      executableCaseId,
+      caseNo,
+      stepId: actionStepId,
+      stepTitle: optionalStringArg(input, "actionStepTitle"),
+      actionKey,
+      phase: operation === "reconcile-execution-action" ? "reconciled" : phase,
+      ...(operation === "reconcile-execution-action"
+        ? { recoveryMode: optionalBooleanArg(input, "autoVerify") === true ? "automatic" as const : "manual" as const }
+        : {}),
+      actionSemantic,
+      entityReference: actionEntityReference,
+      postcondition: actionPostcondition,
+      evidenceRefs: actionEvidenceRefs,
+      evidenceArtifacts: actionEvidenceArtifacts,
+      operator: optionalStringArg(input, "operator"),
+      provider: optionalStringArg(input, "provider"),
+      sessionId: optionalStringArg(input, "sessionId"),
+      traceId: optionalStringArg(input, "traceId")
+    });
+    if (manualRecoveryBinding) {
+      context.evaluationIntegrity.recordIntervention({
+        trialId: manualRecoveryBinding.evaluationTrialId,
+        category: "manual-recovery",
+        actor: optionalStringArg(input, "operator") ?? "user",
+        note: `Manually reconciled execution action ${actionKey}`,
+        evidenceRefs: [
+          `run-ledger:${entry.id}`,
+          ...actionEvidenceRefs,
+          ...actionEvidenceArtifacts.map((artifact) => `artifact:${artifact.path}#sha256=${artifact.sha256}`)
+        ],
+        ...(manualRecoveryBinding.businessScenarioId
+          ? { businessScenarioIds: [manualRecoveryBinding.businessScenarioId] }
+          : {})
+      });
+    }
+    return entry;
+  };
+  const entry = manualRecoveryBinding
+    ? context.repository.transaction(recordAction)
+    : recordAction();
   const waiting = entry.actionPhase === "sent" || entry.actionPhase === "reconciliation-required";
   const continuationAction = run
     ? "continue-requirement-suite"
@@ -2297,6 +2864,15 @@ async function statusFacade(context: BrainCreatorMcpContext, input: Record<strin
   const awaitingAuthCheckpoints = snapshot.auth.checkpoints.filter(
     (checkpoint) => checkpoint.status === "awaiting-user"
   );
+  const activeAuthProfiles = snapshot.auth.profiles.filter(
+    (profile) => profile.status !== "cancelled"
+  );
+  const verifiedAuthProfiles = snapshot.auth.profiles.filter(
+    (profile) => profile.status === "succeeded"
+  );
+  const reauthenticationProfile = activeAuthProfiles
+    .filter((profile) => profile.status === "pending" || profile.status === "failed")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   const activeDocumentLedgerSummary =
     activeDocumentSuite &&
     documentRunLedgerEntries.some(
@@ -2307,9 +2883,18 @@ async function statusFacade(context: BrainCreatorMcpContext, input: Record<strin
   const activeDocumentExecutionRecovery = activeDocumentSuite
     ? recoverExecutionState(context.repository, activeDocumentSuite.suiteId)
     : undefined;
+  const pendingWriteTaskId = executionTasks.active?.pendingAction
+    ? executionTasks.active.id
+    : undefined;
+  const stalledExecutionTaskId = executionTasks.tasks.find((task) => task.possiblyStalled)?.id;
   const nextAction = facadeNextAction({
     bridgeOk: snapshot.bridge.ok,
+    authProfiles: activeAuthProfiles.length,
+    verifiedAuthProfiles: verifiedAuthProfiles.length,
+    authProfileId: reauthenticationProfile?.id,
     awaitingAuthCheckpoints: awaitingAuthCheckpoints.length,
+    pendingWriteTaskId,
+    stalledExecutionTaskId,
     pendingAgentTasks: pendingAgentTasks.length,
     openBugs: openBugs.length,
     openGaps: snapshot.openGaps.length,
@@ -2358,20 +2943,27 @@ async function statusFacade(context: BrainCreatorMcpContext, input: Record<strin
       }
     : undefined;
   const userSummary = statusUserSummary({
+    systemId,
     systemName: snapshot.system.name,
     bridgeOk: snapshot.bridge.ok,
-    authProfiles: snapshot.auth.profiles.length,
+    authProfiles: activeAuthProfiles.length,
+    verifiedAuthProfiles: verifiedAuthProfiles.length,
+    authProfileId: reauthenticationProfile?.id,
     awaitingAuthCheckpoints: awaitingAuthCheckpoints.length,
     pendingAgentTasks: pendingAgentTasks.length,
     openBugs: openBugs.length,
     openGaps: snapshot.openGaps.length,
     unfinishedSuites: unfinishedSuites.length,
+    pendingWriteTaskId,
+    stalledExecutionTaskId,
     nextAction,
     activeSuite: activeSuiteSummary,
     activeExecutionTask: executionTasks.active
   });
   return {
     ...snapshot,
+    sessionResumeNextAction: snapshot.nextAction,
+    nextAction,
     systemResolution: resolution,
     caseSources: {
       total: caseSources.length,
@@ -2455,33 +3047,44 @@ async function statusFacade(context: BrainCreatorMcpContext, input: Record<strin
     userSummary,
     statusMarkdown: statusMarkdown(userSummary),
     quickCommands: statusQuickCommands({
+      authProfiles: activeAuthProfiles.length,
+      verifiedAuthProfiles: verifiedAuthProfiles.length,
+      authProfileId: reauthenticationProfile?.id,
       openBugs: openBugs.length,
       openGaps: snapshot.openGaps.length,
-      unfinishedSuites: unfinishedSuites.length
+      unfinishedSuites: unfinishedSuites.length,
+      pendingWriteTaskId,
+      systemId,
+      stalledExecutionTaskId
     }),
     toolGuidance: statusToolGuidance(nextAction)
   };
 }
 
-function brainRuntimeStatus(context: BrainCreatorMcpContext, systemId?: string) {
+function brainRuntimeStatus(context: BrainCreatorMcpContext, systemId?: string, knowledgeProjectId?: string) {
   const tasks = context.repository.brainTasks.filter(
-    (task) => !systemId || task.systemId === systemId
+    (task) => (!systemId || task.systemId === systemId) &&
+      (!knowledgeProjectId || task.knowledgeProjectId === knowledgeProjectId)
   );
   const taskIds = new Set(tasks.map((task) => task.id));
   const sessions = context.repository.brainSessions.filter(
-    (session) => !systemId || session.currentSystemId === systemId
+    (session) => (!systemId || session.currentSystemId === systemId) &&
+      (!knowledgeProjectId || session.knowledgeProjectId === knowledgeProjectId)
   );
   const events = context.repository.brainEvents.filter(
     (event) => !systemId || (event.taskId ? taskIds.has(event.taskId) : false)
   );
   const concepts = context.repository.semanticConcepts.filter(
-    (concept) => !systemId || concept.systemId === systemId
+    (concept) => (!systemId || concept.systemId === systemId) &&
+      (!knowledgeProjectId || concept.knowledgeProjectId === knowledgeProjectId)
   );
   const entities = context.repository.businessEntityInstances.filter(
-    (entity) => !systemId || entity.systemId === systemId
+    (entity) => (!systemId || entity.systemId === systemId) &&
+      (!knowledgeProjectId || entity.knowledgeProjectId === knowledgeProjectId)
   );
   const snapshots = context.repository.systemBrainSnapshots.filter(
-    (snapshot) => !systemId || snapshot.systemId === systemId
+    (snapshot) => (!systemId || snapshot.systemId === systemId) &&
+      (!knowledgeProjectId || snapshot.knowledgeProjectId === knowledgeProjectId)
   );
   return {
     tasks: {
@@ -2509,12 +3112,14 @@ function brainRuntimeStatus(context: BrainCreatorMcpContext, systemId?: string) 
     },
     testdataBrain: systemId
       ? {
-          entities: context.testDataBrain.graph(systemId).entities.length,
-          dependencies: context.testDataBrain.graph(systemId).dependencies.length
+          entities: context.testDataBrain.graph(systemId, knowledgeProjectId).entities.length,
+          dependencies: context.testDataBrain.graph(systemId, knowledgeProjectId).dependencies.length
         }
       : {
-          entities: context.repository.businessEntityInstances.length,
-          dependencies: context.repository.testDataDependencies.length
+          entities: entities.length,
+          dependencies: context.repository.testDataDependencies.filter((item) =>
+            (!knowledgeProjectId || item.knowledgeProjectId === knowledgeProjectId)
+          ).length
         },
     staleArtifacts: {
       intents: context.repository.testIntents.filter((intent) => intent.status === "stale").length,
@@ -2656,7 +3261,7 @@ async function cancelCaseSourceSuite(
   ensureDocumentSuiteLedger(context, suite);
   const cancelledSuite = context.service.cancelCaseSuite(suite.id);
   completeDocumentSuiteLedger(context, cancelledSuite, "cancelled");
-  const reportPath = await writeDocumentSuiteReport(context, cancelledSuite, []);
+  const reportPath = await writeDocumentSuiteReport(context, cancelledSuite);
   return {
     mode: "case-source-suite",
     status: "cancelled",
@@ -3500,6 +4105,26 @@ async function runBugRegression(context: BrainCreatorMcpContext, input: Record<s
 async function reviewFacade(context: BrainCreatorMcpContext, input: Record<string, unknown>) {
   let knowledgeProjectId = optionalStringArg(input, "knowledgeProjectId");
   const requestedTarget = reviewTargetArg(input, "target");
+  if (requestedTarget === "gap" && knowledgeProjectId) {
+    const project = context.repository.knowledgeProjects.find((item) => item.id === knowledgeProjectId);
+    if (!project) throw new Error("Knowledge project not found");
+    const failureTypes = failureTypeFilters(input);
+    const gaps = context.service
+      .listGaps({
+        projectId: knowledgeProjectId,
+        status: gapStatusArg(input, "status")
+      })
+      .filter((gap) => matchesFailureTypes(classifyFailure(gap.reason, gap.sourceType), failureTypes));
+    const reviewSummary = gapReviewSummary(gaps);
+    return {
+      scope: "knowledge-project",
+      knowledgeProjectId,
+      items: gaps,
+      reviewSummary,
+      reviewMarkdown: reviewMarkdownFromSummary(reviewSummary),
+      nextAction: reviewSummary.nextAction
+    };
+  }
   if (!knowledgeProjectId && requestedTarget === "onboarding-plan") {
     const projectIds = [...new Set(
       context.onboardingPlans
@@ -3701,6 +4326,9 @@ function adjudicateRequirementDesign(
   context.repository.persist();
   return {
     ...design,
+    status: adjudication.evaluation.verdict === "pass"
+      ? "succeeded"
+      : adjudication.evaluation.verdict,
     evaluation: adjudication.evaluation,
     stageEvaluations: adjudication.stageEvaluations,
     adjudication: adjudication.record
@@ -3834,10 +4462,22 @@ async function configureFacade(context: BrainCreatorMcpContext, input: Record<st
     return connectorStatus(context, optionalStringArg(input, "knowledgeProjectId"));
   }
   if (target === "system") {
+    const operation = optionalStringArg(input, "operation") ?? "create";
+    if (operation === "update") {
+      if (optionalBooleanArg(input, "confirm") !== true) {
+        throw new Error("Updating a system URL allowlist requires confirm=true");
+      }
+      return context.service.addSystemUrlAllowlistOrigins(
+        stringArg(input, "systemId"),
+        stringArrayArg(input, "urlAllowlist")
+      );
+    }
+    if (operation !== "create") throw new Error("System configuration supports create or confirmed allowlist update");
     return context.service.createSystemProfile({
       name: stringArg(input, "name"),
       environment: stringArg(input, "environment"),
       baseUrl: stringArg(input, "baseUrl"),
+      executionProvenance: executionProvenanceArg(input),
       defaultLocale: optionalStringArg(input, "defaultLocale") ?? "zh-CN",
       urlAllowlist: stringArrayArg(input, "urlAllowlist")
     });
@@ -3881,6 +4521,7 @@ async function configureFacade(context: BrainCreatorMcpContext, input: Record<st
       }
       const verification = await context.authStateVerifier({
         storageStatePath: await resolveProtectedStorageStatePath(context.workDir, storageStatePath),
+        workDir: context.workDir,
         targetUrl: system.baseUrl,
         allowedUrls: system.urlAllowlist
       });
@@ -4436,21 +5077,7 @@ async function controlRequirementSuite(
 ): Promise<Record<string, unknown>> {
   const requestedEvaluationTrialId = optionalStringArg(input, "evaluationTrialId");
   const validateScheduledEvaluation = (run: RequirementSuiteRun) => {
-    if (requestedEvaluationTrialId && run.evaluationTrialId !== requestedEvaluationTrialId) {
-      throw new Error("Requirement suite run belongs to another evaluation trial");
-    }
-    if (!run.evaluationTrialId) return;
-    const binding = context.evaluationIntegrity.validateExecutionBinding({
-      trialId: run.evaluationTrialId,
-      knowledgeProjectId: run.knowledgeProjectId,
-      systemId: run.systemId,
-      executableCaseIds: run.caseRuns.map((item) => item.executableCaseId),
-      requirementSetIds: run.requirementSetIds,
-      runtimeBuildIdentity: evaluationRuntimeBuildIdentity(context)
-    });
-    if (!binding.valid) {
-      throw new Error(`Evaluation trial binding is invalid: ${binding.reasons.join("; ")}`);
-    }
+    validateScheduledTrialBinding(context, run, requestedEvaluationTrialId);
   };
   if (action === "claim-next-scheduled") {
     const scheduleOwner = optionalStringArg(input, "scheduleOwner");
@@ -4489,6 +5116,22 @@ async function controlRequirementSuite(
       owner: scheduleOwner,
       leaseMs: optionalNumberArg(input, "scheduleLeaseMs")
     });
+    try {
+      validateScheduledEvaluation(claimed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        context.requirementSuiteRuns.releaseScheduledLease(claimed.id, {
+          owner: scheduleOwner,
+          nextRunAt: new Date(Date.now() + 60_000).toISOString(),
+          lastError: message
+        });
+      } catch (releaseError) {
+        const releaseMessage = releaseError instanceof Error ? releaseError.message : String(releaseError);
+        throw new Error(`${message}; schedule lease release failed: ${releaseMessage}`);
+      }
+      throw error;
+    }
     return {
       mode: "requirement-suite",
       status: "scheduled-control-applied",
@@ -4535,6 +5178,7 @@ async function controlRequirementSuite(
       leaseMs: optionalNumberArg(input, "scheduleLeaseMs")
     });
     try {
+      validateScheduledEvaluation(claimed);
       const result = await executeNextRequirementSuiteCase(context, claimed.id, {
         maxHealAttempts: optionalNumberArg(input, "maxHealAttempts")
       });
@@ -4549,19 +5193,35 @@ async function controlRequirementSuite(
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const released = context.requirementSuiteRuns.releaseScheduledLease(claimed.id, {
-        owner: scheduleOwner,
-        nextRunAt: new Date(Date.now() + 60_000).toISOString(),
-        lastError: message
-      });
+      let released = claimed;
+      let releaseErrorMessage: string | undefined;
+      try {
+        released = context.requirementSuiteRuns.releaseScheduledLease(claimed.id, {
+          owner: scheduleOwner,
+          nextRunAt: new Date(Date.now() + 60_000).toISOString(),
+          lastError: message
+        });
+      } catch (releaseError) {
+        releaseErrorMessage = releaseError instanceof Error ? releaseError.message : String(releaseError);
+        try {
+          released = context.requirementSuiteRuns.get(claimed.id);
+        } catch {
+          released = claimed;
+        }
+      }
+      const finalError = releaseErrorMessage
+        ? `${message}; schedule lease release failed: ${releaseErrorMessage}`
+        : message;
       return {
         mode: "requirement-suite",
         status: "scheduled-run-failed",
         action,
         scheduledRunId: claimed.id,
         requirementSuiteRun: released,
-        error: message,
-        nextAction: "Inspect the failure and retry the scheduled run after the backoff."
+        error: finalError,
+        nextAction: releaseErrorMessage
+          ? "Schedule lease release failed. Inspect the current lease owner and expiry before continuing; do not replay the scheduled action."
+          : "Inspect the failure and retry the scheduled run after the backoff."
       };
     }
   }
@@ -4593,6 +5253,11 @@ async function controlRequirementSuite(
       };
     }
     if (!scheduleOwner) throw new Error("scheduleOwner is required for schedule control");
+    if (action === "claim-scheduled") {
+      validateScheduledEvaluation(run);
+    } else if (requestedEvaluationTrialId && run.evaluationTrialId !== requestedEvaluationTrialId) {
+      throw new Error("Requirement suite run belongs to another evaluation trial");
+    }
     const updated =
       action === "claim-scheduled"
         ? context.requirementSuiteRuns.claimScheduled(run.id, {
@@ -4638,7 +5303,13 @@ async function controlRequirementSuite(
         : "No blocked requirement suite case is available to skip"
     );
   }
-  validateScheduledEvaluation(run);
+  if (action === "cancel") {
+    if (requestedEvaluationTrialId && run.evaluationTrialId !== requestedEvaluationTrialId) {
+      throw new Error("Requirement suite run belongs to another evaluation trial");
+    }
+  } else {
+    validateScheduledEvaluation(run);
+  }
   if (!optionalBooleanArg(input, "confirm")) {
     return {
       mode: "requirement-suite",
@@ -4822,6 +5493,7 @@ async function executeNextRequirementSuiteCase(
     knowledgeProjectId: requirementSuiteRun.knowledgeProjectId,
     systemId: requirementSuiteRun.systemId,
     executableCaseId: executableCase.id,
+    requirementSuiteRunId: requirementSuiteRun.id,
     confirm: true,
     allowCreate: requirementSuiteRun.allowCreateTestData,
     automatic: requirementSuiteRun.automaticTestData,
@@ -4934,6 +5606,7 @@ async function executeNextRequirementSuiteCase(
     knowledgeProjectId: requirementSuiteRun.knowledgeProjectId,
     systemId: requirementSuiteRun.systemId,
     executableCaseId: executableCase.id,
+    requirementSuiteRunId: requirementSuiteRun.id,
     authProfileId: requirementSuiteRun.authProfileId,
     actorJourney: requirementSuiteRun.actorJourney,
     confirm: true
@@ -5040,6 +5713,7 @@ async function executeRequirementSuiteCase(
     projectId,
     systemId,
     executableCaseId: executableCase.id,
+    requirementSuiteRunId: requirementSuiteRun.id,
     executionPlanId: executionPlan.id,
     testCaseId: testCase.id,
     contextPackPath
@@ -5297,6 +5971,7 @@ async function finalizeRequirementSuiteCase(
       knowledgeProjectId: run.knowledgeProjectId,
       systemId: run.systemId,
       executableCaseId: input.executableCase.id,
+      requirementSuiteRunId: run.id,
       confirm: true,
       phase: "cleanup"
     });
@@ -5685,6 +6360,21 @@ function knowledgeStatus(context: BrainCreatorMcpContext, projectId: string) {
       )
   );
   const gaps = context.service.listGaps({ projectId, status: "open" });
+  const activeRequirementSetIds = new Set(activeRequirementSets.map((item) => item.id));
+  const activeRequirementSourceIds = new Set(activeRequirementSets.map((item) => item.sourceId));
+  const activeSources = sources.filter((item) => activeRequirementSourceIds.has(item.id));
+  const activeAttachmentIds = new Set(activeSources.flatMap((item) => item.attachments.flatMap((attachment) =>
+    attachment.id ? [attachment.id] : []
+  )));
+  const activeRequirementGaps = gaps.filter((gap) =>
+    gap.sourceType.startsWith("requirement-") &&
+    (activeRequirementSetIds.has(gap.sourceId) ||
+      activeRequirementSourceIds.has(gap.sourceId) ||
+      activeAttachmentIds.has(gap.sourceId))
+  );
+  const unconfirmedAttachmentSources = activeSources.filter((source) =>
+    source.attachments.some((attachment) => attachment.status !== "confirmed")
+  );
   const evaluationGates = activeRequirementSets.flatMap((item) =>
     item.evaluationGate ? [item.evaluationGate] : []
   );
@@ -5757,6 +6447,8 @@ function knowledgeStatus(context: BrainCreatorMcpContext, projectId: string) {
   } else if (sources.length === 0) nextAction = "ingest_requirement";
   else if (blockedEvalActions.length > 0) nextAction = "revise_blocked_requirement";
   else if (pendingEvalActions.length > 0) nextAction = "confirm_requirement_eval";
+  else if (activeRequirementGaps.length > 0) nextAction = "review_gaps";
+  else if (unconfirmedAttachmentSources.length > 0) nextAction = "review_requirement_attachments";
   else if (activeRequirementSets.some((item) => item.status === "draft")) {
     const evaluatedDraft = activeRequirementSets.find(
       (item) =>
@@ -5959,7 +6651,8 @@ function knowledgeStatus(context: BrainCreatorMcpContext, projectId: string) {
       openGaps: gaps,
       brainRuntime: brainRuntimeStatus(
         context,
-        project.systemIds.length === 1 ? project.systemIds[0] : undefined
+        project.systemIds.length === 1 ? project.systemIds[0] : undefined,
+        projectId
       ),
       executionTasks
     },
@@ -5978,11 +6671,24 @@ function knowledgeStatus(context: BrainCreatorMcpContext, projectId: string) {
     activeExplorationTaskId: pendingExplorationTasks.at(-1)?.id,
     activeExplorationPlanId: activeExplorationPlan?.id,
     activeOnboardingPlanId: activeOnboardingPlan?.id,
-    nextAction
+    nextAction,
+    ...(nextAction === "review_gaps" ? {
+      nextFacadeTool: "bc_review",
+      nextToolInput: { target: "gap", knowledgeProjectId: projectId },
+      nextCommand: `bc_review target=gap knowledgeProjectId=${projectId}`
+    } : nextAction === "review_requirement_attachments" ? {
+      nextFacadeTool: "bc_review",
+      nextToolInput: {
+        target: "source-fidelity",
+        knowledgeProjectId: projectId,
+        requirementSourceId: unconfirmedAttachmentSources[0]!.id
+      },
+      nextCommand: `bc_review target=source-fidelity knowledgeProjectId=${projectId} requirementSourceId=${unconfirmedAttachmentSources[0]!.id}`
+    } : {})
   };
 }
 
-function knowledgeReview(
+async function knowledgeReview(
   context: BrainCreatorMcpContext,
   projectId: string,
   target: KnowledgeReviewTarget,
@@ -6001,12 +6707,83 @@ function knowledgeReview(
         comparisonGroupId: optionalStringArg(input, "comparisonGroupId")
       })
       .filter((item) => !idValue || item.id === idValue);
-    const items = trials.map((trial) => {
+    const items = [];
+    const evidenceAuthenticator = createWorkspaceIntegrityAuthenticator(context.workDir);
+    for (const trial of trials) {
       const validation = context.evaluationIntegrity.validateTrial(trial.id, {
         codeRevision: trial.codeRevision, runtimeVersions: trial.runtimeVersions,
         runtimeBuildIdentity: evaluationRuntimeBuildIdentity(context)
       }, false);
-      return ({
+      const linkedRuns = context.repository.requirementSuiteRuns.filter((run) => isLinkedEvaluationRun(run, trial));
+      const linkedRunIds = new Set(linkedRuns.map((run) => run.id));
+      const linkedRunEntries = context.repository.runLedgerEntries.filter((entry) =>
+        entry.requirementSuiteRunId && linkedRunIds.has(entry.requirementSuiteRunId) &&
+        entry.runType !== "document-suite"
+      );
+      const runLedgerIntegrityByEntryId = verifyRunLedgerIntegrityChains(linkedRunEntries, evidenceAuthenticator);
+      const runLedgerIntegrity = linkedRuns.map((run) => {
+        const entries = linkedRunEntries.filter((entry) => entry.requirementSuiteRunId === run.id)
+          .sort((left, right) => (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER));
+        const terminal = ["completed", "failed", "blocked", "cancelled"].includes(run.status);
+        const latest = entries.at(-1);
+        const terminalEvent = run.status === "cancelled" ? "suite-cancelled" : "suite-completed";
+        const terminalEventValid = !terminal ||
+          (latest?.event === terminalEvent && latest.toStatus === run.status);
+        const valid = entries.length > 0 && terminalEventValid && entries.every((entry) => runLedgerIntegrityByEntryId.get(entry.id) === true);
+        return {
+          runId: run.id,
+          status: valid ? "valid" as const : "invalid" as const,
+          reason: valid ? undefined : !terminalEventValid
+            ? "Terminal run is missing its signed final suite-completed event."
+            : "Run Ledger signature chain is incomplete or invalid."
+        };
+      });
+      const runLedgerIntegrityByRunId = new Map(runLedgerIntegrity.map((item) => [item.runId, item.status === "valid"]));
+      const linkedReconciledActions = linkedRunEntries.filter((entry) =>
+        entry.event === "action-reconciled" && entry.actionPhase === "reconciled" &&
+        entry.knowledgeProjectId === trial.knowledgeProjectId &&
+        entry.systemId === trial.systemId
+      );
+      const actionIntegrityValidByEntryId = new Map(linkedReconciledActions.map((entry) => [
+        entry.id,
+        runLedgerIntegrityByEntryId.get(entry.id) === true &&
+          runLedgerIntegrityByRunId.get(entry.requirementSuiteRunId!) === true
+      ]));
+      const actionEvidenceArtifactRevalidation = await revalidateRunLedgerActionEvidence(
+        join(context.workDir, ".brain-creator"),
+        linkedReconciledActions
+      );
+      const actionEvidenceArtifactsValidByEntryId = new Map(
+        actionEvidenceArtifactRevalidation.map((item) => [
+          item.entryId,
+          item.validation.status === "valid" && actionIntegrityValidByEntryId.get(item.entryId) === true
+        ])
+      );
+      const linkedEvidenceIds = new Set(linkedRuns.flatMap((run) => run.caseRuns.flatMap((caseRun) => [
+        ...(caseRun.executionEvidenceId ? [caseRun.executionEvidenceId] : []),
+        ...caseRun.attempts.flatMap((attempt) => attempt.executionEvidenceId ? [attempt.executionEvidenceId] : [])
+      ])));
+      const linkedEvidence = context.repository.executionEvidence.filter((evidence) => linkedEvidenceIds.has(evidence.id));
+      const artifactRevalidation = await revalidateExecutionEvidence(context.workDir, linkedEvidence);
+      const artifactValidationByEvidenceId = new Map(artifactRevalidation.map((item) => [item.evidenceId, item.validation]));
+      const conformanceByEvidenceId = new Map(context.repository.conformanceResults
+        .filter((item) => linkedEvidenceIds.has(item.executionEvidenceId))
+        .map((item) => [item.executionEvidenceId, item]));
+      const semanticSnapshotRevalidation = linkedEvidence.map((evidence) => {
+        const valid = hasValidExecutionEvidenceSnapshot(
+          evidence,
+          conformanceByEvidenceId.get(evidence.id),
+          evidenceAuthenticator
+        );
+        return {
+          evidenceId: evidence.id,
+          status: valid ? "valid" as const : "invalid" as const,
+          reasons: valid ? [] : [evidence.semanticSnapshotHash ? "Execution evidence semantics changed after completion." : "Execution evidence has no semantic snapshot hash."]
+        };
+      });
+      const semanticSnapshotValidByEvidenceId = new Map(semanticSnapshotRevalidation.map((item) => [item.evidenceId, item.status === "valid"]));
+      const interventionIntegrity = context.evaluationIntegrity.reviewInterventionIntegrity(trial.id);
+      items.push({
       ...trial,
       validation: { valid: validation.valid, reasons: validation.reasons },
       approvalReadiness: trial.executionScope?.approvalScopeRef && validation.valid ? "verified-baseline-receipt" : "unverified",
@@ -6019,6 +6796,34 @@ function knowledgeReview(
       interventions: context.repository.interventionRecords.filter(
         (item) => item.trialId === trial.id
       ),
+      artifactRevalidation,
+      actionEvidenceArtifactRevalidation: actionEvidenceArtifactRevalidation.map((item) => ({
+        entryId: item.entryId,
+        status: item.validation.status === "valid" && actionIntegrityValidByEntryId.get(item.entryId) === true ? "valid" : "invalid",
+        integrityStatus: actionIntegrityValidByEntryId.get(item.entryId) === true ? "valid" : "invalid",
+        reasons: [
+          ...item.validation.reasons,
+          ...(actionIntegrityValidByEntryId.get(item.entryId) === true ? [] : ["Run Ledger action integrity signature is missing or invalid."])
+        ]
+      })),
+      runLedgerIntegrity,
+      semanticSnapshotRevalidation,
+      historicalReevaluations: linkedEvidence.flatMap((evidence) => evidence.historicalReevaluation
+        ? [{ evidenceId: evidence.id, ...evidence.historicalReevaluation }]
+        : []),
+      interventionIntegrity: {
+        capture: !trial.interventionCapture
+          ? "missing"
+          : !interventionIntegrity.captureIntegrityValid
+            ? "invalid"
+            : interventionIntegrity.interventionSetMatchesCapture ? "valid" : "stale",
+        recordSetMatchesCapture: interventionIntegrity.interventionSetMatchesCapture,
+        unrecordedInterventionSourceRefs: interventionIntegrity.unrecordedInterventionSourceRefs,
+        records: [...interventionIntegrity.interventionValidById].map(([interventionId, valid]) => ({
+          interventionId,
+          status: valid ? "valid" : "invalid"
+        }))
+      },
       metrics: calculateEvaluationTrialMetrics({
         trial: validation.valid ? trial : { ...trial, status: "invalidated" },
         runs: context.repository.requirementSuiteRuns,
@@ -6028,9 +6833,19 @@ function knowledgeReview(
           (item) => item.knowledgeProjectId === projectId
         ),
         executableCases: context.repository.executableCases,
-        interventions: context.repository.interventionRecords
+        interventions: context.repository.interventionRecords,
+        runLedgerEntries: context.repository.runLedgerEntries,
+        testDataTasks: context.repository.testDataTasks,
+        testDataLeases: context.repository.testDataLeases,
+        actionEvidenceArtifactsValidByEntryId,
+        artifactValidationByEvidenceId,
+        semanticSnapshotValidByEvidenceId,
+        interventionIntegrityValidById: interventionIntegrity.interventionValidById,
+        interventionCaptureIntegrityValid: interventionIntegrity.captureIntegrityValid,
+        interventionSourcesComplete: interventionIntegrity.interventionSourcesComplete
       })
-    }); });
+      });
+    }
     return {
       project,
       summary: {
@@ -6476,7 +7291,7 @@ function knowledgeReview(
     }
     const systemIds = requestedSystemId ? [requestedSystemId] : project.systemIds;
     const systems = systemIds.map((systemId) => {
-      const graph = context.testDataBrain.graph(systemId);
+      const graph = context.testDataBrain.graph(systemId, projectId);
       return {
         systemId,
         entities: graph.entities,
@@ -7135,17 +7950,28 @@ async function verifyAuthForExecution(
 ) {
   const capture = context.service.getCaptureAuth(authProfile.id);
   if (!capture) return;
+  const checkpointBinding = authCheckpointBinding(context.repository, {
+    systemId: system.id,
+    requirementSuiteRunId: ledgerContext.requirementSuiteRunId,
+    executableCaseId: ledgerContext.executableCaseId
+  });
   let storageStatePath: string | undefined;
   try {
     storageStatePath = await materializeAuthStorageState(context, system, authProfile);
   } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const pending = context.service.listAuthCheckpoints(system.id, "awaiting-user")
-        .find((checkpoint) => checkpoint.authProfileId === authProfile.id);
+        .find((checkpoint) =>
+          checkpoint.authProfileId === authProfile.id &&
+          checkpoint.requirementSuiteRunId === checkpointBinding.requirementSuiteRunId &&
+          checkpoint.executableCaseId === checkpointBinding.executableCaseId &&
+          checkpoint.evaluationTrialId === checkpointBinding.evaluationTrialId
+        );
       if (!pending) {
         context.service.createAuthCheckpoint({
           systemId: system.id,
           authProfileId: authProfile.id,
+          ...checkpointBinding,
           reason,
           resumeInstruction: "Refresh or capture a browser login state, then complete this checkpoint before resuming execution."
         });
@@ -7180,6 +8006,7 @@ async function verifyAuthForExecution(
   }
   let verification = await context.authStateVerifier({
     storageStatePath: await resolveProtectedStorageStatePath(context.workDir, storageStatePath),
+    workDir: context.workDir,
     targetUrl: system.baseUrl,
     allowedUrls: system.urlAllowlist
   });
@@ -7203,11 +8030,17 @@ async function verifyAuthForExecution(
   if (refreshed) verification = refreshed;
   context.authVerificationCache.delete(authProfile.id);
   const pending = context.service.listAuthCheckpoints(system.id, "awaiting-user")
-    .find((checkpoint) => checkpoint.authProfileId === authProfile.id);
+    .find((checkpoint) =>
+      checkpoint.authProfileId === authProfile.id &&
+      checkpoint.requirementSuiteRunId === checkpointBinding.requirementSuiteRunId &&
+      checkpoint.executableCaseId === checkpointBinding.executableCaseId &&
+      checkpoint.evaluationTrialId === checkpointBinding.evaluationTrialId
+    );
   if (!pending) {
     context.service.createAuthCheckpoint({
       systemId: system.id,
       authProfileId: authProfile.id,
+      ...checkpointBinding,
       reason: verification.reason ?? "Stored browser authentication is no longer valid.",
       resumeInstruction: "Refresh the browser login state, then complete this checkpoint before resuming execution."
     });
@@ -7344,7 +8177,7 @@ function computeNextAction(state: {
     return "configure_bridge: 设置 BRAIN_CREATOR_AGENT_COMMAND 环境变量以启用 Planner/Generator/Healer";
   }
   if (state.hasOpenGaps) {
-    return "resolve_gaps: 存在待处理的 Gap，建议优先处理 (bc_list_gaps → bc_resolve_gap)";
+    return "resolve_gaps: 存在待处理的 Gap，先用 bc_review target=gap 检查，再通过 bc_prepare action=resolve-gap 预览并提交含 evidenceRefs 的确认。";
   }
   if (state.hasFailedCases) {
     return "review_failures: 存在失败用例，建议复盘或 healer 修复 (bc_review / bc_run_agent healer)";
@@ -7708,9 +8541,10 @@ function requirementSuiteTestDataTaskPackage(
   task: TestDataTask,
   phase: "prepare" | "cleanup"
 ): Record<string, unknown> {
+  const reconciliationRequired = task.operationPhase === "sent" || task.operationPhase === undefined;
   return {
     mode: "requirement-suite",
-    status: "needs_test_data",
+    status: reconciliationRequired ? "needs_test_data_reconciliation" : "needs_test_data",
     stage:
       phase === "cleanup"
         ? "test-data-cleanup"
@@ -7726,8 +8560,12 @@ function requirementSuiteTestDataTaskPackage(
     currentExecutableCaseId: executableCaseId,
     requirementSuiteRun,
     nextAction:
-      phase === "cleanup"
-        ? "Complete the cleanup task and submit evidence before the suite advances."
+      reconciliationRequired
+        ? phase === "cleanup"
+          ? "Read the target system without writing. If cleanup did not take effect, send the included advance notice and call confirm-cleanup-notice with its SHA-256 before retrying. Do not repeat cleanup based only on a missing response."
+          : "Read the target system without writing. Submit the same entity if the operation took effect; otherwise record read-only evidence with reconcile-test-data-no-effect before retrying."
+        : phase === "cleanup"
+        ? "Send the included advance cleanup notice to the user. Then call confirm-cleanup-notice with its SHA-256; only after that succeeds may you mark the task sent, perform the approved cleanup, and submit evidence. If the user asks to retain the data, stop and keep the run blocked."
         : "Complete the test-data task and submit its decision and evidence before generation."
   };
 }
@@ -7770,10 +8608,60 @@ async function continueRequirementSuiteAfterTestData(
     };
   }
 
+  let nextCleanup: Awaited<ReturnType<typeof context.testDataProvider.prepare>> | undefined;
+  if (matched.caseRun.testDataPhase === "cleanup") {
+    try {
+      nextCleanup = await context.testDataProvider.prepare({
+        knowledgeProjectId: matched.run.knowledgeProjectId,
+        systemId: matched.run.systemId,
+        executableCaseId: matched.caseRun.executableCaseId,
+        requirementSuiteRunId: matched.run.id,
+        confirm: true,
+        phase: "cleanup"
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const gap = context.service.reportGap({
+        projectId: matched.run.systemId,
+        sourceType: "test-data-cleanup",
+        sourceId: matched.run.id,
+        reason: `Could not prepare remaining test-data cleanup: ${reason}`,
+        severity: "high",
+        owner: "qa"
+      });
+      const blockedRun = context.requirementSuiteRuns.failTestDataTask(
+        matched.run.id,
+        matched.caseRun.executableCaseId,
+        { gapIds: [gap.id], error: reason }
+      );
+      return {
+        mode: "requirement-suite",
+        status: "blocked",
+        stage: "test-data-cleanup",
+        submittedTestData: submitted,
+        gap,
+        requirementSuiteRun: blockedRun,
+        nextAction: "Resolve the cleanup Gap, then explicitly resume the requirement suite."
+      };
+    }
+  }
   const continuedRun = context.requirementSuiteRuns.completeTestDataTask(
     matched.run.id,
-    matched.caseRun.executableCaseId
+    matched.caseRun.executableCaseId,
+    nextCleanup?.task?.id
   );
+  if (nextCleanup?.task) {
+    return {
+      ...requirementSuiteTestDataTaskPackage(
+        continuedRun,
+        matched.caseRun.executableCaseId,
+        nextCleanup.task,
+        "cleanup"
+      ),
+      submittedTestData: submitted,
+      requirementSuiteRun: continuedRun
+    };
+  }
   if (continuedRun.status === "running") {
     const next = await executeNextRequirementSuiteCase(
       context,
@@ -8734,7 +9622,11 @@ function redactPostconditionVerification(
     ...verification,
     actualResult: redact(verification.actualResult),
     reason: redact(verification.reason),
-    evidenceRefs: verification.evidenceRefs?.map((reference) => redact(reference)!)
+    evidenceRefs: verification.evidenceRefs?.map((reference) => redact(reference)!),
+    evidenceArtifacts: verification.evidenceArtifacts?.map((artifact) => ({
+      path: redact(artifact.path)!,
+      sha256: artifact.sha256
+    }))
   };
 }
 
@@ -9261,7 +10153,29 @@ async function writeDocumentSuiteReport(
   const source = context.service
     .listCaseSources(suite.systemId)
     .find((candidate) => candidate.id === suite.sourceId);
-  const reportCases = cases ?? (source ? (await parseCaseSource(source.source)).cases : []);
+  let reportCases = cases ?? [];
+  let sourceWarning: string | undefined;
+  if (!cases && source) {
+    try {
+      reportCases = (await parseCaseSource(source.source)).cases;
+    } catch (error) {
+      sourceWarning = `Case source could not be read; selected cases are not expanded in this report: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  } else if (!cases) {
+    sourceWarning = "Case source is unavailable; selected cases are not expanded in this report.";
+  }
+  if (reportCases.length === 0 && suite.selectedCaseNos.length > 0) {
+    reportCases = suite.selectedCaseNos.map((caseNo, index) => ({
+      caseNo,
+      title: "Source unavailable",
+      module: "",
+      precondition: "",
+      steps: [],
+      expectedResult: "",
+      priority: "unknown",
+      sourceRow: index + 1
+    }));
+  }
   const system = context.repository.systemProfiles.find((item) => item.id === suite.systemId);
   const layout = resolveArtifactRunLayout({
     workDir: context.workDir,
@@ -9291,6 +10205,24 @@ async function writeDocumentSuiteReport(
     runs,
     locale: system?.defaultLocale,
     progress,
+    actionEvidence: [...new Map(
+      progressEntries
+        .filter((entry) => Boolean(entry.actionKey && entry.actionPhase))
+        .map((entry) => [entry.actionKey!, entry])
+    ).values()].map((entry) => ({
+      ...(entry.caseNo ? { caseId: entry.caseNo } : {}),
+      phase: entry.actionPhase!,
+      actionKey: entry.actionKey!,
+      actionSemantic: entry.actionSemantic ?? "",
+      ...(entry.entityReference ? { entityReference: entry.entityReference } : {}),
+      ...(entry.actionPostcondition ? { postcondition: entry.actionPostcondition } : {}),
+      evidenceRefs: entry.actionEvidenceRefs ?? [],
+      evidenceArtifacts: (entry.actionEvidenceArtifacts ?? []).map((artifact) => ({
+        path: join(context.workDir, ".brain-creator", artifact.path),
+        sha256: artifact.sha256
+      }))
+    })),
+    sourceWarning,
     bugs: context.repository.bugReports
       .filter((bug) =>
         bug.systemId === suite.systemId &&
@@ -9323,7 +10255,10 @@ async function writeDocumentSuiteReport(
     suiteRunId: suite.id,
     artifactPaths: [
       reportPath,
-      ...runs.flatMap((run) => run.artifactPaths)
+      ...runs.flatMap((run) => run.artifactPaths),
+      ...progressEntries.flatMap((entry) => (entry.actionEvidenceArtifacts ?? []).map((artifact) =>
+        join(context.workDir, ".brain-creator", artifact.path)
+      ))
     ],
     sourceRefs: [suite.sourceId, suite.id],
     ownershipDirectory: layout.root,
@@ -9626,7 +10561,12 @@ function hostAgentSuiteFailureStatus(
 
 function facadeNextAction(state: {
   bridgeOk: boolean;
+  authProfiles: number;
+  verifiedAuthProfiles: number;
+  authProfileId?: string;
   awaitingAuthCheckpoints: number;
+  pendingWriteTaskId?: string;
+  stalledExecutionTaskId?: string;
   pendingAgentTasks: number;
   openBugs: number;
   openGaps: number;
@@ -9637,8 +10577,17 @@ function facadeNextAction(state: {
   if (state.awaitingAuthCheckpoints > 0) {
     return "complete_auth_checkpoint";
   }
+  if (state.pendingWriteTaskId) {
+    return "reconcile_pending_write";
+  }
   if (!state.bridgeOk) {
     return "configure_bridge";
+  }
+  if (state.authProfiles === 0) {
+    return "configure_auth";
+  }
+  if (state.stalledExecutionTaskId) {
+    return "review_stalled_task";
   }
   if (state.pendingAgentTasks > 0) {
     return "continue_case_source_suite";
@@ -9648,6 +10597,9 @@ function facadeNextAction(state: {
   }
   if (state.unfinishedSuites > 0) {
     return "continue_case_source_suite";
+  }
+  if (state.verifiedAuthProfiles === 0) {
+    return state.authProfileId ? "reauthenticate_auth" : "configure_auth";
   }
   if (state.openBugs > 0) {
     return "review_bugs";
@@ -9662,14 +10614,19 @@ function facadeNextAction(state: {
 }
 
 function statusUserSummary(state: {
+  systemId: string;
   systemName: string;
   bridgeOk: boolean;
   authProfiles: number;
+  verifiedAuthProfiles: number;
+  authProfileId?: string;
   awaitingAuthCheckpoints: number;
   pendingAgentTasks: number;
   openBugs: number;
   openGaps: number;
   unfinishedSuites: number;
+  pendingWriteTaskId?: string;
+  stalledExecutionTaskId?: string;
   nextAction: string;
   activeExecutionTask?: Pick<
     UnifiedExecutionTask,
@@ -9712,7 +10669,7 @@ function statusUserSummary(state: {
   return {
     systemName: state.systemName,
     readiness:
-      !state.bridgeOk || state.awaitingAuthCheckpoints > 0
+      !state.bridgeOk || state.verifiedAuthProfiles === 0 || state.awaitingAuthCheckpoints > 0
         ? "blocked"
         : state.pendingAgentTasks > 0 ||
             state.openBugs > 0 ||
@@ -9721,7 +10678,13 @@ function statusUserSummary(state: {
           ? "action-required"
           : "ready",
     nextAction: state.nextAction,
-    nextCommand: nextCommandForAction(state.nextAction),
+    nextCommand: nextCommandForAction(
+      state.nextAction,
+      state.systemId,
+      state.stalledExecutionTaskId,
+      state.pendingWriteTaskId,
+      state.authProfileId
+    ),
     nextStep: nextStepForAction(state.nextAction),
     ...(state.activeExecutionTask
       ? { activeExecutionTask: state.activeExecutionTask }
@@ -9729,6 +10692,7 @@ function statusUserSummary(state: {
     ...(state.activeSuite ? { activeSuite: state.activeSuite } : {}),
     counts: {
       authProfiles: state.authProfiles,
+      verifiedAuthProfiles: state.verifiedAuthProfiles,
       awaitingAuthCheckpoints: state.awaitingAuthCheckpoints,
       pendingAgentTasks: state.pendingAgentTasks,
       openBugs: state.openBugs,
@@ -9744,6 +10708,7 @@ function statusMarkdown(summary: ReturnType<typeof statusUserSummary>) {
     "",
     `- Readiness: ${summary.readiness}`,
     `- Auth profiles: ${summary.counts.authProfiles}`,
+    `- Verified auth profiles: ${summary.counts.verifiedAuthProfiles}`,
     `- Awaiting auth checkpoints: ${summary.counts.awaitingAuthCheckpoints}`,
     `- Pending agent tasks: ${summary.counts.pendingAgentTasks}`,
     `- Open bugs: ${summary.counts.openBugs}`,
@@ -9807,12 +10772,42 @@ function statusMarkdown(summary: ReturnType<typeof statusUserSummary>) {
   ].join("\n");
 }
 
-function statusQuickCommands(state: { openBugs: number; openGaps: number; unfinishedSuites: number }) {
+function statusQuickCommands(state: {
+  authProfiles: number;
+  verifiedAuthProfiles: number;
+  authProfileId?: string;
+  openBugs: number;
+  openGaps: number;
+  unfinishedSuites: number;
+  pendingWriteTaskId?: string;
+  systemId?: string;
+  stalledExecutionTaskId?: string;
+}) {
   const commands = [
     { command: "/bc status", description: "Inspect the current Brain Creator system status." },
     { command: `/bc run "<path>"`, description: "Preview a test case document suite before execution." }
   ];
-  if (state.unfinishedSuites > 0) {
+  if (state.authProfiles === 0) {
+    commands.unshift({
+      command: state.systemId ? `bc_configure target=auth systemId=${state.systemId}` : "bc_configure target=auth",
+      description: "Configure and verify authentication before planning or running tests."
+    });
+  } else if (state.verifiedAuthProfiles === 0) {
+    commands.unshift({
+      command: state.systemId && state.authProfileId
+        ? `brain-creator auth capture --system ${state.systemId} --profile ${state.authProfileId}`
+        : "brain-creator auth capture --system <system-id> --profile <auth-profile-id>",
+      description: "Re-authenticate the existing profile in the isolated browser before planning or running tests."
+    });
+  }
+  if (state.pendingWriteTaskId) {
+    commands.push({
+      command: `bc_review target=run-ledger systemId=${state.systemId} id=${state.pendingWriteTaskId}`,
+      description: "Inspect the sent write and verify its original postcondition before resuming; never replay it."
+    });
+  } else if (state.stalledExecutionTaskId) {
+    commands.push({ command: "/bc review suite", description: "Review the latest suite before deciding whether to resume a stalled task." });
+  } else if (state.unfinishedSuites > 0) {
     commands.push({ command: "/bc continue", description: "Resume the latest unfinished suite." });
   }
   if (state.openBugs > 0) {
@@ -9988,10 +10983,22 @@ function nextFacadeToolForAction(action: string) {
   if (action === "configure_system") {
     return "bc_configure";
   }
+  if (action === "configure_auth") {
+    return "bc_configure";
+  }
+  if (action === "reauthenticate_auth") {
+    return "brain-creator auth capture";
+  }
   if (action === "complete_auth_checkpoint") {
     return "bc_configure";
   }
   if (action === "review_gaps" || action === "review_bugs") {
+    return "bc_review";
+  }
+  if (action === "review_stalled_task") {
+    return "bc_review";
+  }
+  if (action === "reconcile_pending_write") {
     return "bc_review";
   }
   if (
@@ -10005,15 +11012,39 @@ function nextFacadeToolForAction(action: string) {
   return "bc_status";
 }
 
-function nextCommandForAction(action: string) {
+function nextCommandForAction(
+  action: string,
+  systemId?: string,
+  stalledExecutionTaskId?: string,
+  pendingWriteTaskId?: string,
+  authProfileId?: string
+) {
   if (action === "configure_bridge") {
     return "brain-creator-doctor";
   }
   if (action === "complete_auth_checkpoint") {
     return "complete authentication";
   }
+  if (action === "configure_auth") {
+    return systemId ? `bc_configure target=auth systemId=${systemId}` : "bc_configure target=auth";
+  }
+  if (action === "reauthenticate_auth") {
+    return systemId && authProfileId
+      ? `brain-creator auth capture --system ${systemId} --profile ${authProfileId}`
+      : "brain-creator auth capture --system <system-id> --profile <auth-profile-id>";
+  }
   if (action === "continue_case_source_suite") {
     return "/bc continue";
+  }
+  if (action === "review_stalled_task") {
+    return stalledExecutionTaskId
+      ? `bc_review target=run-ledger systemId=${systemId} id=${stalledExecutionTaskId}`
+      : "/bc status";
+  }
+  if (action === "reconcile_pending_write") {
+    return pendingWriteTaskId
+      ? `bc_review target=run-ledger systemId=${systemId} id=${pendingWriteTaskId}`
+      : "/bc status";
   }
   if (action === "review_gaps") {
     return "/bc gaps";
@@ -10089,8 +11120,20 @@ function nextStepForAction(action: string) {
   if (action === "complete_auth_checkpoint") {
     return "Complete the pending manual authentication checkpoint.";
   }
+  if (action === "configure_auth") {
+    return "Configure and verify an authentication profile for this system before planning or execution.";
+  }
+  if (action === "reauthenticate_auth") {
+    return "Re-authenticate the existing profile in the isolated browser and verify it before planning or execution.";
+  }
   if (action === "continue_case_source_suite") {
     return "Continue the latest unfinished test case suite.";
+  }
+  if (action === "review_stalled_task") {
+    return "Review the stalled task's Run Ledger and reconcile its persisted state before deciding whether to resume; do not replay pending writes.";
+  }
+  if (action === "reconcile_pending_write") {
+    return "Inspect the Run Ledger and query the original business postcondition before any resume; reconcile with target evidence and do not replay the write.";
   }
   if (action === "review_gaps") {
     return "Review open gaps before claiming the system is ready.";
@@ -10418,6 +11461,7 @@ async function verifyCaseSourceSuiteAuthState(
   }
   const verification = await context.authStateVerifier({
     storageStatePath: await resolveProtectedStorageStatePath(context.workDir, storageStatePath),
+    workDir: context.workDir,
     targetUrl: system.baseUrl,
     allowedUrls: system.urlAllowlist
   });
@@ -10472,6 +11516,7 @@ async function refreshAndVerifyAuthState(
     context.service.setAuthStorageStatePath(authProfile.id, refreshed.storageStatePath);
     const verification = await context.authStateVerifier({
       storageStatePath: safePath,
+      workDir: context.workDir,
       targetUrl: system.baseUrl,
       allowedUrls: system.urlAllowlist
     });
@@ -10571,6 +11616,9 @@ function compactFacadePayload(data: unknown) {
   }
   const preferredSummary =
     record.reviewSummary ?? record.userSummary ?? record.summary ?? summarizeFacadeRecord(record);
+  const adjudicationReview = record.adjudication && record.evaluation && typeof record.evaluation === "object"
+    ? record.evaluation as { verdict?: unknown; reasons?: unknown; nextActions?: unknown }
+    : undefined;
   return {
     responseMode: "summary",
     status: typeof record.status === "string" ? record.status : "succeeded",
@@ -10578,9 +11626,20 @@ function compactFacadePayload(data: unknown) {
     ...(typeof record.stage === "string" ? { stage: record.stage } : {}),
     summary: preferredSummary,
     ...(record.runtimeIdentity ? { runtimeIdentity: record.runtimeIdentity } : {}),
+    ...(record.recoveryCapabilities ? { recoveryCapabilities: record.recoveryCapabilities } : {}),
+    ...(record.runtimeCapabilities ? { runtimeCapabilities: record.runtimeCapabilities } : {}),
     ...(typeof record.nextAction === "string" ? { nextAction: record.nextAction } : {}),
     ...(typeof record.requiresConfirmation === "boolean"
       ? { requiresConfirmation: record.requiresConfirmation }
+      : {}),
+    ...(adjudicationReview && typeof adjudicationReview.verdict === "string"
+      ? {
+          review: {
+            verdict: adjudicationReview.verdict,
+            reasons: Array.isArray(adjudicationReview.reasons) ? adjudicationReview.reasons : [],
+            nextActions: Array.isArray(adjudicationReview.nextActions) ? adjudicationReview.nextActions : []
+          }
+        }
       : {}),
     references: facadeReferences(record)
   };
@@ -10596,6 +11655,9 @@ function summarizeFacadeRecord(record: Record<string, unknown>) {
   );
   for (const key of ["verificationEvidence", "counts", "completeness"]) {
     if (record[key] && typeof record[key] === "object") summary[key] = record[key];
+  }
+  if (typeof record.baseUrl === "string" && Array.isArray(record.urlAllowlist)) {
+    summary.urlAllowlist = record.urlAllowlist;
   }
   return summary;
 }
@@ -10636,6 +11698,13 @@ function stringArg(input: Record<string, unknown>, key: string): string {
 function optionalStringArg(input: Record<string, unknown>, key: string): string | undefined {
   const value = input[key];
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function executionProvenanceArg(input: Record<string, unknown>): ExecutionProvenance | undefined {
+  const value = optionalStringArg(input, "executionProvenance");
+  if (value === undefined) return undefined;
+  if (value === "real-system" || value === "synthetic" || value === "unknown") return value;
+  throw new Error("executionProvenance must be real-system, synthetic, or unknown");
 }
 
 function optionalNumberArg(input: Record<string, unknown>, key: string): number | undefined {
@@ -10944,7 +12013,27 @@ async function archiveRequirementSuiteRun(
     gaps: context.repository.gaps
       .filter((gap) => gap.projectId === run.systemId && (gap.sourceId === run.id || executableCaseIds.has(gap.sourceId)))
       .map((gap) => ({ id: gap.id, status: gap.status, caseNo: gap.sourceId, reason: gap.reason })),
-    progress: context.runLedger.progress(run.id)
+    progress: context.runLedger.progress(run.id),
+    actionEvidence: [...new Map(
+      context.runLedger.list({ requirementSuiteRunId: run.id })
+        .filter((entry) => Boolean(entry.actionKey && entry.actionPhase))
+        .map((entry) => [entry.actionKey!, entry])
+    ).values()].map((entry) => ({
+      ...(entry.executableCaseId || entry.caseNo
+        ? { caseId: entry.executableCaseId ?? entry.caseNo }
+        : {}),
+      phase: entry.actionPhase!,
+      actionKey: entry.actionKey!,
+      actionSemantic: entry.actionSemantic ?? "",
+      ...(entry.entityReference ? { entityReference: entry.entityReference } : {}),
+      ...(entry.actionPostcondition ? { postcondition: entry.actionPostcondition } : {}),
+      evidenceRefs: entry.actionEvidenceRefs ?? [],
+      evidenceArtifacts: (entry.actionEvidenceArtifacts ?? []).map((artifact) => ({
+        path: join(context.workDir, ".brain-creator", artifact.path),
+        sha256: artifact.sha256
+      }))
+    })),
+    protectedSecrets: protectedSecretsForSystem(context, run.systemId)
   });
   run.reportPath = reportPath;
   const artifactManifest = await writeArtifactManifest({
@@ -10956,7 +12045,11 @@ async function archiveRequirementSuiteRun(
     artifactPaths: [
       ...snapshotPaths,
       reportPath,
-      ...evidence.flatMap((item) => item.artifactPaths)
+      ...evidence.flatMap((item) => item.artifactPaths),
+      ...context.runLedger.list({ requirementSuiteRunId: run.id })
+        .flatMap((entry) => (entry.actionEvidenceArtifacts ?? []).map((artifact) =>
+          join(context.workDir, ".brain-creator", artifact.path)
+        ))
     ],
     sourceRefs: requirementSetIds,
     ownershipDirectory: artifactLayout.root,
@@ -11920,6 +13013,8 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
       "validate-evaluation-trial",
       "complete-evaluation-trial",
       "record-evaluation-intervention",
+      "complete-intervention-capture",
+      "reevaluate-legacy-execution-evidence",
       "ingest-requirement",
       "refresh-requirement",
       "analyze-attachments",
@@ -11950,6 +13045,9 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
       "reopen-gap",
       "resolve-test-data",
       "prepare-test-data",
+      "confirm-cleanup-notice",
+      "mark-test-data-sent",
+      "reconcile-test-data-no-effect",
       "submit-test-data",
       "prepare-execution",
       "record-execution-action",
@@ -11974,6 +13072,8 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
     | "validate-evaluation-trial"
     | "complete-evaluation-trial"
     | "record-evaluation-intervention"
+    | "complete-intervention-capture"
+    | "reevaluate-legacy-execution-evidence"
     | "ingest-requirement"
     | "refresh-requirement"
     | "analyze-attachments"
@@ -12004,6 +13104,9 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
     | "reopen-gap"
     | "resolve-test-data"
     | "prepare-test-data"
+    | "confirm-cleanup-notice"
+    | "mark-test-data-sent"
+    | "reconcile-test-data-no-effect"
     | "submit-test-data"
     | "prepare-execution"
     | "record-execution-action"
@@ -12057,6 +13160,9 @@ function evaluationInterventionCategoryArg(input: Record<string, unknown>, key: 
   if (![
     "controlled-facade-write",
     "user-clarification",
+    "user-authentication",
+    "manual-evidence-review",
+    "manual-recovery",
     "manual-store-write",
     "source-change",
     "code-change",
@@ -12067,6 +13173,9 @@ function evaluationInterventionCategoryArg(input: Record<string, unknown>, key: 
   return value as
     | "controlled-facade-write"
     | "user-clarification"
+    | "user-authentication"
+    | "manual-evidence-review"
+    | "manual-recovery"
     | "manual-store-write"
     | "source-change"
     | "code-change"
@@ -12463,7 +13572,7 @@ function pageEvidenceArg(input: Record<string, unknown>, key: string) {
     title: stringArg(record, "title"),
     finalUrl: stringArg(record, "finalUrl"),
     domText: stringArg(record, "domText"),
-    screenshotPath: stringArg(record, "screenshotPath"),
+    screenshotPath: optionalStringArg(record, "screenshotPath"),
     interactiveElements: interactiveElements.map((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
         throw new Error(`${key}.interactiveElements[${index}] must be an object`);
@@ -12643,13 +13752,16 @@ function onboardingCreateNextAction(
 }
 
 function evaluationRuntimeBuildIdentity(context: BrainCreatorMcpContext) {
-  const identity = readRuntimeIdentity({
+  return evaluationRuntimeIdentity(context).buildId;
+}
+
+function evaluationRuntimeIdentity(context: BrainCreatorMcpContext) {
+  return readRuntimeIdentity({
     workspace: context.workDir,
     schemaVersion: context.repository.schemaVersion,
     provider: context.agentBridge?.provider ?? context.runtimeConfiguration?.bridgeProvider ?? "disabled",
     processKind: "mcp"
   });
-  return identity.buildId;
 }
 
 function gapSeverityArg(input: Record<string, unknown>, key: string) {

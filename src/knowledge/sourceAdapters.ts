@@ -257,20 +257,31 @@ function markdownAttachments(content: string, baseDir: string): RequirementAttac
   return [...content.matchAll(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g)].map(
     (match, index) => {
       const reference = match[2].trim();
-      const url = /^https?:\/\//i.test(reference)
+      const resolvedReference = /^https?:\/\//i.test(reference)
         ? reference
-        : isAbsolute(reference)
-          ? reference
-          : resolve(baseDir, reference);
+        : decodeMarkdownReference(reference);
+      const url = /^https?:\/\//i.test(resolvedReference)
+        ? resolvedReference
+        : isAbsolute(resolvedReference)
+          ? resolvedReference
+          : resolve(baseDir, resolvedReference);
       return {
-        name: match[1].trim() || basename(reference) || `image-${index + 1}`,
+        name: match[1].trim() || basename(resolvedReference) || `image-${index + 1}`,
         url,
-        mimeType: mimeTypeFromName(reference),
+        mimeType: mimeTypeFromName(resolvedReference),
         status: "discovered",
         attempts: 0
       };
     }
   );
+}
+
+function decodeMarkdownReference(reference: string) {
+  try {
+    return decodeURIComponent(reference);
+  } catch {
+    return reference;
+  }
 }
 
 async function hashLocalAttachments(attachments: RequirementAttachment[], maxBytes?: number) {

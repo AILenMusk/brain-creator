@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import { encryptSecrets } from "../shared/crypto.js";
-import { RunLedgerService } from "./runLedger.js";
+import { hasValidRunLedgerEntryIntegrity, RunLedgerService, verifyRunLedgerIntegrityChains } from "./runLedger.js";
 
 describe("RunLedgerService", () => {
   it("isolates entries by knowledge project, system, and suite run", () => {
@@ -294,7 +294,8 @@ describe("RunLedgerService", () => {
       actionKey: "plan-submit:step-submit",
       phase: "planned",
       actionSemantic: "Submit order",
-      entityReference: "order:order-001"
+      entityReference: "order:order-001",
+      postcondition: "Order status is submitted"
     });
     const sent = ledger.recordAction({
       requirementSuiteRunId: "suite-orders",
@@ -311,10 +312,19 @@ describe("RunLedgerService", () => {
     expect(sent).toEqual(expect.objectContaining({
       event: "action-sent",
       actionPhase: "sent",
+      actionPostcondition: "Order status is submitted",
       toStatus: "waiting-for-action-reconciliation",
       progressStatus: "waiting"
     }));
     expect(ledger.latestUnresolvedAction("suite-orders")).toEqual(sent);
+
+    expect(() => new RunLedgerService(new InMemoryBrainCreatorRepository()).recordAction({
+      requirementSuiteRunId: "suite-no-oracle",
+      systemId: "system-orders",
+      actionKey: "submit-order",
+      phase: "sent",
+      actionSemantic: "Submit order"
+    })).toThrow("Sent execution action requires a frozen postcondition");
 
     const confirmed = ledger.recordAction({
       requirementSuiteRunId: "suite-orders",
@@ -337,6 +347,51 @@ describe("RunLedgerService", () => {
       phase: "sent",
       actionSemantic: "Submit order"
     })).toThrow("terminal");
+  });
+
+  it("freezes Trial and scenario attribution across action phases", () => {
+    const ledger = new RunLedgerService(new InMemoryBrainCreatorRepository());
+    const planned = ledger.recordAction({
+      runType: "document-suite",
+      caseSuiteId: "document-suite",
+      systemId: "system-orders",
+      evaluationTrialId: "trial-orders",
+      businessScenarioId: "scenario-submit",
+      caseNo: "TC-001",
+      actionKey: "tc-001:submit",
+      phase: "planned",
+      actionSemantic: "Submit order",
+      postcondition: "Order status is submitted"
+    });
+    const sent = ledger.recordAction({
+      runType: "document-suite",
+      caseSuiteId: "document-suite",
+      systemId: "system-orders",
+      caseNo: "TC-001",
+      actionKey: "tc-001:submit",
+      phase: "sent",
+      actionSemantic: "Submit order"
+    });
+
+    expect(planned).toEqual(expect.objectContaining({
+      evaluationTrialId: "trial-orders",
+      businessScenarioId: "scenario-submit"
+    }));
+    expect(sent).toEqual(expect.objectContaining({
+      evaluationTrialId: "trial-orders",
+      businessScenarioId: "scenario-submit"
+    }));
+    expect(() => ledger.recordAction({
+      runType: "document-suite",
+      caseSuiteId: "document-suite",
+      systemId: "system-orders",
+      evaluationTrialId: "another-trial",
+      businessScenarioId: "scenario-submit",
+      caseNo: "TC-001",
+      actionKey: "tc-001:submit",
+      phase: "reconciliation-required",
+      actionSemantic: "Submit order"
+    })).toThrow("Execution action Trial binding cannot change after it is planned");
   });
 
   it("redacts action semantic, entity, postcondition, and evidence references", () => {
@@ -368,5 +423,50 @@ describe("RunLedgerService", () => {
     expect(entry.entityReference).not.toContain("action-token-123");
     expect(entry.actionPostcondition).not.toContain("action-token-123");
     expect(entry.actionEvidenceRefs?.[0]).not.toContain("action-token-123");
+  });
+
+  it("authenticates action ledger events and detects later record mutation", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const authenticator = {
+      sign: (payload: string) => `tag:${payload}`,
+      verify: (payload: string, tag: string) => tag === `tag:${payload}`
+    };
+    const ledger = new RunLedgerService(repository, undefined, undefined, authenticator);
+    const entry = ledger.recordAction({
+      requirementSuiteRunId: "suite-orders",
+      knowledgeProjectId: "knowledge-orders",
+      systemId: "system-orders",
+      executableCaseId: "case-submit",
+      actionKey: "submit-order",
+      phase: "sent",
+      actionSemantic: "Submit order",
+      entityReference: "order:001",
+      postcondition: "Order status is submitted"
+    });
+
+    expect(hasValidRunLedgerEntryIntegrity(entry, authenticator)).toBe(true);
+    entry.actionPostcondition = "Order status is approved";
+    expect(hasValidRunLedgerEntryIntegrity(entry, authenticator)).toBe(false);
+  });
+
+  it("detects missing entries in a signed run-ledger chain", () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const authenticator = {
+      sign: (payload: string) => `tag:${payload}`,
+      verify: (payload: string, tag: string) => tag === `tag:${payload}`
+    };
+    const ledger = new RunLedgerService(repository, undefined, undefined, authenticator);
+    ledger.append({
+      knowledgeProjectId: "knowledge-orders", systemId: "system-orders", requirementSuiteRunId: "suite-orders",
+      event: "suite-created", scope: "suite", stage: "suite", toStatus: "running"
+    });
+    ledger.recordAction({
+      requirementSuiteRunId: "suite-orders", knowledgeProjectId: "knowledge-orders", systemId: "system-orders",
+      actionKey: "submit-order", phase: "sent", actionSemantic: "Submit order", postcondition: "Order status is submitted"
+    });
+    expect([...verifyRunLedgerIntegrityChains(repository.runLedgerEntries, authenticator).values()]).toEqual([true, true]);
+
+    repository.runLedgerEntries.shift();
+    expect([...verifyRunLedgerIntegrityChains(repository.runLedgerEntries, authenticator).values()]).toEqual([false]);
   });
 });

@@ -60,12 +60,16 @@ type CompleteRequirementSuiteCaseInput = RequirementSuiteCaseOutcome;
 
 export class RequirementSuiteRunService {
   private readonly runLedger: RunLedgerService;
+  private readonly runtimeBuildIdentity: string;
 
   constructor(
     private readonly repository: InMemoryBrainCreatorRepository,
-    runLedger?: RunLedgerService
+    runLedger?: RunLedgerService,
+    runtimeBuildIdentity = readRuntimeIdentity({ workspace: "", schemaVersion: repository.schemaVersion, provider: "unknown" }).buildId,
+    private readonly evaluationIntegrity?: EvaluationIntegrityService
   ) {
     this.runLedger = runLedger ?? new RunLedgerService(repository);
+    this.runtimeBuildIdentity = runtimeBuildIdentity;
   }
 
   create(input: CreateRequirementSuiteRunInput): RequirementSuiteRun {
@@ -224,6 +228,7 @@ export class RequirementSuiteRunService {
     now = new Date()
   ): RequirementSuiteRun {
     const run = this.get(runId);
+    this.validateEvaluationRun(run);
     if (!run.stabilitySchedule) {
       throw new Error("Requirement suite has no stability schedule");
     }
@@ -453,7 +458,8 @@ export class RequirementSuiteRunService {
 
   completeTestDataTask(
     runId: string,
-    executableCaseId: string
+    executableCaseId: string,
+    nextCleanupTaskId?: string
   ): RequirementSuiteRun {
     const run = this.get(runId);
     const caseRun = this.currentCase(run, executableCaseId);
@@ -463,6 +469,43 @@ export class RequirementSuiteRunService {
     const pendingOutcome = caseRun.pendingOutcome;
     const phase = caseRun.testDataPhase;
     const testDataTaskId = caseRun.testDataTaskId;
+    if (phase === "cleanup" && pendingOutcome && nextCleanupTaskId) {
+      const nextTask = this.repository.testDataTasks.find(
+        (item) => item.id === nextCleanupTaskId &&
+          item.executableCaseId === executableCaseId &&
+          item.action === "cleanup" &&
+          item.status === "pending"
+      );
+      if (!nextTask) {
+        throw new Error("Next cleanup task must be pending and belong to the same case");
+      }
+      caseRun.testDataTaskId = nextTask.id;
+      caseRun.testDataPhase = "cleanup";
+      caseRun.status = "waiting-for-test-data";
+      run.status = "waiting-for-test-data";
+      run.currentExecutableCaseId = executableCaseId;
+      run.updatedAt = timestamp();
+      this.repository.persist();
+      this.record(run, {
+        executableCaseId,
+        event: "test-data-task-completed",
+        scope: "case",
+        stage: "test-data-cleanup",
+        fromStatus: "waiting-for-test-data",
+        toStatus: caseRun.status,
+        references: { testDataTaskId }
+      });
+      this.record(run, {
+        executableCaseId,
+        event: "test-data-task-requested",
+        scope: "case",
+        stage: "test-data-cleanup",
+        fromStatus: caseRun.status,
+        toStatus: caseRun.status,
+        references: { testDataTaskId: nextTask.id }
+      });
+      return run;
+    }
     caseRun.testDataTaskId = undefined;
     caseRun.testDataPhase = undefined;
     caseRun.pendingOutcome = undefined;
@@ -1110,10 +1153,9 @@ export class RequirementSuiteRunService {
   }
 
   private validateEvaluation(trialId: string, knowledgeProjectId: string, systemId: string, executableCaseIds: string[]) {
-    const identity = readRuntimeIdentity({ workspace: "", schemaVersion: this.repository.schemaVersion, provider: "unknown" });
-    const binding = new EvaluationIntegrityService(this.repository).validateExecutionBinding({
+    const binding = (this.evaluationIntegrity ?? new EvaluationIntegrityService(this.repository)).validateExecutionBinding({
       trialId, knowledgeProjectId, systemId, executableCaseIds,
-      runtimeBuildIdentity: identity.buildId
+      runtimeBuildIdentity: this.runtimeBuildIdentity
     });
     if (!binding.valid) throw new Error(`Evaluation trial binding is invalid: ${binding.reasons.join("; ")}`);
     return binding;

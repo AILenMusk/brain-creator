@@ -1,6 +1,7 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,9 +11,46 @@ import type {
   RequirementSet,
   TestIntent
 } from "../domain/types.js";
+import type { EvaluationTrial } from "../brain/types.js";
+import type { TestDataNoEffectVerifier } from "../knowledge/testDataProvider.js";
 import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "./handlers.js";
 
 const tempDirs: string[] = [];
+
+function fixtureNoEffectVerifier(
+  workDir: string,
+  cleanupResults: Array<"absent" | "present"> = []
+): TestDataNoEffectVerifier {
+  let cleanupIndex = 0;
+  return async ({ task, system, query }) => {
+    const evidencePath = `no-effect/${task.id}.json`;
+    const checkedAt = new Date().toISOString();
+    const result = task.action === "cleanup"
+      ? cleanupResults[cleanupIndex++] ?? "present"
+      : "absent";
+    const contents = JSON.stringify({
+      schemaVersion: 1,
+      type: "testdata-no-effect-observation",
+      systemId: system.id,
+      query,
+      result,
+      matchCount: result === "present" ? 1 : 0,
+      ...(result === "present" ? { reference: query } : {}),
+      provider: "fixture-target-query",
+      checkedAt
+    });
+    await mkdir(join(workDir, ".brain-creator", "no-effect"), { recursive: true });
+    await writeFile(join(workDir, ".brain-creator", evidencePath), contents, "utf8");
+    return {
+      status: result,
+      provider: "fixture-target-query",
+      query,
+      evidenceRefs: [`system-query:${task.id}:not-found`],
+      evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
+      checkedAt
+    };
+  };
+}
 
 function structuredFailureReport() {
   return JSON.stringify({
@@ -43,6 +81,173 @@ afterEach(async () => {
 });
 
 describe("Brain Creator requirement-first facade", () => {
+  it("records screenshotless page evidence as limited and without a synthetic screenshot", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const project = await context.knowledgeService.createProject({
+      name: "Screenshotless Observation",
+      key: "screenshotless-observation",
+      defaultLocale: "en-US"
+    });
+    const system = context.service.createSystemProfile({
+      name: "Order Console",
+      environment: "test",
+      baseUrl: "https://orders.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://orders.example.test"]
+    });
+    context.knowledgeService.bindSystem(project.id, system.id);
+
+    const result = dataOf(
+      await handleBrainCreatorTool(context, "bc_prepare", {
+        action: "record-page-evidence",
+        knowledgeProjectId: project.id,
+        systemId: system.id,
+        pageEvidence: {
+          title: "Orders",
+          finalUrl: "https://orders.example.test/orders",
+          domText: "Create Order",
+          interactiveElements: [
+            {
+              name: "Create Order",
+              role: "button",
+              text: "Create Order",
+              selector: "button[data-action=create]"
+            }
+          ],
+          consoleErrors: [],
+          networkFailures: [],
+          issues: []
+        }
+      })
+    );
+
+    expect(result.pageModel).not.toHaveProperty("screenshotId");
+    expect(result.locatorPoints[0]?.confidence).toBe(0.6);
+    expect(result.probeResult.type).toBe("host-accessibility-observation");
+    expect(result.probeResult.issues).toContain(
+      "Screenshot evidence unavailable for this page capture"
+    );
+  });
+
+  it("requires explicit confirmation before re-evaluating legacy execution evidence", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const response = await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "reevaluate-legacy-execution-evidence",
+      evaluationTrialId: "trial-history",
+      executionEvidenceId: "evidence-history",
+      historicalEvidenceReviewer: "reviewer",
+      historicalEvidenceNote: "Review the saved artifacts",
+      confirm: false
+    });
+    const envelope = envelopeOf(response);
+
+    expect(envelope.success).toBe(false);
+    expect(envelope.errors.join("; ")).toContain("confirm=true");
+  });
+
+  it("records a completed explicitly Trial-bound auth checkpoint against its reviewed scenario", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const system = context.service.createSystemProfile({
+      name: "Auth Trial System",
+      environment: "test",
+      baseUrl: "https://auth-trial.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://auth-trial.example.test"]
+    });
+    const auth = context.service.createAuthProfile({
+      projectId: system.id,
+      env: "test",
+      role: "reviewer",
+      loginMethod: "script",
+      secrets: {}
+    });
+    const now = new Date().toISOString();
+    const trial: EvaluationTrial = {
+      id: "trial-auth-checkpoint",
+      comparisonGroupId: "group-auth-checkpoint",
+      knowledgeProjectId: "project-auth-checkpoint",
+      systemId: system.id,
+      requirementSourceId: "source-auth-checkpoint",
+      sourceSnapshotId: "snapshot-auth-checkpoint",
+      requirementSetId: "requirement-auth-checkpoint",
+      sourceRevision: 1,
+      sourceHash: "source-hash",
+      provider: "codex",
+      workspacePath: workDir,
+      storePath: join(workDir, "assets.json"),
+      codeRevision: "revision",
+      runtimeVersions: {},
+      executionScope: {
+        businessScenarioIds: ["scenario-auth-checkpoint"],
+        scopeHash: "scope-auth-checkpoint"
+      },
+      latestProjectionManifestId: "manifest-auth-checkpoint",
+      status: "active",
+      invalidationReasons: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    context.repository.evaluationTrials.push(trial);
+    context.repository.businessScenarios.push({
+      id: "scenario-auth-checkpoint",
+      knowledgeProjectId: trial.knowledgeProjectId,
+      requirementSetId: "requirement-auth-checkpoint",
+      title: "Authenticated approval",
+      objective: "Approve a request after manual authentication",
+      family: "main-flow",
+      actors: ["reviewer"],
+      preconditions: [],
+      workflowRefs: [],
+      stateTransitionRefs: [],
+      decisionRuleRefs: [],
+      testDataNeeds: [],
+      expectedBusinessOutcomes: ["approved"],
+      sourceRefs: ["requirement:approval"],
+      testIntentIds: ["intent-auth-checkpoint"],
+      risk: "low",
+      status: "approved"
+    });
+
+    const checkpoint = dataOf(await handleBrainCreatorTool(context, "bc_create_auth_checkpoint", {
+      systemId: system.id,
+      authProfileId: auth.id,
+      evaluationTrialId: trial.id,
+      businessScenarioId: "scenario-auth-checkpoint",
+      reason: "Complete the test-system login",
+      resumeInstruction: "Continue after the authenticated page appears"
+    }));
+    const completed = dataOf(await handleBrainCreatorTool(context, "bc_complete_auth_checkpoint", {
+      checkpointId: checkpoint.id
+    }));
+
+    expect(completed.status).toBe("completed");
+    expect(checkpoint.authenticationPhase).toBe("initial-authorization");
+    expect(context.repository.interventionRecords).toEqual([
+      expect.objectContaining({
+        trialId: trial.id,
+        category: "user-authentication",
+        authenticationPhase: "initial-authorization",
+        businessScenarioIds: ["scenario-auth-checkpoint"],
+        evidenceRefs: [`auth-checkpoint:${checkpoint.id}`]
+      })
+    ]);
+    expect(context.repository.interventionRecords[0]?.businessScenarioIds).toEqual([
+      "scenario-auth-checkpoint"
+    ]);
+  });
+
   it("does not offer a ready executable case while its intent has an open test-data gap", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
@@ -995,11 +1200,75 @@ describe("Brain Creator requirement-first facade", () => {
     expect(approved.status).toBe("approved");
   });
 
-  it("prepares and submits test data through the requirement Facade", async () => {
+  it("keeps a clarification Gap open until its separate evidence-referenced Facade transition", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
       workDir,
       dataFilePath: join(workDir, "assets.json")
+    });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Invoice Approval",
+      key: "invoice-approval-gap-evidence"
+    }));
+    const source = join(workDir, "invoice-approval.md");
+    await writeFile(source, "# Invoice Approval\n\nThe approval threshold is not specified.", "utf8");
+    const ingested = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source
+    }));
+    const designed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-test-design",
+      requirementSetId: ingested.requirementSet.id
+    }));
+    const gap = designed.gaps[0];
+    const action = designed.evaluationGate.actions[0];
+    const confirmationNote = "The approval threshold is 1000.";
+    const confirmed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "confirm-eval-actions",
+      requirementSetId: ingested.requirementSet.id,
+      actionIds: [action.id],
+      confirmationNote,
+      confirm: true
+    }));
+
+    expect(confirmed.resolvedGapIds).toEqual([]);
+    expect(context.repository.gaps.find((item) => item.id === gap.id)?.status).toBe("open");
+    expect(() => context.knowledgeService.approveRequirementSet(ingested.requirementSet.id)).toThrow(
+      "Requirement clarification gaps must be resolved before approval"
+    );
+
+    const evidenceRefs = [`knowledge-node:${confirmed.evaluationGate.actions[0].resolutionNodeId}`];
+    const preview = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: project.id,
+      gapId: gap.id,
+      confirmationNote: "Resolve only after the clarified threshold is recorded as separate requirement evidence.",
+      evidenceRefs,
+      confirm: false
+    }));
+    expect(preview.status).toBe("preview");
+    expect(context.repository.gaps.find((item) => item.id === gap.id)?.status).toBe("open");
+
+    const resolved = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: project.id,
+      gapId: gap.id,
+      confirmationNote: "Resolve only after the clarified threshold is recorded as separate requirement evidence.",
+      evidenceRefs,
+      confirm: true
+    }));
+    expect(resolved.status).toBe("resolved");
+    expect(context.knowledgeService.approveRequirementSet(ingested.requirementSet.id).status).toBe("approved");
+  });
+
+  it("prepares and submits test data through the requirement Facade", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json"),
+      testDataNoEffectVerifier: fixtureNoEffectVerifier(workDir)
     });
     const system = context.service.createSystemProfile({
       name: "Customer Portal",
@@ -1143,6 +1412,29 @@ describe("Brain Creator requirement-first facade", () => {
     );
     expect(pendingStatus.nextAction).toBe("complete_test_data_task");
 
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: prepared.task.id
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "reconcile-test-data-no-effect",
+      taskId: prepared.task.id,
+      sourceRefs: ["query:customer-42-not-found"]
+    }));
+    const rearmed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "prepare-test-data",
+      knowledgeProjectId: project.id,
+      systemId: system.id,
+      executableCaseId: executableCase.id,
+      confirm: true,
+      allowCreate: true
+    }));
+    expect(rearmed).toMatchObject({ status: "needs-agent-execution", task: { id: prepared.task.id } });
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: prepared.task.id
+    }));
+
     const submitted = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
         action: "submit-test-data",
@@ -1239,17 +1531,11 @@ describe("Brain Creator requirement-first facade", () => {
     );
     expect(blockedRun).toEqual(
       expect.objectContaining({
-        status: "blocked",
-        executionPreflight: expect.objectContaining({
-          status: "blocked",
-          draft: expect.objectContaining({
-            checks: expect.arrayContaining([
-              expect.objectContaining({
-                id: "test-data-tasks",
-                status: "blocked"
-              })
-            ])
-          })
+        status: "needs_test_data",
+        stage: "test-data-prepare",
+        task: expect.objectContaining({
+          status: "pending",
+          requirementSuiteRunId: expect.any(String)
         })
       })
     );
@@ -1314,6 +1600,7 @@ describe("Brain Creator requirement-first facade", () => {
     expect(revised.requirementSet.status).toBe("draft");
     expect(status.knowledge.evaluationGates.blockedActions).toBe(0);
     expect(status.nextAction).toBe("review_and_approve_baseline");
+    expect(status.summary.openGaps).toBeGreaterThan(0);
   });
 
   it("previews Feishu host connector work without persisting a false requirement revision", async () => {
@@ -1337,6 +1624,112 @@ describe("Brain Creator requirement-first facade", () => {
 
     expect(result.status).toBe("needs-host-connector");
     expect(context.repository.requirementSets).toHaveLength(0);
+  });
+
+  it("recommends reviewing open requirement gaps before baseline approval", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Recruitment",
+      key: "recruitment-open-gap"
+    }));
+    const sourcePath = join(workDir, "requirement.md");
+    await writeFile(sourcePath, "# Recruitment\n\nDemand close behavior needs clarification.", "utf8");
+    const ingestion = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source: sourcePath
+    }));
+    const now = new Date().toISOString();
+    context.repository.gaps.push({
+      id: "gap-recruitment-clarification",
+      projectId: project.id,
+      sourceType: "requirement-clarification",
+      sourceId: ingestion.requirementSet.id,
+      reason: "Demand close postcondition needs clarification.",
+      severity: "high",
+      owner: "requirement-owner",
+      status: "open",
+      createdAt: now,
+      updatedAt: now
+    });
+    context.repository.persist();
+
+    const status = dataOf(await handleBrainCreatorTool(context, "bc_status", {
+      knowledgeProjectId: project.id
+    }));
+
+    expect(status.summary.openGaps).toBe(1);
+    expect(status.nextAction).toBe("review_gaps");
+    expect(status.nextFacadeTool).toBe("bc_review");
+    expect(status.nextToolInput).toEqual({
+      target: "gap",
+      knowledgeProjectId: project.id
+    });
+    expect(status.nextCommand).toBe(`bc_review target=gap knowledgeProjectId=${project.id}`);
+  });
+
+  it("recommends reviewing unconfirmed attachments before baseline approval", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Recruitment Attachments",
+      key: "recruitment-attachment-review"
+    }));
+    const sourcePath = join(workDir, "requirement.md");
+    await writeFile(sourcePath, "# Recruitment\n\nFields are defined by the attached workbook.", "utf8");
+    const ingestion = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source: sourcePath
+    }));
+    const source = context.repository.requirementSources.find((item) => item.id === ingestion.source.id)!;
+    source.attachments.push({
+      id: "attachment-recruitment-fields",
+      sourceId: source.id,
+      name: "fields.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      status: "structured",
+      analysisId: "analysis-recruitment-fields"
+    });
+    context.repository.attachmentAnalyses.push({
+      id: "analysis-recruitment-fields",
+      knowledgeProjectId: project.id,
+      requirementSetId: ingestion.requirementSet.id,
+      sourceId: source.id,
+      attachmentId: "attachment-recruitment-fields",
+      kind: "table",
+      markdown: "# Draft field analysis",
+      nodes: [],
+      edges: [],
+      confidence: 0.9,
+      sourceRefs: [`requirement-source:${source.id}`, "attachment:attachment-recruitment-fields"],
+      provider: "host-agent",
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    context.repository.persist();
+
+    const status = dataOf(await handleBrainCreatorTool(context, "bc_status", {
+      knowledgeProjectId: project.id
+    }));
+
+    expect(status.nextAction).toBe("review_requirement_attachments");
+    expect(status.nextFacadeTool).toBe("bc_review");
+    expect(status.nextToolInput).toEqual({
+      target: "source-fidelity",
+      knowledgeProjectId: project.id,
+      requirementSourceId: source.id
+    });
   });
 
   it("ingests direct Feishu content and records connector failures as gaps", async () => {
@@ -1996,6 +2389,7 @@ describe("Brain Creator requirement-first facade", () => {
     const context = createBrainCreatorMcpContext({
       workDir,
       dataFilePath: join(workDir, "assets.json"),
+      testDataNoEffectVerifier: fixtureNoEffectVerifier(workDir, ["present", "absent"]),
       agentBridge: bridge,
       runner: async () => ({
         exitCode: 0,
@@ -2108,14 +2502,27 @@ describe("Brain Creator requirement-first facade", () => {
             reason:
               "Test data for Customer requires an explicit reuse or create decision",
             sourceRefs: ["requirement:order-customer"]
+          },
+          {
+            profileId: "profile-order-suite",
+            field: "Order",
+            strategy: "existing-reference",
+            decision: "create",
+            status: "needs-resolution",
+            entityReference: "order:semantic",
+            dependsOnProfileIds: [],
+            cleanup: "delete-created",
+            constraints: [],
+            reason: "Test order requires creation",
+            sourceRefs: ["requirement:order-create"]
           }
         ],
-        dependencyOrder: ["profile-data-suite"],
+        dependencyOrder: ["profile-data-suite", "profile-order-suite"],
         requiresConfirmation: false,
-        requiresCleanup: false,
+        requiresCleanup: true,
         sourceRefs: ["requirement:order-customer"]
       },
-      dataProfileIds: ["profile-data-suite"],
+      dataProfileIds: ["profile-data-suite", "profile-order-suite"],
       gapIds: ["gap-data-suite"],
       createdAt: now,
       updatedAt: now
@@ -2183,7 +2590,30 @@ describe("Brain Creator requirement-first facade", () => {
     expect(context.repository.requirementSuiteRuns).toHaveLength(1);
     expect(context.repository.testDataTasks).toHaveLength(1);
 
-    const generated = dataOf(
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: prepared.task.id
+    }));
+    const reconciliation = dataOf(await handleBrainCreatorTool(context, "bc_run", {
+      mode: "requirement-suite",
+      knowledgeProjectId: "knowledge-data-suite",
+      systemId: "system-data-suite",
+      authProfileId: "auth-data-suite",
+      confirm: true,
+      allowCreateTestData: true
+    }));
+    expect(reconciliation.status).toBe("needs_test_data_reconciliation");
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "reconcile-test-data-no-effect",
+      taskId: prepared.task.id,
+      sourceRefs: ["query:customer-new-1-not-found"]
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: prepared.task.id
+    }));
+
+    const secondDataPreparation = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
         action: "submit-test-data",
         taskId: prepared.task.id,
@@ -2194,6 +2624,26 @@ describe("Brain Creator requirement-first facade", () => {
         sourceRefs: ["browser:create/customer-new-1.json"]
       })
     );
+
+    expect(secondDataPreparation).toEqual(expect.objectContaining({
+      status: "needs_test_data",
+      stage: "test-data-prepare",
+      task: expect.objectContaining({ profileId: "profile-order-suite", action: "lookup-or-create" })
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: secondDataPreparation.task.id
+    }));
+    const generated = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "submit-test-data",
+      taskId: secondDataPreparation.task.id,
+      taskStatus: "succeeded",
+      dataDecision: "create",
+      dataReference: "order:new-1",
+      dataValue: "New order",
+      sourceRefs: ["browser:create/order-new-1.json"]
+    }));
+    expect(generated.status).toBe("needs_agent_execution");
 
     expect(generated).toEqual(
       expect.objectContaining({
@@ -2234,6 +2684,7 @@ describe("Brain Creator requirement-first facade", () => {
       expect.objectContaining({
         status: "needs_test_data",
         stage: "test-data-cleanup",
+        nextAction: expect.stringContaining("Send the included advance cleanup notice to the user"),
         task: expect.objectContaining({
           action: "cleanup",
           leaseId: expect.any(String)
@@ -2245,6 +2696,20 @@ describe("Brain Creator requirement-first facade", () => {
       })
     );
 
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "confirm-cleanup-notice",
+      taskId: cleanup.task.id,
+      cleanupNoticeSha256: cleanup.task.cleanupNoticeSha256
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: cleanup.task.id
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "reconcile-test-data-no-effect",
+      taskId: cleanup.task.id,
+      sourceRefs: ["query:cleanup/customer-new-1-still-present"]
+    }));
     const cleanupFailed = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
         action: "submit-test-data",
@@ -2295,14 +2760,49 @@ describe("Brain Creator requirement-first facade", () => {
     );
     expect(cleanupRetry.task.id).not.toBe(cleanup.task.id);
 
-    const completed = dataOf(
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "confirm-cleanup-notice",
+      taskId: cleanupRetry.task.id,
+      cleanupNoticeSha256: cleanupRetry.task.cleanupNoticeSha256
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: cleanupRetry.task.id
+    }));
+
+    const nextCleanup = dataOf(
       await handleBrainCreatorTool(context, "bc_prepare", {
-        action: "submit-test-data",
+        action: "reconcile-test-data-no-effect",
         taskId: cleanupRetry.task.id,
-        taskStatus: "succeeded",
-        sourceRefs: ["browser:cleanup/customer-new-1.json"]
+        sourceRefs: ["query:cleanup/customer-new-1-absent"]
       })
     );
+
+    expect(nextCleanup).toEqual(expect.objectContaining({
+      status: "needs_test_data",
+      stage: "test-data-cleanup",
+      task: expect.objectContaining({
+        action: "cleanup",
+        status: "pending",
+        leaseId: expect.not.stringMatching(cleanupRetry.task.leaseId)
+      }),
+      requirementSuiteRun: expect.objectContaining({ status: "waiting-for-test-data", passed: 0 })
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "confirm-cleanup-notice",
+      taskId: nextCleanup.task.id,
+      cleanupNoticeSha256: nextCleanup.task.cleanupNoticeSha256
+    }));
+    dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "mark-test-data-sent",
+      taskId: nextCleanup.task.id
+    }));
+    const completed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "submit-test-data",
+      taskId: nextCleanup.task.id,
+      taskStatus: "succeeded",
+      sourceRefs: ["browser:cleanup/order-new-1.json"]
+    }));
 
     expect(completed.requirementSuiteRun).toEqual(
       expect.objectContaining({
@@ -2312,13 +2812,19 @@ describe("Brain Creator requirement-first facade", () => {
         blocked: 0
       })
     );
-    expect(context.repository.testDataLeases).toEqual([
+    expect(context.repository.testDataLeases).toHaveLength(2);
+    expect(context.repository.testDataLeases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        decision: "create",
+        status: "released",
+        releasedAt: expect.any(String)
+      }),
       expect.objectContaining({
         decision: "create",
         status: "released",
         releasedAt: expect.any(String)
       })
-    ]);
+    ]));
   });
 
   it("previews and confirms requirement suite cancellation through bc_run", async () => {
@@ -2791,6 +3297,133 @@ describe("Brain Creator requirement-first facade", () => {
     }));
   });
 
+  it.each(["claim-next-scheduled", "process-next-scheduled"] as const)(
+    "revalidates a scheduled Trial binding after %s claims the run",
+    async (suiteAction) => {
+      const workDir = await tempDir();
+      const context = createBrainCreatorMcpContext({
+        workDir,
+        dataFilePath: join(workDir, "assets.json")
+      });
+      const project = await context.knowledgeService.createProject({
+        name: `Scheduler post-claim ${suiteAction}`,
+        key: `scheduler-post-claim-${suiteAction}`,
+        defaultLocale: "en-US"
+      });
+      const system = context.service.createSystemProfile({
+        name: "Scheduler Post-Claim Console",
+        environment: "test",
+        baseUrl: "https://scheduler-post-claim.example.test",
+        defaultLocale: "en-US",
+        urlAllowlist: ["https://scheduler-post-claim.example.test"]
+      });
+      context.knowledgeService.bindSystem(project.id, system.id);
+      const run = context.requirementSuiteRuns.create({
+        knowledgeProjectId: project.id,
+        systemId: system.id,
+        cases: [{ executableCaseId: "case-scheduler-post-claim", title: "Scheduler case" }],
+        continueOnBlocked: false,
+        stabilityGroupId: "scheduler-post-claim-group",
+        stabilityIteration: 1,
+        stabilityTarget: 2,
+        stabilityPolicy: { targetIterations: 2, minIntervalMs: 60_000 }
+      });
+      run.stabilitySchedule!.nextRunAt = "2020-01-01T00:00:00.000Z";
+      const originalClaim = context.requirementSuiteRuns.claimScheduled.bind(context.requirementSuiteRuns);
+      vi.spyOn(context.requirementSuiteRuns, "claimScheduled").mockImplementation((runId, claimInput, now) => {
+        const claimed = originalClaim(runId, claimInput, now);
+        claimed.evaluationTrialId = "trial-added-after-preview";
+        return claimed;
+      });
+
+      const result = await handleBrainCreatorTool(context, "bc_run", {
+        mode: "requirement-suite",
+        knowledgeProjectId: project.id,
+        systemId: system.id,
+        suiteAction,
+        scheduleOwner: "external-cron",
+        confirm: true,
+        scheduleLeaseMs: 60_000
+      });
+
+      if (suiteAction === "process-next-scheduled") {
+        expect(dataOf(result)).toEqual(expect.objectContaining({
+          status: "scheduled-run-failed",
+          error: expect.stringContaining("Evaluation trial not found")
+        }));
+      } else {
+        expect(result.isError).toBe(true);
+        const errorText = result.content.find((item) => item.type === "text");
+        expect(errorText?.type === "text" ? errorText.text : "").toContain("Evaluation trial not found");
+      }
+      expect(run.stabilitySchedule?.leaseOwner).toBeUndefined();
+      expect(run.stabilitySchedule?.lastError).toContain("Evaluation trial not found");
+    }
+  );
+
+  it("does not recommend replay when scheduled lease release fails", async () => {
+    const workDir = await tempDir();
+    let executionCount = 0;
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json"),
+      runner: async () => {
+        executionCount += 1;
+        return { exitCode: 0, stdout: "passed", stderr: "" };
+      }
+    });
+    const project = await context.knowledgeService.createProject({
+      name: "Scheduler Release Failure",
+      key: "scheduler-release-failure",
+      defaultLocale: "en-US"
+    });
+    const system = context.service.createSystemProfile({
+      name: "Scheduler Release Console",
+      environment: "test",
+      baseUrl: "https://scheduler-release.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://scheduler-release.example.test"]
+    });
+    context.knowledgeService.bindSystem(project.id, system.id);
+    const run = context.requirementSuiteRuns.create({
+      knowledgeProjectId: project.id,
+      systemId: system.id,
+      cases: [{ executableCaseId: "case-scheduler-release", title: "Scheduler case" }],
+      continueOnBlocked: false,
+      stabilityGroupId: "scheduler-release-group",
+      stabilityIteration: 1,
+      stabilityTarget: 2,
+      stabilityPolicy: { targetIterations: 2, minIntervalMs: 60_000 }
+    });
+    run.stabilitySchedule!.nextRunAt = "2020-01-01T00:00:00.000Z";
+    const originalClaim = context.requirementSuiteRuns.claimScheduled.bind(context.requirementSuiteRuns);
+    vi.spyOn(context.requirementSuiteRuns, "claimScheduled").mockImplementation((runId, claimInput, now) => {
+      const claimed = originalClaim(runId, claimInput, now);
+      claimed.evaluationTrialId = "trial-added-after-preview";
+      return claimed;
+    });
+    vi.spyOn(context.requirementSuiteRuns, "releaseScheduledLease").mockImplementation(() => {
+      throw new Error("lease ownership changed");
+    });
+
+    const result = dataOf(await handleBrainCreatorTool(context, "bc_run", {
+      mode: "requirement-suite",
+      knowledgeProjectId: project.id,
+      systemId: system.id,
+      suiteAction: "process-next-scheduled",
+      scheduleOwner: "external-cron",
+      confirm: true,
+      scheduleLeaseMs: 60_000
+    }));
+
+    expect(result.status).toBe("scheduled-run-failed");
+    expect(result.error).toContain("Evaluation trial not found; schedule lease release failed: lease ownership changed");
+    expect(result.nextAction).toContain("Inspect the current lease owner and expiry");
+    expect(result.nextAction).not.toContain("retry");
+    expect(executionCount).toBe(0);
+    expect(context.requirementSuiteRuns.get(run.id).stabilitySchedule?.leaseOwner).toBe("external-cron");
+  });
+
   it("does not call completed iterations stable without strong execution evidence", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
@@ -2958,6 +3591,20 @@ describe("Brain Creator requirement-first facade", () => {
       action: "claim-scheduled",
       requiresConfirmation: true
     });
+
+    const mismatchedTrial = envelopeOf(await handleBrainCreatorTool(context, "bc_run", {
+      mode: "requirement-suite",
+      knowledgeProjectId: project.id,
+      systemId: system.id,
+      suiteId: run.id,
+      suiteAction: "claim-scheduled",
+      scheduleOwner: "codex",
+      evaluationTrialId: "another-trial",
+      confirm: true
+    }));
+    expect(mismatchedTrial.success).toBe(false);
+    expect(mismatchedTrial.errors.join(" ")).toContain("another evaluation trial");
+    expect(run.stabilitySchedule?.leaseId).toBeUndefined();
 
     const claimed = dataOf(await handleBrainCreatorTool(context, "bc_run", {
       mode: "requirement-suite",

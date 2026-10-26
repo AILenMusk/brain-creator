@@ -31,11 +31,14 @@ export type AssetType =
   | "agent-run"
   | "chain-run";
 
+export type ExecutionProvenance = "real-system" | "synthetic" | "unknown";
+
 export type SystemProfile = {
   id: string;
   name: string;
   environment: string;
   baseUrl: string;
+  executionProvenance?: ExecutionProvenance;
   defaultLocale: string;
   urlAllowlist: string[];
   status: TaskStatus;
@@ -66,12 +69,18 @@ export type AuthProfile = {
 };
 
 export type AuthCheckpointStatus = "awaiting-user" | "completed" | "cancelled";
+export type AuthInterventionPhase = "initial-authorization" | "session-recovery";
 
 export type AuthCheckpoint = {
   id: string;
   systemId: string;
   authProfileId: string;
   testCaseId?: string;
+  evaluationTrialId?: string;
+  requirementSuiteRunId?: string;
+  executableCaseId?: string;
+  businessScenarioId?: string;
+  authenticationPhase?: AuthInterventionPhase;
   reason: string;
   resumeInstruction: string;
   status: AuthCheckpointStatus;
@@ -87,7 +96,7 @@ export type PageModel = {
   name: string;
   version: number;
   domSnapshotId: string;
-  screenshotId: string;
+  screenshotId?: string;
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
@@ -118,7 +127,7 @@ export type PageCaptureEvidence = {
   title: string;
   finalUrl: string;
   domText: string;
-  screenshotPath: string;
+  screenshotPath?: string;
   interactiveElements: Array<{
     name: string;
     role: string;
@@ -1011,6 +1020,7 @@ export type TestIntent = {
   coverageDimensions?: CoverageDimension[];
   scenarioType?: "positive" | "negative";
   processModelRefs?: string[];
+  selectedTransitionRefs?: string[];
   actorJourney?: string[];
   /** Stable business entities produced for later cases in the same requirement set. */
   producesEntityRefs?: string[];
@@ -1108,6 +1118,7 @@ export type ExplorationTask = {
   approvedEvidenceScope?: string[];
   sourceRefs: string[];
   resultSourceRefs: string[];
+  selectedTransitionRefs?: string[];
   idempotencyKey: string;
   createdAt: string;
   updatedAt: string;
@@ -1324,12 +1335,27 @@ export type TestDataTask = {
   knowledgeProjectId: string;
   systemId: string;
   executableCaseId: string;
+  requirementSuiteRunId?: string;
   profileId: string;
   field: string;
   entityReference?: string;
   action: "lookup-or-create" | "cleanup";
   status: "pending" | "submitted" | "failed" | "cancelled";
   idempotencyKey: string;
+  operationPhase?: "prepared" | "sent" | "reconciled-not-applied" | "reconciled-applied";
+  reconciliationSourceRefs?: string[];
+  reconciliationContextRefs?: string[];
+  reconciliationVerification?: {
+    provider: string;
+    query: string;
+    evidenceRefs: string[];
+    artifactHashes: Array<{ path: string; sha256: string }>;
+    checkedAt: string;
+  };
+  cleanupNoticeAcknowledgedAt?: string;
+  cleanupNoticeSha256?: string;
+  cleanupNoticeMessage?: string;
+  lastSentAt?: string;
   allowCreate: boolean;
   cleanup: "none" | "delete-created" | "restore";
   lookupQuery?: string;
@@ -1349,6 +1375,7 @@ export type TestDataLease = {
   knowledgeProjectId: string;
   systemId: string;
   executableCaseId: string;
+  requirementSuiteRunId?: string;
   profileId: string;
   taskId: string;
   decision: "reuse" | "create";
@@ -1431,6 +1458,7 @@ export type ExecutionPlanDraft = {
   requirementSetId: string;
   systemId: string;
   executableCaseId: string;
+  requirementSuiteRunId?: string;
   title: string;
   preconditions: string[];
   auth?: {
@@ -1686,7 +1714,20 @@ export type ExecutionStepEvidence = {
 };
 
 export type ExecutionEvidence = {
-  provenance?: "real-system" | "synthetic" | "unknown";
+  semanticSnapshotHash?: string;
+  historicalReevaluation?: {
+    id: string;
+    trialId: string;
+    requirementSuiteRunId: string;
+    conformanceResultId: string;
+    previousConformanceResultId?: string;
+    reviewer: string;
+    note: string;
+    artifactHashes: Array<{ path: string; sha256: string }>;
+    reviewedAt: string;
+  };
+  provenance?: ExecutionProvenance;
+  requirementSuiteRunId?: string;
   artifactValidation?: {
     status: "valid" | "invalid";
     files: Array<{ path: string; sha256: string }>;
@@ -1758,6 +1799,12 @@ export type StructuredReporterAssertion = {
   status: "passed" | "failed" | "skipped" | "unknown";
   actual?: string;
   previousActual?: string;
+  entityReference?: string;
+  applicabilityObservations?: Array<{
+    conditionId: string;
+    actual: string;
+    evidenceRefs: string[];
+  }>;
   expected?: string;
   evidenceRefs: string[];
 };
@@ -1767,7 +1814,18 @@ export type BusinessOracle = {
   expected: string;
   previous?: string;
   entityReference?: string;
-  applicable: boolean;
+  applicability:
+    | { mode: "unconditional" }
+    | {
+        mode: "conditional";
+        combine: "all" | "any";
+        conditions: Array<{
+          id: string;
+          field: string;
+          operator: "equals" | "not-equals";
+          expected: string;
+        }>;
+      };
   applicabilityRefs: string[];
 };
 
@@ -1899,6 +1957,8 @@ export type RunLedgerEntry = {
   runType?: "requirement-suite" | "document-suite";
   knowledgeProjectId?: string;
   systemId: string;
+  evaluationTrialId?: string;
+  businessScenarioId?: string;
   requirementSuiteRunId?: string;
   caseSuiteId?: string;
   caseSourceId?: string;
@@ -1957,10 +2017,14 @@ export type RunLedgerEntry = {
   currentStep?: string;
   actionKey?: string;
   actionPhase?: RunLedgerActionPhase;
+  recoveryMode?: "automatic" | "manual";
   actionSemantic?: string;
   entityReference?: string;
   actionPostcondition?: string;
   actionEvidenceRefs?: string[];
+  actionEvidenceArtifacts?: Array<{ path: string; sha256: string }>;
+  previousIntegrityTag?: string;
+  integrityTag?: string;
   message?: string;
   references?: {
     testCaseId?: string;

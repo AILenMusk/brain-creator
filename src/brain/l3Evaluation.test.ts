@@ -14,16 +14,24 @@ describe("L3 golden evaluation", () => {
     expect(L3_GOLDEN_CORPUS).toHaveLength(7);
     expect(report.sampleResults).toHaveLength(7);
     expect(report.sampleResults.filter((sample) => sample.passed === true)).toHaveLength(6);
+    expect(report.realSampleCount).toBe(0);
+    expect(report.measuredSampleCount).toBe(0);
+    expect(report.syntheticSampleCount).toBe(7);
+    expect(report.syntheticScoredSampleCount).toBe(6);
     expect(report.metrics["workflow-state-coverage"]).toEqual(expect.objectContaining({
-      status: "measured",
+      status: "not-measured",
+      rate: null
+    }));
+    expect(report.syntheticMetrics["workflow-state-coverage"]).toEqual(expect.objectContaining({
+      status: "scored",
       rate: 1
     }));
-    expect(report.metrics["multi-role"]).toEqual(expect.objectContaining({
-      status: "measured",
+    expect(report.syntheticMetrics["multi-role"]).toEqual(expect.objectContaining({
+      status: "scored",
       rate: 1
     }));
-    expect(report.metrics["multi-requirement"]).toEqual(expect.objectContaining({
-      status: "measured",
+    expect(report.syntheticMetrics["multi-requirement"]).toEqual(expect.objectContaining({
+      status: "scored",
       rate: 1
     }));
   });
@@ -44,6 +52,17 @@ describe("L3 golden evaluation", () => {
     expect(report.releaseGate.blockers.some((blocker) => /historical bug/i.test(blocker))).toBe(true);
   });
 
+  it("rejects caller-labeled real samples without a verified Trial input", () => {
+    const realLabeledSample = {
+      ...L3_GOLDEN_CORPUS[0]!,
+      sourceKind: "external-real-system"
+    } as unknown as typeof L3_GOLDEN_CORPUS[number];
+
+    expect(() => evaluateL3GoldenCorpus({ samples: [realLabeledSample] })).toThrow(
+      "real evidence must come from a verified Trial"
+    );
+  });
+
   it("fails a golden sample when a measured control falls below its threshold", () => {
     const report = evaluateL3GoldenCorpus({
       samples: L3_GOLDEN_CORPUS.map((sample) => sample.id === "cross-role-journey"
@@ -61,9 +80,10 @@ describe("L3 golden evaluation", () => {
     expect(sample?.failures).toEqual(expect.arrayContaining([
       expect.stringContaining("multi-role")
     ]));
-    expect(report.metrics["multi-role"].rate).toBe(0.7);
+    expect(report.syntheticMetrics["multi-role"].rate).toBe(0.7);
+    expect(report.metrics["multi-role"]).toEqual(expect.objectContaining({ status: "not-measured", rate: null }));
     expect(report.releaseGate.blockers).toEqual(expect.arrayContaining([
-      expect.stringContaining("cross-role-journey")
+      expect.stringContaining("Synthetic golden sample cross-role-journey")
     ]));
   });
 });

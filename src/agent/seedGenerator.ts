@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
 import { decryptSecrets } from "../shared/crypto.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
+import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
 
 type GenerateSeedFileInput = {
   workDir?: string;
@@ -35,6 +36,7 @@ export async function generateSeedFile(input: GenerateSeedFileInput) {
   );
   const content = [
     `import { test as base } from "@playwright/test";`,
+    `import { readEncryptedAuthStorageState } from "brain-creator/dist/shared/authStorageState.js";`,
     ``,
     `export const test = base.extend({`,
     ...formatPageFixture(input.system.baseUrl, input.authProfile.loginMethod, secrets, storageStatePath),
@@ -82,7 +84,8 @@ function formatPageFixture(
   if (storageStatePath) {
     return [
       `  page: async ({ browser }, use) => {`,
-      `    const context = await browser.newContext({ storageState: ${JSON.stringify(storageStatePath)} });`,
+      `    const storageState = await readEncryptedAuthStorageState(${JSON.stringify(storageStatePath)});`,
+      `    const context = await browser.newContext({ storageState });`,
       `    const page = await context.newPage();`,
       `    await page.goto(${JSON.stringify(baseUrl)});`,
       `    await use(page);`,
@@ -108,13 +111,7 @@ async function resolveAuthStorageState(
   }
   const workspace = input.workDir ?? dirname(input.outputDir);
   const protectedPath = await resolveProtectedStorageStatePath(workspace, storageStatePath);
-  const parsed = JSON.parse(await readFile(protectedPath, "utf8")) as {
-    cookies?: unknown;
-    origins?: unknown;
-  };
-  if (!Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
-    throw new Error("Auth storage state must contain cookies and origins arrays");
-  }
+  await readEncryptedAuthStorageState(protectedPath, workspace);
   return protectedPath;
 }
 
@@ -148,7 +145,8 @@ function formatActorRoleHelper(
     `    const config = roles[role as keyof typeof roles];`,
     `    if (!config) throw new Error(\`Unknown Brain Creator actor role: \${role}\`);`,
     `    const recordRole = async (event: string) => { const evidencePath = process.env.BRAIN_CREATOR_ACTOR_EVIDENCE_PATH; if (evidencePath) await import("node:fs/promises").then(({ appendFile }) => appendFile(evidencePath, JSON.stringify({ role, authProfileId: config.authProfileId, event, at: new Date().toISOString() }) + "\\n", "utf8")); };`,
-    `    const context = await browser.newContext(config.storageStatePath ? { storageState: config.storageStatePath } : {});`,
+    `    const storageState = config.storageStatePath ? await readEncryptedAuthStorageState(config.storageStatePath) : undefined;`,
+    `    const context = await browser.newContext(storageState ? { storageState } : {});`,
     `    const page = await context.newPage();`,
     `    await page.goto(${JSON.stringify(baseUrl)});`,
     `    if (config.tokenEnv) { const token = process.env[config.tokenEnv]; if (!token) throw new Error(\`Missing auth env \${config.tokenEnv}\`); await page.evaluate((value: string) => window.localStorage.setItem("brain_creator_token", value), token); }`,

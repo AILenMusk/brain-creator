@@ -32,8 +32,10 @@ export type TestDataProviderResult = {
   provider?: string;
 };
 
+export type TestDataProviderLookupResult = TestDataProviderResult | TestDataProviderResult[] | undefined;
+
 export function buildScenarioDataPlan(input: {
-  scenario: Pick<BusinessScenario, "id" | "testDataNeeds" | "sourceRefs"> & {
+  scenario: Pick<BusinessScenario, "id" | "knowledgeProjectId" | "testDataNeeds" | "sourceRefs"> & {
     stateTransitionRefs?: string[];
   };
   profiles: TestDataProfile[];
@@ -52,11 +54,16 @@ export function buildScenarioDataPlan(input: {
     const key = normalize(profile.field);
     fieldProfiles.set(key, [...(fieldProfiles.get(key) ?? []), profile]);
   }
-  const activeEntities = (input.entities ?? []).filter((entity) => entity.status === "active");
+  const activeEntities = (input.entities ?? []).filter((entity) =>
+    entity.status === "active" && entity.knowledgeProjectId === input.scenario.knowledgeProjectId
+  );
   const missingEntityReferences: string[] = [];
   const reasons = missingProfileIds.map(
     (profileId) => `Scenario data profile is missing: ${profileId}`
   );
+  if (input.scenario.testDataNeeds.length === 0) {
+    reasons.push("No scenario-scoped test data profiles are declared; confirm the data plan before execution.");
+  }
   const dependencies: ScenarioDataPlan["dependencies"] = [];
   const operations: ScenarioDataPlan["operations"] = selectedProfiles.map((profile) => {
     const dependencyProfiles: TestDataProfile[] = [];
@@ -139,7 +146,8 @@ export function buildScenarioDataPlan(input: {
       ...(reason ? { reason } : {})
     };
   });
-  const hasBlocked = missingProfileIds.length > 0 || operations.some((operation) => operation.readiness === "blocked");
+  const hasBlocked = input.scenario.testDataNeeds.length === 0 || missingProfileIds.length > 0 ||
+    operations.some((operation) => operation.readiness === "blocked");
   const hasCreatable = operations.some((operation) => operation.readiness === "creatable");
   const readiness: ScenarioDataPlan["readiness"] = hasBlocked
     ? "blocked"
@@ -187,7 +195,7 @@ export function buildScenarioDataPlan(input: {
 export interface TestDataProvider {
   readonly name: string;
   supports(input: TestDataProviderRequest): boolean;
-  lookup(input: TestDataProviderRequest): Promise<TestDataProviderResult | undefined>;
+  lookup(input: TestDataProviderRequest): Promise<TestDataProviderLookupResult>;
   create(input: TestDataProviderRequest): Promise<TestDataProviderResult>;
   transition(input: TestDataProviderRequest): Promise<TestDataProviderResult>;
   verify(input: TestDataProviderRequest): Promise<TestDataProviderResult>;
@@ -200,19 +208,23 @@ export class TestDataBrainService {
     private readonly providers: TestDataProvider[]
   ) {}
 
-  graph(systemId: string) {
-    const entities = this.repository.businessEntityInstances.filter((item) => item.systemId === systemId);
+  graph(systemId: string, knowledgeProjectId?: string) {
+    const entities = this.repository.businessEntityInstances.filter((item) =>
+      item.systemId === systemId && (!knowledgeProjectId || item.knowledgeProjectId === knowledgeProjectId)
+    );
     const references = new Set(entities.map((item) => item.entityKey));
     return {
       entities,
       dependencies: this.repository.testDataDependencies.filter(
-        (item) => item.systemId === systemId && references.has(item.fromReference) && references.has(item.toReference)
+        (item) => item.systemId === systemId &&
+          (!knowledgeProjectId || item.knowledgeProjectId === knowledgeProjectId) &&
+          references.has(item.fromReference) && references.has(item.toReference)
       )
     };
   }
 
   planScenarioData(input: {
-    scenario: Pick<BusinessScenario, "id" | "testDataNeeds" | "sourceRefs"> & {
+    scenario: Pick<BusinessScenario, "id" | "knowledgeProjectId" | "testDataNeeds" | "sourceRefs"> & {
       stateTransitionRefs?: string[];
     };
     profiles: TestDataProfile[];
@@ -223,7 +235,7 @@ export class TestDataBrainService {
       profiles: input.profiles,
       entities: input.systemId
         ? this.repository.businessEntityInstances.filter(
-            (entity) => entity.systemId === input.systemId
+            (entity) => entity.systemId === input.systemId && entity.knowledgeProjectId === input.scenario.knowledgeProjectId
           )
         : []
     });
@@ -239,10 +251,15 @@ export class TestDataBrainService {
     const normalized = { ...input, sourceRefs: input.sourceRefs ?? [] };
     const provider = this.provider(normalized);
     const startedAt = new Date().toISOString();
-    const result = await provider.lookup(normalized);
+    const lookupResult = await provider.lookup(normalized);
+    const matches = Array.isArray(lookupResult) ? lookupResult : lookupResult ? [lookupResult] : [];
+    if (matches.length > 1) {
+      throw new Error(`Test data lookup returned ${matches.length} matches; a unique entity is required`);
+    }
+    const result = matches[0];
     if (!result) throw new Error(`No test data found for ${input.entityType}:${input.key ?? input.reference ?? "unknown"}`);
     validateProviderResult(normalized, result, "found");
-    const enriched = { ...result, provider: provider.name };
+    const enriched = { ...result, provider: result.provider ?? provider.name };
     const entityId = this.upsertEntity(normalized, enriched, "lookup", startedAt);
     return { ...enriched, entityId };
   }
@@ -253,7 +270,7 @@ export class TestDataBrainService {
     const startedAt = new Date().toISOString();
     const result = await provider.create(normalized);
     validateProviderResult(normalized, result, "created");
-    const enriched = { ...result, provider: provider.name };
+    const enriched = { ...result, provider: result.provider ?? provider.name };
     const entityId = this.upsertEntity(normalized, enriched, "create", startedAt);
     return { ...enriched, entityId };
   }
@@ -265,7 +282,7 @@ export class TestDataBrainService {
     const startedAt = new Date().toISOString();
     const result = await provider.transition(normalized);
     validateProviderResult(normalized, result, "transitioned");
-    const enriched = { ...result, provider: provider.name };
+    const enriched = { ...result, provider: result.provider ?? provider.name };
     this.upsertEntity(normalized, enriched, "transition", startedAt);
     return enriched;
   }
@@ -280,7 +297,7 @@ export class TestDataBrainService {
     if (Object.entries(input.expected ?? {}).some(([key, value]) => result.values?.[key] !== value)) {
       throw new Error("Test data verification did not return the expected business values");
     }
-    const enriched = { ...result, provider: provider.name };
+    const enriched = { ...result, provider: result.provider ?? provider.name };
     const entityId = this.upsertEntity(normalized, enriched, "verify", startedAt);
     return { ...enriched, entityId };
   }
@@ -292,10 +309,12 @@ export class TestDataBrainService {
     const startedAt = new Date().toISOString();
     const result = await provider.cleanup(normalized);
     validateProviderResult(normalized, result, "cleaned");
-    const enriched = { ...result, provider: provider.name };
-    const entity = this.repository.businessEntityInstances.find(
-      (item) => item.systemId === input.systemId && item.entityKey === input.reference
-    );
+    const enriched = { ...result, provider: result.provider ?? provider.name };
+    const entity = findScopedEntity(this.repository.businessEntityInstances, {
+      systemId: input.systemId,
+      reference: input.reference,
+      knowledgeProjectId: input.knowledgeProjectId
+    });
     if (entity) {
       entity.status = "released";
       entity.releasedAt = new Date().toISOString();
@@ -332,10 +351,8 @@ export class TestDataBrainService {
     );
   }
 
-  releaseExternal(input: { systemId: string; reference: string; sourceRefs?: string[] }) {
-    const entity = this.repository.businessEntityInstances.find(
-      (item) => item.systemId === input.systemId && item.entityKey === input.reference
-    );
+  releaseExternal(input: { knowledgeProjectId?: string; systemId: string; reference: string; sourceRefs?: string[] }) {
+    const entity = findScopedEntity(this.repository.businessEntityInstances, input);
     if (!entity) return undefined;
     const now = new Date().toISOString();
     entity.status = "released";
@@ -357,31 +374,33 @@ export class TestDataBrainService {
     if (!sameSystemReference(input.systemId, input.fromReference) || !sameSystemReference(input.systemId, input.toReference)) {
       throw new Error("Test data dependencies must stay within the same system");
     }
-    const entityReferences = new Set(
-      this.repository.businessEntityInstances
-        .filter((entity) => entity.systemId === input.systemId && entity.status !== "released")
-        .map((entity) => entity.entityKey)
-    );
-    const missing = [input.fromReference, input.toReference].filter(
-      (reference) => !entityReferences.has(reference)
-    );
-    if (missing.length > 0) {
-      throw new Error(`Test data dependency references unknown entity: ${missing.join(", ")}`);
+    const fromEntity = findDependencyEntity(this.repository.businessEntityInstances, input.systemId, input.fromReference, input.knowledgeProjectId);
+    const toEntity = findDependencyEntity(this.repository.businessEntityInstances, input.systemId, input.toReference, input.knowledgeProjectId);
+    if (fromEntity.knowledgeProjectId !== toEntity.knowledgeProjectId) {
+      throw new Error("Test data dependencies must stay within the same knowledge project");
     }
+    const knowledgeProjectId = input.knowledgeProjectId ?? fromEntity.knowledgeProjectId;
     const existing = this.repository.testDataDependencies.find(
-      (item) => item.systemId === input.systemId && item.fromReference === input.fromReference && item.toReference === input.toReference && item.relation === input.relation
+      (item) => item.systemId === input.systemId && item.knowledgeProjectId === knowledgeProjectId &&
+        item.fromReference === input.fromReference && item.toReference === input.toReference && item.relation === input.relation
     );
     if (existing) return existing;
-    const dependency: TestDataDependency = { id: id("testDataDependency"), ...input, createdAt: new Date().toISOString() };
+    const dependency: TestDataDependency = {
+      id: id("testDataDependency"), ...input,
+      ...(knowledgeProjectId ? { knowledgeProjectId } : {}),
+      createdAt: new Date().toISOString()
+    };
     this.repository.testDataDependencies.push(dependency);
     this.repository.persist();
     return dependency;
   }
 
   private provider(input: TestDataProviderRequest) {
-    const provider = this.providers.find((candidate) => candidate.supports(input));
-    if (!provider) throw new Error(`No Testdata Brain provider supports ${input.entityType ?? "record"} for ${input.systemId}`);
-    return provider;
+    const providers = this.providers.filter((candidate) => candidate.supports(input));
+    if (providers.length !== 1) {
+      throw new Error(`Testdata Brain requires exactly one provider for ${input.entityType ?? "record"} on ${input.systemId}; matched ${providers.length}`);
+    }
+    return providers[0]!;
   }
 
   private upsertEntity(
@@ -390,9 +409,11 @@ export class TestDataBrainService {
     operation: TestDataLifecycleEvent["operation"],
     startedAt: string
   ) {
-    const existing = this.repository.businessEntityInstances.find(
-      (item) => item.systemId === input.systemId && item.entityKey === result.reference
-    );
+    const existing = findScopedEntity(this.repository.businessEntityInstances, {
+      systemId: input.systemId,
+      reference: result.reference,
+      knowledgeProjectId: input.knowledgeProjectId
+    });
     const now = new Date().toISOString();
     const entity: BusinessEntityInstance = existing ?? {
       id: id("businessEntity"),
@@ -446,9 +467,45 @@ function validateProviderResult(input: TestDataProviderRequest, result: TestData
   if (!result.reference?.trim() || (input.reference && input.reference !== result.reference) || !sameSystemReference(input.systemId, result.reference)) {
     throw new Error("Test data provider returned an invalid entity reference");
   }
-  if (input.entityReference && result.entityReference && input.entityReference !== result.entityReference) {
-    throw new Error("Test data provider returned a different semantic entity reference");
+  if (input.entityReference && result.entityReference !== input.entityReference) {
+    throw new Error(result.entityReference
+      ? "Test data provider returned a different semantic entity reference"
+      : "Test data provider did not confirm the semantic entity reference");
   }
+}
+
+function findScopedEntity(
+  entities: BusinessEntityInstance[],
+  input: { systemId: string; reference: string; knowledgeProjectId?: string }
+) {
+  const matches = entities.filter((entity) =>
+    entity.systemId === input.systemId && entity.entityKey === input.reference
+  );
+  const scoped = input.knowledgeProjectId
+    ? matches.filter((entity) => entity.knowledgeProjectId === input.knowledgeProjectId)
+    : matches;
+  if (scoped.length > 1) {
+    throw new Error("Test data entity reference is ambiguous within the knowledge project");
+  }
+  if (!input.knowledgeProjectId && scoped[0]?.knowledgeProjectId) {
+    throw new Error("Test data entity operation requires its knowledge project binding");
+  }
+  return scoped[0];
+}
+
+function findDependencyEntity(
+  entities: BusinessEntityInstance[],
+  systemId: string,
+  reference: string,
+  knowledgeProjectId?: string
+) {
+  const matches = entities.filter((entity) => entity.systemId === systemId &&
+    entity.entityKey === reference && entity.status === "active" &&
+    (!knowledgeProjectId || entity.knowledgeProjectId === knowledgeProjectId));
+  if (matches.length !== 1) {
+    throw new Error(`Test data dependency entity ${reference} is unknown or ambiguous in its system/project scope`);
+  }
+  return matches[0]!;
 }
 
 export class InMemoryTestDataProvider implements TestDataProvider {
@@ -484,7 +541,7 @@ export class InMemoryTestDataProvider implements TestDataProvider {
     }
     const values = { ...(this.records.get(reference) ?? {}), status: input.transition ?? "transitioned" };
     this.records.set(reference, values);
-    return { status: "transitioned" as const, reference, values, sourceRefs: input.sourceRefs };
+    return { status: "transitioned" as const, reference, entityReference: input.entityReference, values, sourceRefs: input.sourceRefs };
   }
 
   async verify(input: TestDataProviderRequest) {
@@ -494,7 +551,7 @@ export class InMemoryTestDataProvider implements TestDataProvider {
     if (!values) throw new Error(`Cannot verify unknown test data entity ${reference}`);
     const mismatches = Object.entries(input.expected ?? {}).filter(([key, value]) => values[key] !== value);
     if (mismatches.length > 0) throw new Error(`Test data verification failed for ${reference}`);
-    return { status: "verified" as const, reference, values, sourceRefs: input.sourceRefs };
+    return { status: "verified" as const, reference, entityReference: input.entityReference, values, sourceRefs: input.sourceRefs };
   }
 
   async cleanup(input: TestDataProviderRequest) {
@@ -504,7 +561,7 @@ export class InMemoryTestDataProvider implements TestDataProvider {
       throw new Error(`Cannot clean up unknown test data entity ${reference}`);
     }
     this.records.delete(reference);
-    return { status: "cleaned" as const, reference, sourceRefs: input.sourceRefs };
+    return { status: "cleaned" as const, reference, entityReference: input.entityReference, sourceRefs: input.sourceRefs };
   }
 }
 

@@ -28,6 +28,7 @@ import type {
   ProbeResult,
   RuleCheckResult,
   SystemProfile,
+  ExecutionProvenance,
   TestArtifact,
   TestCase,
   TestCaseScenario,
@@ -44,6 +45,7 @@ type CreateSystemProfileInput = {
   name: string;
   environment: string;
   baseUrl: string;
+  executionProvenance?: ExecutionProvenance;
   defaultLocale: string;
   urlAllowlist: string[];
 };
@@ -61,6 +63,10 @@ type CreateAuthCheckpointInput = {
   systemId: string;
   authProfileId: string;
   testCaseId?: string;
+  evaluationTrialId?: string;
+  requirementSuiteRunId?: string;
+  executableCaseId?: string;
+  businessScenarioId?: string;
   reason: string;
   resumeInstruction: string;
 };
@@ -115,6 +121,8 @@ type ListGapsInput = {
 type ResolveGapInput = {
   projectId: string;
   gapId: string;
+  note: string;
+  evidenceRefs: string[];
 };
 
 type TransitionGapInput = ResolveGapInput & {
@@ -253,6 +261,7 @@ export class BrainCreatorService {
       name: input.name.trim(),
       environment: input.environment.trim(),
       baseUrl: input.baseUrl.trim(),
+      executionProvenance: input.executionProvenance ?? "unknown",
       defaultLocale: input.defaultLocale.trim() || "zh-CN",
       urlAllowlist: input.urlAllowlist.map((url) => url.trim()).filter(Boolean),
       status: "succeeded",
@@ -267,6 +276,37 @@ export class BrainCreatorService {
 
   listSystemProfiles(): SystemProfile[] {
     return [...this.repository.systemProfiles];
+  }
+
+  addSystemUrlAllowlistOrigins(systemId: string, origins: string[]): SystemProfile {
+    const profile = this.repository.systemProfiles.find((item) => item.id === systemId);
+    if (!profile) throw new Error("Business system not found");
+    for (const origin of origins) {
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        throw new Error("urlAllowlist additions must be HTTPS origins");
+      }
+      if (
+        parsed.protocol !== "https:" ||
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== "/" ||
+        parsed.search ||
+        parsed.hash ||
+        origin.trim().replace(/\/$/, "") !== parsed.origin
+      ) {
+        throw new Error("urlAllowlist additions must be HTTPS origins");
+      }
+    }
+    profile.urlAllowlist = [...new Set([
+      ...profile.urlAllowlist,
+      ...origins.map((origin) => new URL(origin.trim()).origin)
+    ])];
+    profile.updatedAt = timestamp();
+    this.repository.persist();
+    return profile;
   }
 
   upsertCaseSource(input: UpsertCaseSourceInput): CaseSource {
@@ -617,12 +657,72 @@ export class BrainCreatorService {
         throw new Error("Test case belongs to another business system");
       }
     }
+    const requirementSuiteRun = input.requirementSuiteRunId
+      ? this.repository.requirementSuiteRuns.find((item) => item.id === input.requirementSuiteRunId)
+      : undefined;
+    if (input.requirementSuiteRunId && !requirementSuiteRun) {
+      throw new Error("Requirement suite run not found for auth checkpoint");
+    }
+    if (requirementSuiteRun && requirementSuiteRun.systemId !== input.systemId) {
+      throw new Error("Auth checkpoint suite belongs to another business system");
+    }
+    const evaluationTrialId = input.evaluationTrialId ?? requirementSuiteRun?.evaluationTrialId;
+    if (
+      input.evaluationTrialId && requirementSuiteRun?.evaluationTrialId &&
+      input.evaluationTrialId !== requirementSuiteRun.evaluationTrialId
+    ) {
+      throw new Error("Auth checkpoint Trial does not match its requirement suite run");
+    }
+    const executableCase = input.executableCaseId
+      ? this.repository.executableCases.find((item) => item.id === input.executableCaseId)
+      : undefined;
+    if (input.executableCaseId && !executableCase) {
+      throw new Error("Executable case not found for auth checkpoint");
+    }
+    if (executableCase && (executableCase.systemId && executableCase.systemId !== input.systemId ||
+      requirementSuiteRun && (
+        executableCase.knowledgeProjectId !== requirementSuiteRun.knowledgeProjectId ||
+        !requirementSuiteRun.caseRuns.some((item) => item.executableCaseId === executableCase.id)
+      ))) {
+      throw new Error("Auth checkpoint executable case is outside its system or requirement suite");
+    }
+    const trial = evaluationTrialId
+      ? this.repository.evaluationTrials.find((item) => item.id === evaluationTrialId)
+      : undefined;
+    if (evaluationTrialId && (!trial || trial.status !== "active" || trial.systemId !== input.systemId)) {
+      throw new Error("Auth checkpoint Trial must be active and belong to the same business system");
+    }
+    if (trial && requirementSuiteRun && requirementSuiteRun.evaluationTrialId !== trial.id) {
+      throw new Error("Auth checkpoint Trial does not match its requirement suite run");
+    }
+    const businessScenario = input.businessScenarioId
+      ? this.repository.businessScenarios.find((item) => item.id === input.businessScenarioId)
+      : undefined;
+    if (input.businessScenarioId && !businessScenario) {
+      throw new Error("Business scenario not found for auth checkpoint");
+    }
+    if (businessScenario && (
+      !trial?.executionScope?.businessScenarioIds.includes(businessScenario.id) ||
+      businessScenario.knowledgeProjectId !== trial.knowledgeProjectId ||
+      businessScenario.requirementSetId !== trial.requirementSetId ||
+      executableCase && (
+        businessScenario.requirementSetId !== executableCase.requirementSetId ||
+        !(businessScenario.testIntentIds ?? []).includes(executableCase.testIntentId)
+      )
+    )) {
+      throw new Error("Auth checkpoint scenario is outside its Trial or executable case");
+    }
     const now = timestamp();
     const checkpoint: AuthCheckpoint = {
       id: id("checkpoint"),
       systemId: input.systemId,
       authProfileId: input.authProfileId,
       testCaseId: input.testCaseId,
+      evaluationTrialId,
+      requirementSuiteRunId: requirementSuiteRun?.id,
+      executableCaseId: executableCase?.id,
+      businessScenarioId: businessScenario?.id,
+      authenticationPhase: authProfile.lastVerifiedAt ? "session-recovery" : "initial-authorization",
       reason: input.reason.trim(),
       resumeInstruction: input.resumeInstruction.trim(),
       status: "awaiting-user",
@@ -701,7 +801,7 @@ export class BrainCreatorService {
       name: capture?.title || input.name,
       version: previousVersion + 1,
       domSnapshotId: id("dom"),
-      screenshotId: capture?.screenshotPath ?? id("shot"),
+      ...(capture?.screenshotPath ? { screenshotId: capture.screenshotPath } : {}),
       status: "succeeded",
       createdAt: now,
       updatedAt: now
@@ -713,6 +813,7 @@ export class BrainCreatorService {
     const issues = capture
       ? [
           ...capture.issues,
+          ...(!capture.screenshotPath ? ["Screenshot evidence unavailable for this page capture"] : []),
           ...capture.consoleErrors.map((error) => `Console error: ${error}`),
           ...capture.networkFailures.map((failure) => `Network failure: ${failure}`)
         ]
@@ -722,7 +823,11 @@ export class BrainCreatorService {
     const probeResult: ProbeResult = {
       id: id("probe"),
       pageModelId: pageModel.id,
-      type: capture ? "browser-capture" : "dom-scan",
+      type: capture
+        ? capture.screenshotPath
+          ? "browser-capture"
+          : "host-accessibility-observation"
+        : "dom-scan",
       result: `${locatorPoints.length} locator points found`,
       issues,
       surfaceEvidence: capture?.surfaces,
@@ -1605,9 +1710,7 @@ export class BrainCreatorService {
   resolveGap(input: ResolveGapInput): Gap {
     return this.transitionGap({
       ...input,
-      operation: "resolve",
-      note: "Resolved through the legacy gap control.",
-      evidenceRefs: []
+      operation: "resolve"
     });
   }
 
@@ -1623,6 +1726,9 @@ export class BrainCreatorService {
     const note = input.note.trim();
     if (!note) {
       throw new Error("Gap transition note is required");
+    }
+    if (input.operation !== "reopen" && input.evidenceRefs.length === 0) {
+      throw new Error("Gap resolution requires at least one evidence reference");
     }
     if (input.operation === "reopen" && gap.status === "open") {
       throw new Error("Gap is already open");
@@ -1919,7 +2025,7 @@ function locatorPointsFromCapture(
     role: element.role,
     text: element.text || element.name,
     fallbackSelectors: [element.selector, `text=${element.text || element.name}`],
-    confidence: 0.96
+    confidence: capture.screenshotPath ? 0.96 : 0.6
   }));
 }
 

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { encryptSecrets } from "../shared/crypto.js";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
+import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import { materializeBrowserAuthState } from "./authStateMaterializer.js";
 import { verifyStoredBrowserAuth } from "./authStateVerifier.js";
 
@@ -29,17 +30,18 @@ describe("browser auth state materializer", () => {
       authProfile: authProfile("token", { token: "token-secret", localStorageKey: "session_token" })
     });
 
-    const state = JSON.parse(await readFile(result.storageStatePath, "utf8")) as {
-      origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
-    };
+    const state = await readEncryptedAuthStorageState(result.storageStatePath, workDir);
+    const storedFile = await readFile(result.storageStatePath, "utf8");
     expect(result.method).toBe("token");
     expect(result.storageStatePath).toContain(join(".brain-creator", "auth"));
     expect(state.origins?.flatMap((origin) => origin.localStorage ?? [])).toContainEqual({
       name: "session_token",
       value: "token-secret"
     });
+    expect(storedFile).not.toContain("token-secret");
     await expect(verifyStoredBrowserAuth({
       storageStatePath: result.storageStatePath,
+      workDir,
       targetUrl: fixture.system.baseUrl,
       allowedUrls: fixture.system.urlAllowlist
     })).resolves.toEqual(expect.objectContaining({ status: "valid" }));
@@ -57,9 +59,13 @@ describe("browser auth state materializer", () => {
 
     expect(result.method).toBe("cookie");
     expect(result).not.toHaveProperty("cookie");
-    expect(state).toContain("cookie-secret");
+    expect(state).not.toContain("cookie-secret");
+    await expect(readEncryptedAuthStorageState(result.storageStatePath, workDir)).resolves.toMatchObject({
+      cookies: expect.arrayContaining([expect.objectContaining({ name: "session_id", value: "cookie-secret" })])
+    });
     await expect(verifyStoredBrowserAuth({
       storageStatePath: result.storageStatePath,
+      workDir,
       targetUrl: fixture.system.baseUrl,
       allowedUrls: fixture.system.urlAllowlist
     })).resolves.toEqual(expect.objectContaining({ status: "valid" }));
@@ -84,10 +90,12 @@ describe("browser auth state materializer", () => {
     const address = server.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${address.port}/`;
 
-    const storageStatePath = join(await tempDir(), "state.json");
+    const workDir = await tempDir();
+    const storageStatePath = join(workDir, "state.json");
     await writeFile(storageStatePath, JSON.stringify({ cookies: [], origins: [] }), "utf8");
     await expect(verifyStoredBrowserAuth({
       storageStatePath,
+      workDir,
       targetUrl: baseUrl,
       allowedUrls: [baseUrl]
     })).resolves.toEqual(expect.objectContaining({
@@ -108,10 +116,12 @@ describe("browser auth state materializer", () => {
     const address = server.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${address.port}/`;
 
-    const storageStatePath = join(await tempDir(), "state.json");
+    const workDir = await tempDir();
+    const storageStatePath = join(workDir, "state.json");
     await writeFile(storageStatePath, JSON.stringify({ cookies: [], origins: [] }), "utf8");
     await expect(verifyStoredBrowserAuth({
       storageStatePath,
+      workDir,
       targetUrl: baseUrl,
       allowedUrls: [baseUrl],
       timeoutMs: 5_000

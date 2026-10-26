@@ -1,6 +1,7 @@
 // @vitest-environment node
 
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,7 +19,7 @@ import {
   TestDataBrainService
 } from "../brain/testdata.js";
 import { KnowledgeService } from "./service.js";
-import { TestDataProviderService } from "./testDataProvider.js";
+import { TestDataProviderService, type TestDataNoEffectVerifier } from "./testDataProvider.js";
 
 const tempDirs: string[] = [];
 
@@ -29,7 +30,7 @@ afterEach(async () => {
 });
 
 describe("TestDataProviderService", () => {
-  it("reuses an active producer lease for a consumer case without relying on run order", async () => {
+  it("tracks cross-case consumption and waits for current-suite evidence before producer cleanup", async () => {
     const fixture = await providerFixture();
     const producerCase: ExecutableCase = {
       ...fixture.executableCase,
@@ -40,6 +41,31 @@ describe("TestDataProviderService", () => {
       caseDependencyGraph: undefined
     };
     fixture.repository.executableCases.push(producerCase);
+    const requirementSuiteRunId = "suite-consumer-current";
+    fixture.repository.requirementSuiteRuns.push({
+      id: requirementSuiteRunId,
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      status: "running",
+      continueOnBlocked: false,
+      allowCreateTestData: true,
+      total: 1,
+      passed: 0,
+      failed: 0,
+      blocked: 0,
+      skipped: 0,
+      cancelled: 0,
+      caseRuns: [{
+        executableCaseId: fixture.executableCase.id,
+        title: "Edit employee",
+        order: 1,
+        status: "running",
+        gapIds: [],
+        attempts: []
+      }],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
     fixture.executableCase.dataPlan = {
       verdict: "ready",
       reasons: [],
@@ -80,11 +106,42 @@ describe("TestDataProviderService", () => {
       sourceRefs: ["case:edit-employee"],
       generatedAt: new Date(0).toISOString()
     };
+    const secondConsumerCase: ExecutableCase = {
+      ...fixture.executableCase,
+      id: "executable-consumer-second",
+      testIntentId: "intent-consumer-second",
+      title: "Approve employee",
+      dataPlan: structuredClone(fixture.executableCase.dataPlan),
+      caseDependencyGraph: {
+        ...structuredClone(fixture.executableCase.caseDependencyGraph),
+        edges: [{
+          id: "case-dependency:producer-second-consumer",
+          fromTestIntentId: producerCase.testIntentId,
+          toTestIntentId: "intent-consumer-second",
+          entityReference: "employee:semantic",
+          relation: "requires",
+          sourceRefs: ["case:approve-employee"]
+        }],
+        dependencyOrder: [producerCase.testIntentId, "intent-consumer-second"]
+      }
+    };
+    fixture.repository.executableCases.push(secondConsumerCase);
+    const consumerSuiteRun = fixture.repository.requirementSuiteRuns[0]!;
+    consumerSuiteRun.total = 2;
+    consumerSuiteRun.caseRuns.push({
+      executableCaseId: secondConsumerCase.id,
+      title: secondConsumerCase.title,
+      order: 2,
+      status: "queued",
+      gapIds: [],
+      attempts: []
+    });
     const producerLease: TestDataLease = {
       id: "lease-employee-producer",
       knowledgeProjectId: fixture.project.id,
       systemId: fixture.system.id,
       executableCaseId: producerCase.id,
+      requirementSuiteRunId,
       profileId: "profile-employee",
       taskId: "task-employee-producer",
       decision: "create",
@@ -97,16 +154,158 @@ describe("TestDataProviderService", () => {
       updatedAt: new Date(0).toISOString()
     };
     fixture.repository.testDataLeases.push(producerLease);
+    fixture.repository.executionEvidence.push(executionEvidence(
+      producerCase.id,
+      "evidence-producer-created-entity",
+      new Date(0).toISOString(),
+      new Date().toISOString()
+    ));
+
+    const producerCleanupCheck = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: producerCase.id,
+      confirm: true,
+      phase: "cleanup"
+    });
+    expect(producerCleanupCheck).toEqual({ status: "ready", operations: [] });
+    expect(producerLease.status).toBe("active");
+
+    fixture.repository.executionEvidence.push(executionEvidence(
+      fixture.executableCase.id,
+      "evidence-consumer-old",
+      new Date(0).toISOString(),
+      new Date(0).toISOString()
+    ));
+
+    const preview = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId,
+      confirm: false
+    });
+
+    expect(preview).toEqual({ status: "ready", operations: [] });
+    expect(fixture.repository.testDataLeases).toHaveLength(1);
 
     const result = await fixture.provider.prepare({
       knowledgeProjectId: fixture.project.id,
       systemId: fixture.system.id,
       executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId,
       confirm: true
     });
 
     expect(result).toEqual({ status: "ready", operations: [] });
     expect(fixture.repository.testDataTasks).toHaveLength(0);
+    const consumerLease = fixture.repository.testDataLeases.find(
+      (lease) => lease.reusedFromLeaseId === producerLease.id
+    );
+    expect(consumerLease).toEqual(expect.objectContaining({
+      decision: "reuse",
+      executableCaseId: fixture.executableCase.id,
+      reference: producerLease.reference,
+      entityReference: "employee:semantic",
+      requirementSuiteRunId,
+      status: "active"
+    }));
+
+    fixture.repository.executionEvidence.push({
+      ...executionEvidence(
+        fixture.executableCase.id,
+        "evidence-consumer-old-suite",
+        new Date(0).toISOString(),
+        new Date(Date.now() + 5000).toISOString()
+      ),
+      requirementSuiteRunId: "suite-consumer-old"
+    });
+    const historicalCleanupCheck = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId,
+      confirm: true,
+      phase: "cleanup"
+    });
+    expect(historicalCleanupCheck).toEqual({ status: "ready", operations: [] });
+    expect(consumerLease?.status).toBe("active");
+    expect(producerLease.status).toBe("active");
+
+    fixture.repository.executionEvidence.push({
+      ...executionEvidence(
+        fixture.executableCase.id,
+        "evidence-consumer-current",
+        new Date().toISOString(),
+        new Date(Date.now() + 1000).toISOString()
+      ),
+      requirementSuiteRunId
+    });
+    const consumerCleanupPreview = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId,
+      confirm: false,
+      phase: "cleanup"
+    });
+    expect(consumerCleanupPreview).toEqual({ status: "ready", operations: [] });
+    expect(consumerLease?.status).toBe("active");
+    expect(producerLease.status).toBe("active");
+
+    const firstConsumerCleanupCheck = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      requirementSuiteRunId,
+      confirm: true,
+      phase: "cleanup"
+    });
+    expect(firstConsumerCleanupCheck).toEqual({ status: "ready", operations: [] });
+    expect(consumerLease?.status).toBe("released");
+    expect(producerLease.status).toBe("active");
+
+    const secondConsumerPreparation = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: secondConsumerCase.id,
+      requirementSuiteRunId,
+      confirm: true
+    });
+    expect(secondConsumerPreparation).toEqual({ status: "ready", operations: [] });
+    const secondConsumerLease = fixture.repository.testDataLeases.find(
+      (lease) => lease.executableCaseId === secondConsumerCase.id && lease.reusedFromLeaseId === producerLease.id
+    );
+    expect(secondConsumerLease).toEqual(expect.objectContaining({ status: "active", requirementSuiteRunId }));
+    fixture.repository.executionEvidence.push({
+      ...executionEvidence(
+        secondConsumerCase.id,
+        "evidence-consumer-second-current",
+        new Date().toISOString(),
+        new Date(Date.now() + 1000).toISOString()
+      ),
+      requirementSuiteRunId
+    });
+
+    const cleanup = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: secondConsumerCase.id,
+      requirementSuiteRunId,
+      confirm: true,
+      phase: "cleanup"
+    });
+    expect(cleanup).toEqual(expect.objectContaining({
+      status: "needs-agent-execution",
+      task: expect.objectContaining({ action: "cleanup", leaseId: producerLease.id })
+    }));
+    expect(secondConsumerLease?.status).toBe("released");
+    submitDataTask(fixture, {
+      taskId: cleanup.task!.id,
+      status: "succeeded",
+      sourceRefs: ["api:cleanup/employee-001"]
+    });
+    expect(producerLease.status).toBe("released");
   });
 
   it("previews unresolved lookup work without creating a task", async () => {
@@ -276,6 +475,287 @@ describe("TestDataProviderService", () => {
     expect(await readFile(first.task!.promptPath, "utf8")).toContain(
       "Do not create data unless lookup cannot satisfy the request"
     );
+    const prompt = await readFile(first.task!.promptPath, "utf8");
+    expect(prompt).toContain(`Stable idempotency key: ${first.task!.idempotencyKey}`);
+    expect(prompt).toContain("Mark the task sent before the first external write");
+  });
+
+  it("requires read-only reconciliation before retrying an uncertain data write", async () => {
+    const fixture = await providerFixture({ cleanup: "delete-created" });
+    const input = {
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    } as const;
+    const prepared = await fixture.provider.prepare(input);
+    const task = prepared.task!;
+    fixture.provider.markSent(task.id);
+
+    expect(() => fixture.provider.markSent(task.id)).toThrow(/reconcile/i);
+    const resumed = await fixture.provider.prepare(input);
+    expect(resumed).toMatchObject({ status: "reconciliation-required", task: { id: task.id } });
+    expect(() => fixture.provider.submit({
+      taskId: task.id,
+      status: "failed",
+      error: "The response was lost",
+      sourceRefs: ["provider:timeout"]
+    })).toThrow(/read-only evidence/i);
+
+    await fixture.provider.reconcileNotApplied(task.id, ["operator-note:lookup-attempt"]);
+    expect(task.reconciliationVerification).toEqual(expect.objectContaining({
+      provider: "fixture-target-query",
+      query: "status=active",
+      evidenceRefs: ["system-query:customer-not-found"],
+      artifactHashes: [{
+        path: `testdata-reconciliation/${task.id}.json`,
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+      }]
+    }));
+    expect(task.reconciliationSourceRefs).toEqual(["system-query:customer-not-found"]);
+    expect(task.reconciliationContextRefs).toEqual(["operator-note:lookup-attempt"]);
+    const retry = await fixture.provider.prepare(input);
+    expect(retry).toMatchObject({ status: "needs-agent-execution", task: { id: task.id } });
+    fixture.provider.markSent(task.id);
+    const submitted = fixture.provider.submit({
+      taskId: task.id,
+      status: "succeeded",
+      decision: "create",
+      reference: "customer:retried-once",
+      sourceRefs: ["system-query:customer-created"]
+    });
+
+    expect(fixture.repository.testDataTasks).toHaveLength(1);
+    expect(submitted.task.operationPhase).toBe("reconciled-applied");
+    expect(submitted.task.outputSourceRefs).toEqual([
+      "system-query:customer-not-found",
+      "system-query:customer-created"
+    ]);
+  });
+
+  it("reconciles an already-applied cleanup without dispatching a second cleanup", async () => {
+    let runtimeDir = "";
+    const fixture = await providerFixture({
+      cleanup: "delete-created",
+      noEffectVerifier: async ({ task, system, query }) => {
+        const evidencePath = `testdata-reconciliation/${task.id}.json`;
+        const checkedAt = new Date().toISOString();
+        const contents = JSON.stringify({
+          schemaVersion: 1,
+          type: "testdata-no-effect-observation",
+          systemId: system.id,
+          query,
+          result: "absent",
+          matchCount: 0,
+          provider: "fixture-target-query",
+          checkedAt
+        });
+        await mkdir(join(runtimeDir, "testdata-reconciliation"), { recursive: true });
+        await writeFile(join(runtimeDir, evidencePath), contents, "utf8");
+        return {
+          status: "absent",
+          provider: "fixture-target-query",
+          query,
+          evidenceRefs: ["system-query:cleanup-entity-absent"],
+          evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
+          checkedAt
+        };
+      }
+    });
+    runtimeDir = fixture.runtimeDir;
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const created = submitDataTask(fixture, {
+      taskId: prepared.task!.id,
+      status: "succeeded",
+      decision: "create",
+      reference: "customer:created-before-interrupt",
+      value: "Created customer",
+      sourceRefs: ["system-write:customer-created"]
+    });
+    fixture.repository.executionEvidence.push(executionEvidence(
+      fixture.executableCase.id,
+      "evidence-before-cleanup",
+      created.lease!.createdAt,
+      new Date(Date.now() + 1000).toISOString()
+    ));
+    const cleanup = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      phase: "cleanup"
+    });
+    expect(cleanup.cleanupNotice?.message).toContain("customer:created-before-interrupt");
+    expect(cleanup.cleanupNotice?.message).toContain("remove the test-created record");
+    expect(cleanup.nextAction).toContain("before marking the task sent");
+    const cleanupTask = cleanup.task!;
+    expect(await readFile(cleanupTask.promptPath, "utf8")).toContain(
+      "confirm-cleanup-notice"
+    );
+    expect(() => fixture.provider.markSent(cleanupTask.id)).toThrow(/advance notice/i);
+    expect(() => fixture.provider.acknowledgeCleanupNotice(cleanupTask.id, "0".repeat(64)))
+      .toThrow(/digest does not match/i);
+    fixture.provider.acknowledgeCleanupNotice(cleanupTask.id, cleanup.cleanupNotice!.sha256);
+    fixture.provider.markSent(cleanupTask.id);
+
+    const reconciled = await fixture.provider.reconcileNotApplied(cleanupTask.id, [
+      "operator-note:cleanup-response-lost"
+    ]);
+
+    expect(reconciled).toEqual(expect.objectContaining({
+      action: "cleanup",
+      status: "submitted",
+      operationPhase: "reconciled-applied",
+      reconciliationVerification: expect.objectContaining({
+        query: "customer:created-before-interrupt"
+      })
+    }));
+    expect(created.lease?.status).toBe("released");
+    expect(fixture.repository.testDataTasks.filter((task) => task.action === "cleanup")).toHaveLength(1);
+    expect(await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      phase: "cleanup"
+    })).toEqual({ status: "ready", operations: [] });
+  });
+
+  it("keeps uncertain data writes blocked when no target-backed verifier is configured", async () => {
+    const fixture = await providerFixture({ noEffectVerifier: false });
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const task = prepared.task!;
+    fixture.provider.markSent(task.id);
+
+    await expect(fixture.provider.reconcileNotApplied(task.id, ["system-query:customer-not-found"]))
+      .rejects.toThrow("target-backed read-only no-effect verifier is not configured");
+    expect(task.operationPhase).toBe("sent");
+    expect(task.reconciliationVerification).toBeUndefined();
+    expect(await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    })).toMatchObject({
+      status: "reconciliation-required",
+      task: { id: task.id, operationPhase: "sent" }
+    });
+  });
+
+  it("rejects no-effect verification when the task target is outside its project binding", async () => {
+    const fixture = await providerFixture();
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const task = prepared.task!;
+    fixture.provider.markSent(task.id);
+    fixture.repository.systemProfiles.push({
+      ...fixture.system,
+      id: "system-other",
+      name: "Other Customer Portal"
+    });
+    task.systemId = "system-other";
+
+    await expect(fixture.provider.reconcileNotApplied(task.id, ["operator-note:lookup-attempt"]))
+      .rejects.toThrow("target system is not bound to the task knowledge project");
+    expect(task.operationPhase).toBe("sent");
+    expect(task.reconciliationVerification).toBeUndefined();
+  });
+
+  it("rejects no-effect evidence whose artifact hash does not match the file", async () => {
+    let fixtureRuntimeDir = "";
+    const fixture = await providerFixture({
+      noEffectVerifier: async ({ task, query }) => {
+        const evidencePath = `testdata-reconciliation/${task.id}.json`;
+        await mkdir(join(fixtureRuntimeDir, "testdata-reconciliation"), { recursive: true });
+        await writeFile(join(fixtureRuntimeDir, evidencePath), JSON.stringify({ query, status: "absent" }), "utf8");
+        return {
+          status: "absent",
+          provider: "fixture-target-query",
+          query,
+          evidenceRefs: ["system-query:customer-not-found"],
+          evidenceArtifacts: [{ path: evidencePath, sha256: "0".repeat(64) }],
+          checkedAt: new Date().toISOString()
+        };
+      }
+    });
+    fixtureRuntimeDir = fixture.runtimeDir;
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const task = prepared.task!;
+    fixture.provider.markSent(task.id);
+
+    await expect(fixture.provider.reconcileNotApplied(task.id, []))
+      .rejects.toThrow("No-effect verifier evidence is unreadable or invalid");
+    expect(task.operationPhase).toBe("sent");
+    expect(task.reconciliationVerification).toBeUndefined();
+  });
+
+  it("rejects hash-valid observation artifacts that do not prove the exact absent query", async () => {
+    let fixtureRuntimeDir = "";
+    const fixture = await providerFixture({
+      noEffectVerifier: async ({ task, system, query }) => {
+        const evidencePath = `testdata-reconciliation/${task.id}.json`;
+        const checkedAt = new Date().toISOString();
+        const contents = JSON.stringify({
+          schemaVersion: 1,
+          type: "testdata-no-effect-observation",
+          systemId: system.id,
+          query: "different-query",
+          result: "absent",
+          matchCount: 0,
+          provider: "fixture-target-query",
+          checkedAt
+        });
+        await mkdir(join(fixtureRuntimeDir, "testdata-reconciliation"), { recursive: true });
+        await writeFile(join(fixtureRuntimeDir, evidencePath), contents, "utf8");
+        return {
+          status: "absent",
+          provider: "fixture-target-query",
+          query,
+          evidenceRefs: ["system-query:customer-not-found"],
+          evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
+          checkedAt
+        };
+      }
+    });
+    fixtureRuntimeDir = fixture.runtimeDir;
+    const prepared = await fixture.provider.prepare({
+      knowledgeProjectId: fixture.project.id,
+      systemId: fixture.system.id,
+      executableCaseId: fixture.executableCase.id,
+      confirm: true,
+      allowCreate: true
+    });
+    const task = prepared.task!;
+    fixture.provider.markSent(task.id);
+
+    await expect(fixture.provider.reconcileNotApplied(task.id, []))
+      .rejects.toThrow("No-effect verifier evidence does not match the target, query, unique entity state, or action phase");
+    expect(task.operationPhase).toBe("sent");
   });
 
   it("rejects creation unless the caller explicitly allowed it", async () => {
@@ -288,7 +768,7 @@ describe("TestDataProviderService", () => {
     });
 
     expect(() =>
-      fixture.provider.submit({
+      submitDataTask(fixture, {
         taskId: prepared.task!.id,
         status: "succeeded",
         decision: "create",
@@ -308,7 +788,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
 
-    const result = fixture.provider.submit({
+    const result = submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -382,7 +862,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const result = fixture.provider.submit({
+    const result = submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -413,7 +893,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
     expect(() =>
-      fixture.provider.submit({
+      submitDataTask(fixture, {
         taskId: prepared.task!.id,
         status: "succeeded",
         decision: "reuse",
@@ -432,7 +912,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
 
-    const result = fixture.provider.submit({
+    const result = await submitFailedDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "failed",
       error: "Customer API is unavailable",
@@ -456,7 +936,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const recovered = fixture.provider.submit({
+    const recovered = submitDataTask(fixture, {
       taskId: retry.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -477,7 +957,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const submitted = fixture.provider.submit({
+    const submitted = submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -516,7 +996,7 @@ describe("TestDataProviderService", () => {
         status: "pending"
       })
     );
-    const completed = fixture.provider.submit({
+    const completed = submitDataTask(fixture, {
       taskId: cleanup.task!.id,
       status: "succeeded",
       sourceRefs: ["browser:cleanup/customer-new-3.json"]
@@ -534,7 +1014,7 @@ describe("TestDataProviderService", () => {
       executableCaseId: fixture.executableCase.id,
       confirm: true
     });
-    const submitted = fixture.provider.submit({
+    const submitted = submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "reuse",
@@ -585,7 +1065,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const submitted = fixture.provider.submit({
+    const submitted = submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -615,7 +1095,7 @@ describe("TestDataProviderService", () => {
       confirm: true
     });
 
-    const result = fixture.provider.submit({
+    const result = await submitFailedDataTask(fixture, {
       taskId: cleanup.task!.id,
       status: "failed",
       error: "Delete endpoint returned 409",
@@ -643,7 +1123,7 @@ describe("TestDataProviderService", () => {
     );
     expect(retry.task!.id).not.toBe(cleanup.task!.id);
 
-    fixture.provider.submit({
+    submitDataTask(fixture, {
       taskId: retry.task!.id,
       status: "succeeded",
       sourceRefs: ["api:cleanup/customer-new-4-retry"]
@@ -708,7 +1188,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    const employee = fixture.provider.submit({
+    const employee = submitDataTask(fixture, {
       taskId: first.task!.id,
       status: "succeeded",
       decision: "create",
@@ -725,7 +1205,7 @@ describe("TestDataProviderService", () => {
       confirm: true,
       allowCreate: true
     });
-    fixture.provider.submit({
+    submitDataTask(fixture, {
       taskId: second.task!.id,
       status: "succeeded",
       decision: "create",
@@ -785,7 +1265,7 @@ describe("TestDataProviderService", () => {
       allowCreate: true
     });
 
-    expect(() => fixture.provider.submit({
+    expect(() => submitDataTask(fixture, {
       taskId: prepared.task!.id,
       status: "succeeded",
       decision: "create",
@@ -797,7 +1277,10 @@ describe("TestDataProviderService", () => {
   });
 });
 
-async function providerFixture(input: { cleanup?: "none" | "delete-created" | "restore" } = {}) {
+async function providerFixture(input: {
+  cleanup?: "none" | "delete-created" | "restore";
+  noEffectVerifier?: boolean | TestDataNoEffectVerifier;
+} = {}) {
   const repository = new InMemoryBrainCreatorRepository();
   const root = await tempDir();
   const project: KnowledgeProject = {
@@ -907,9 +1390,86 @@ async function providerFixture(input: { cleanup?: "none" | "delete-created" | "r
     repository,
     knowledgeService,
     join(root, "runtime"),
-    testDataBrain
+    testDataBrain,
+    input.noEffectVerifier === false ? undefined : typeof input.noEffectVerifier === "function"
+      ? input.noEffectVerifier
+      : async ({ task, system, query }) => {
+      const evidencePath = `testdata-reconciliation/${task.id}.json`;
+      const checkedAt = new Date().toISOString();
+      const result = task.action === "cleanup" ? "present" as const : "absent" as const;
+      const contents = JSON.stringify({
+        schemaVersion: 1,
+        type: "testdata-no-effect-observation",
+        systemId: system.id,
+        query,
+        result,
+        matchCount: result === "present" ? 1 : 0,
+        ...(result === "present" ? { reference: query } : {}),
+        provider: "fixture-target-query",
+        checkedAt
+      });
+      await mkdir(join(root, "runtime", "testdata-reconciliation"), { recursive: true });
+      await writeFile(join(root, "runtime", evidencePath), contents, "utf8");
+      return {
+        status: result,
+        provider: "fixture-target-query",
+        query,
+        evidenceRefs: [task.action === "cleanup" ? "system-query:cleanup-not-found" : "system-query:customer-not-found"],
+        evidenceArtifacts: [{ path: evidencePath, sha256: createHash("sha256").update(contents).digest("hex") }],
+        checkedAt
+      };
+    }
   );
-  return { repository, project, system, intent, executableCase, provider, testDataBrain };
+  return { repository, project, system, intent, executableCase, provider, testDataBrain, runtimeDir: join(root, "runtime") };
+}
+
+type ProviderFixture = Awaited<ReturnType<typeof providerFixture>>;
+
+function submitDataTask(
+  fixture: ProviderFixture,
+  input: Parameters<ProviderFixture["provider"]["submit"]>[0]
+) {
+  if (input.status === "failed") throw new Error("Failed submissions require submitFailedDataTask");
+  acknowledgeCleanupNoticeIfNeeded(fixture, input.taskId);
+  fixture.provider.markSent(input.taskId);
+  return fixture.provider.submit(input);
+}
+
+function acknowledgeCleanupNoticeIfNeeded(fixture: ProviderFixture, taskId: string) {
+  const task = fixture.repository.testDataTasks.find((item) => item.id === taskId);
+  if (task?.action === "cleanup") {
+    fixture.provider.acknowledgeCleanupNotice(task.id, task.cleanupNoticeSha256!);
+  }
+}
+
+function executionEvidence(executableCaseId: string, evidenceId: string, createdAt: string, completedAt: string) {
+  return {
+    id: evidenceId,
+    knowledgeProjectId: "knowledge-customer",
+    systemId: "system-customer",
+    executableCaseId,
+    testCaseId: evidenceId,
+    contextPackPath: "context.json",
+    status: "passed" as const,
+    steps: [],
+    tracePaths: [],
+    artifactPaths: [],
+    consoleErrors: [],
+    networkFailures: [],
+    createdAt,
+    completedAt
+  };
+}
+
+async function submitFailedDataTask(
+  fixture: ProviderFixture,
+  input: Parameters<ProviderFixture["provider"]["submit"]>[0]
+) {
+  if (input.status !== "failed") throw new Error("submitFailedDataTask requires a failed data task");
+  acknowledgeCleanupNoticeIfNeeded(fixture, input.taskId);
+  fixture.provider.markSent(input.taskId);
+  await fixture.provider.reconcileNotApplied(input.taskId, input.sourceRefs);
+  return fixture.provider.submit(input);
 }
 
 async function tempDir() {

@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("Facade execution recovery", () => {
-  it("exposes the current requirement-suite step from persisted progress", async () => {
+  it("restores the current requirement-suite step after reloading the persisted workspace", async () => {
     const workDir = await mkdtemp(join(tmpdir(), "brain-creator-recovery-facade-"));
     tempDirs.push(workDir);
     const context = createBrainCreatorMcpContext({
@@ -71,7 +71,11 @@ describe("Facade execution recovery", () => {
       waitReason: "Waiting for the approval role"
     });
 
-    const response = await handleBrainCreatorTool(context, "bc_status", {
+    const reloadedContext = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, "assets.json")
+    });
+    const response = await handleBrainCreatorTool(reloadedContext, "bc_status", {
       knowledgeProjectId: project.id,
       responseMode: "full"
     });
@@ -91,7 +95,7 @@ describe("Facade execution recovery", () => {
       nextAction: "resume-after-checkpoint"
     }));
 
-    const summaryResponse = await handleBrainCreatorTool(context, "bc_status", {
+    const summaryResponse = await handleBrainCreatorTool(reloadedContext, "bc_status", {
       knowledgeProjectId: project.id,
       responseMode: "summary"
     });

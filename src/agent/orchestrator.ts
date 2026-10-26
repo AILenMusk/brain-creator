@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { buildAgentPrompt } from "./promptBuilder.js";
 import { generateSeedFile } from "./seedGenerator.js";
@@ -827,7 +829,7 @@ export async function spawnCommand(
   options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const normalized = normalizeCommand(command, args);
+    const normalized = normalizeCommand(command, args, options.cwd ?? process.cwd());
     const child = spawn(normalized.command, normalized.args, {
       cwd: options.cwd,
       env: options.env
@@ -858,14 +860,29 @@ export async function spawnCommand(
   });
 }
 
-function normalizeCommand(command: string, args: string[]) {
+function normalizeCommand(command: string, args: string[], cwd: string) {
   if (command === "npx" && args[0] === "playwright") {
     return {
       command: process.execPath,
-      args: [join(process.cwd(), "node_modules", "@playwright", "test", "cli.js"), ...args.slice(1)]
+      args: [resolvePlaywrightCli(cwd), ...args.slice(1)]
     };
   }
   return { command, args };
+}
+
+export function resolvePlaywrightCli(workDir: string, moduleUrl = import.meta.url) {
+  const workspaceCli = join(workDir, "node_modules", "@playwright", "test", "cli.js");
+  if (existsSync(workspaceCli)) return workspaceCli;
+
+  try {
+    const packageEntry = createRequire(moduleUrl).resolve("@playwright/test");
+    const installedCli = join(dirname(packageEntry), "cli.js");
+    if (existsSync(installedCli)) return installedCli;
+  } catch {
+    // Use the caller's installation as a last compatibility fallback.
+  }
+
+  return join(process.cwd(), "node_modules", "@playwright", "test", "cli.js");
 }
 
 function safeAuthSummary(profile: AuthProfile): AuthProfile {

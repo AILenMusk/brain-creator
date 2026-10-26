@@ -170,7 +170,7 @@ Use `bc_list_cases` with the selected `systemId` to review draft, approved, pass
 
 Use `bc_list_gaps` with `projectId` and optional `status` to review open or resolved gaps.
 
-Use `bc_resolve_gap` with `projectId` and `gapId` after the user confirms the missing evidence or issue has been handled.
+Resolve, dismiss, or reopen a Gap only through `bc_prepare action=resolve-gap|dismiss-gap|reopen-gap`. First preview with `confirm=false`; then confirm with `confirm=true`, a human `confirmationNote`, and at least one `evidenceRefs` entry. The legacy `bc_resolve_gap` compatibility tool is disabled because it cannot preview or bind evidence.
 
 Use `bc_report_gap` to record external preflight failures or manual workflow blockers that occur outside an Agent chain.
 

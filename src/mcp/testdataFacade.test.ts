@@ -34,8 +34,15 @@ describe("Testdata Brain facade", () => {
       defaultLocale: "en-US"
     });
     context.knowledgeService.bindSystem(project.id, system.id);
+    const otherProject = await context.knowledgeService.createProject({
+      name: "Other orders knowledge",
+      key: "other-orders-testdata-facade",
+      defaultLocale: "en-US"
+    });
+    context.knowledgeService.bindSystem(otherProject.id, system.id);
 
     const order = await context.testDataBrain.create({
+      knowledgeProjectId: project.id,
       systemId: system.id,
       entityType: "order",
       reference: "order:1001",
@@ -43,17 +50,26 @@ describe("Testdata Brain facade", () => {
       sourceRefs: ["testdata:order-1001"]
     });
     const approval = await context.testDataBrain.create({
+      knowledgeProjectId: project.id,
       systemId: system.id,
       entityType: "approval",
       reference: "approval:1001",
       sourceRefs: ["testdata:approval-1001"]
     });
     context.testDataBrain.linkDependency({
+      knowledgeProjectId: project.id,
       systemId: system.id,
       fromReference: order.reference,
       toReference: approval.reference,
       relation: "requires",
       sourceRefs: ["requirement:order-approval"]
+    });
+    await context.testDataBrain.create({
+      knowledgeProjectId: otherProject.id,
+      systemId: system.id,
+      entityType: "order",
+      reference: "order:other-project",
+      sourceRefs: ["testdata:other-project"]
     });
 
     const result = await handleBrainCreatorTool(context, "bc_review", {
@@ -72,6 +88,15 @@ describe("Testdata Brain facade", () => {
         relation: "requires"
       })
     );
+
+    const statusResult = await handleBrainCreatorTool(context, "bc_status", {
+      systemId: system.id,
+      knowledgeProjectId: project.id,
+      responseMode: "full"
+    });
+    const statusPayload = JSON.parse(statusResult.content[0].type === "text" ? statusResult.content[0].text : "{}");
+    expect(statusPayload.data.knowledge.brainRuntime.testdataBrain).toEqual({ entities: 2, dependencies: 1 });
+    expect(statusPayload.data.knowledge.brainRuntime.semanticSpine.businessEntities).toBe(2);
   });
 
   it("reviews explicit cross-case dependencies through the facade", async () => {

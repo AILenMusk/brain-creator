@@ -1,10 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   ExecutableCase,
   ExecutableCaseDataOperation,
   Gap,
+  SystemProfile,
   TestDataLease,
   TestDataTask
 } from "../domain/types.js";
@@ -13,11 +15,13 @@ import { id } from "../shared/id.js";
 import type { KnowledgeService } from "./service.js";
 import { executableCaseCompileStatus } from "./caseCompiler.js";
 import { findActiveTestDataLease } from "./dataLeaseResolver.js";
+import { validateExecutionArtifacts } from "../execution/artifactValidation.js";
 
 type PrepareInput = {
   knowledgeProjectId: string;
   systemId: string;
   executableCaseId: string;
+  requirementSuiteRunId?: string;
   confirm: boolean;
   allowCreate?: boolean;
   automatic?: boolean;
@@ -46,10 +50,40 @@ type PrepareOperation = {
   sourceRefs: string[];
 };
 
+export type TestDataNoEffectVerification = {
+  status: "absent" | "present" | "unavailable";
+  provider: string;
+  query: string;
+  evidenceRefs: string[];
+  evidenceArtifacts: Array<{ path: string; sha256: string }>;
+  checkedAt: string;
+  reason?: string;
+};
+
+type TestDataNoEffectObservation = {
+  schemaVersion: 1;
+  type: "testdata-no-effect-observation";
+  systemId: string;
+  query: string;
+  result: "absent" | "present";
+  matchCount: number;
+  reference?: string;
+  provider: string;
+  checkedAt: string;
+};
+
+export type TestDataNoEffectVerifier = (input: {
+  task: TestDataTask;
+  system: SystemProfile;
+  query: string;
+}) => Promise<TestDataNoEffectVerification>;
+
 export type TestDataPrepareResult = {
-  status: "preview" | "needs-agent-execution" | "ready";
+  status: "preview" | "needs-agent-execution" | "reconciliation-required" | "ready";
   operations: PrepareOperation[];
   task?: TestDataTask;
+  cleanupNotice?: { message: string; sha256: string };
+  nextAction?: string;
   autoResolvedProfileIds?: string[];
 };
 
@@ -65,36 +99,67 @@ export class TestDataProviderService {
     private readonly repository: InMemoryBrainCreatorRepository,
     private readonly knowledgeService: KnowledgeService,
     private readonly runtimeDir: string,
-    private readonly testDataBrain?: TestDataBrainService
+    private readonly testDataBrain?: TestDataBrainService,
+    private readonly noEffectVerifier?: TestDataNoEffectVerifier
   ) {}
 
   async prepare(input: PrepareInput): Promise<TestDataPrepareResult> {
     const executableCase = this.getCase(input);
-    this.releaseReusableLeasesAfterExecution(executableCase);
-    const cleanupLease = this.findCleanupLease(executableCase);
+    if (input.confirm) {
+      this.releaseReusableLeasesAfterExecution(executableCase, input.requirementSuiteRunId);
+      this.recordCrossCaseLeaseConsumptions(executableCase, input.requirementSuiteRunId);
+    }
+    const cleanupLease = this.findCleanupLease(executableCase, input.requirementSuiteRunId);
     if (cleanupLease) {
+      const consumerLease = this.consumerLeaseFor(
+        executableCase,
+        cleanupLease,
+        input.requirementSuiteRunId
+      );
+      const producerCase = this.repository.executableCases.find(
+        (candidate) => candidate.id === cleanupLease.executableCaseId
+      );
       const operation: PrepareOperation = {
         profileId: cleanupLease.profileId,
-        field: this.findField(executableCase, cleanupLease.profileId),
+        field: this.findField(producerCase ?? executableCase, cleanupLease.profileId),
         ...(cleanupLease.entityReference
           ? { entityReference: cleanupLease.entityReference }
           : {}),
         cleanup: cleanupLease.cleanup,
         allowedDecisions: [],
         constraints: [],
-        sourceRefs: cleanupLease.sourceRefs
+        sourceRefs: unique([
+          ...cleanupLease.sourceRefs,
+          ...(consumerLease?.sourceRefs ?? [])
+        ])
       };
       if (!input.confirm) {
         return { status: "preview", operations: [operation] };
       }
       const task = await this.createOrReuseTask({
         executableCase,
+        requirementSuiteRunId: input.requirementSuiteRunId,
         operation,
         action: "cleanup",
         allowCreate: false,
         leaseId: cleanupLease.id
       });
-      return { status: "needs-agent-execution", operations: [operation], task };
+      if (!this.canDispatchAgain(task)) {
+        return {
+          status: "reconciliation-required",
+          operations: [operation],
+          task,
+          cleanupNotice: this.cleanupNotice(task.id),
+          nextAction: "Read the target system without writing. If cleanup did not take effect, send the included advance notice before retrying the cleanup; do not repeat the write based only on a missing response."
+        };
+      }
+      return {
+        status: "needs-agent-execution",
+        operations: [operation],
+        task,
+        cleanupNotice: this.cleanupNotice(task.id),
+        nextAction: "Send the included cleanup notice to the user, then call confirm-cleanup-notice with its SHA-256 before marking the task sent or performing cleanup. If the user asks to retain the data, stop and keep the run blocked."
+      };
     }
     if (input.phase === "cleanup") {
       return { status: "ready", operations: [] };
@@ -111,7 +176,7 @@ export class TestDataProviderService {
     const autoResolvedProfileIds = input.automatic && input.confirm
       ? this.resolveDeterministicOperations(executableCase)
       : [];
-    const operations = this.unresolvedOperations(executableCase).map((operation) =>
+    const operations = this.unresolvedOperations(executableCase, input.requirementSuiteRunId).map((operation) =>
       this.prepareOperation(operation, Boolean(input.allowCreate))
     );
     if (operations.length === 0) {
@@ -138,10 +203,22 @@ export class TestDataProviderService {
     const next = this.nextOperation(executableCase, operations);
     const task = await this.createOrReuseTask({
       executableCase,
+      requirementSuiteRunId: input.requirementSuiteRunId,
       operation: next,
       action: "lookup-or-create",
       allowCreate: Boolean(input.allowCreate)
     });
+    if (!this.canDispatchAgain(task)) {
+      return {
+        status: "reconciliation-required",
+        operations,
+        task,
+        ...(autoResolvedProfileIds.length > 0
+          ? { autoResolvedProfileIds }
+          : {}),
+        nextAction: "Read the target system without writing. Reuse and submit an existing matching entity if the operation took effect; only retry after evidence proves it did not."
+      };
+    }
     return {
       status: "needs-agent-execution",
       operations,
@@ -172,12 +249,21 @@ export class TestDataProviderService {
       throw new Error(`Test data task is ${task.status}`);
     }
 
+    if (input.status === "succeeded" &&
+        task.operationPhase !== "sent" &&
+        task.operationPhase !== "reconciled-applied") {
+      throw new Error("Test data task must be marked sent before submitting a successful external operation");
+    }
+    if (input.status === "failed" && task.operationPhase !== "reconciled-not-applied") {
+      throw new Error("Failed test data tasks require read-only evidence that no external write took effect");
+    }
+
     const sourceRefs = cleanSourceRefs(input.sourceRefs);
     if (input.status === "failed") {
       const reason = input.error?.trim() || "Host agent could not complete the test data task";
       task.status = "failed";
       task.error = reason;
-      task.outputSourceRefs = sourceRefs;
+      task.outputSourceRefs = unique([...(task.reconciliationSourceRefs ?? []), ...sourceRefs]);
       task.updatedAt = timestamp();
       if (task.action === "cleanup" && task.leaseId) {
         const lease = this.getLease(task.leaseId);
@@ -211,12 +297,14 @@ export class TestDataProviderService {
       if (!task.leaseId) throw new Error("Cleanup task has no data lease");
       const lease = this.getLease(task.leaseId);
       const now = timestamp();
+      task.operationPhase = "reconciled-applied";
       lease.status = "released";
       lease.releasedAt = now;
       lease.updatedAt = now;
       lease.sourceRefs = unique([...lease.sourceRefs, ...sourceRefs]);
       this.completeTask(task, sourceRefs, now);
       this.testDataBrain?.releaseExternal({
+        knowledgeProjectId: task.knowledgeProjectId,
         systemId: task.systemId,
         reference: lease.reference,
         sourceRefs
@@ -249,6 +337,7 @@ export class TestDataProviderService {
       }]
     });
     const now = timestamp();
+    task.operationPhase = "reconciled-applied";
     this.resolveProviderGaps(task, now);
     this.refreshCaseStatus(resolved.executableCase, now);
     this.assertDependencyLeases(resolved.executableCase, task);
@@ -260,7 +349,8 @@ export class TestDataProviderService {
           this.repository,
           resolved.executableCase,
           task.systemId,
-          { ...operation, reference: input.reference.trim() }
+          { ...operation, reference: input.reference.trim() },
+          task.requirementSuiteRunId
         )
       : undefined;
     const lease = this.createOrReuseLease({
@@ -277,6 +367,170 @@ export class TestDataProviderService {
     this.completeTask(task, sourceRefs, now);
     this.repository.persist();
     return { task, executableCase: resolved.executableCase, lease };
+  }
+
+  markSent(taskId: string) {
+    const task = this.getTask(taskId);
+    if (task.status !== "pending") throw new Error(`Test data task is ${task.status}`);
+    if (task.action === "cleanup" && (!task.cleanupNoticeAcknowledgedAt || !task.cleanupNoticeSha256)) {
+      throw new Error("Cleanup advance notice must be acknowledged before marking the task sent");
+    }
+    if (task.operationPhase === "sent") {
+      throw new Error("Test data task already has a sent operation; reconcile it before another attempt");
+    }
+    if (task.operationPhase !== "prepared" && task.operationPhase !== "reconciled-not-applied") {
+      throw new Error("Test data task requires read-only reconciliation before a write can be dispatched");
+    }
+    const now = timestamp();
+    task.operationPhase = "sent";
+    task.lastSentAt = now;
+    task.updatedAt = now;
+    this.repository.persist();
+    return task;
+  }
+
+  cleanupNotice(taskId: string) {
+    const task = this.getTask(taskId);
+    if (task.action !== "cleanup" || !task.leaseId || !task.cleanupNoticeMessage || !task.cleanupNoticeSha256) {
+      throw new Error("Cleanup notice requires a pending cleanup task with a leased entity");
+    }
+    const digest = createHash("sha256").update(task.cleanupNoticeMessage).digest("hex");
+    if (digest !== task.cleanupNoticeSha256) {
+      throw new Error("Cleanup notice message no longer matches its stored digest");
+    }
+    return { message: task.cleanupNoticeMessage, sha256: digest };
+  }
+
+  acknowledgeCleanupNotice(taskId: string, sha256: string) {
+    const task = this.getTask(taskId);
+    if (task.status !== "pending" || task.action !== "cleanup") {
+      throw new Error("Only a pending cleanup task can acknowledge an advance notice");
+    }
+    if (task.operationPhase !== "prepared" && task.operationPhase !== "reconciled-not-applied") {
+      throw new Error("Cleanup notice must be acknowledged before a cleanup write is sent");
+    }
+    const expected = this.cleanupNotice(taskId);
+    if (!/^[a-f0-9]{64}$/i.test(sha256) || expected.sha256 !== sha256) {
+      throw new Error("Cleanup notice digest does not match the message returned for this task");
+    }
+    const now = timestamp();
+    task.cleanupNoticeAcknowledgedAt = now;
+    task.cleanupNoticeSha256 = sha256;
+    task.updatedAt = now;
+    this.repository.persist();
+    return task;
+  }
+
+  async reconcileNotApplied(taskId: string, sourceRefs: string[]) {
+    const task = this.getTask(taskId);
+    if (task.status !== "pending") throw new Error(`Test data task is ${task.status}`);
+    if (task.operationPhase !== "sent" && task.operationPhase !== undefined) {
+      throw new Error("Only an uncertain sent Test data operation can be reconciled");
+    }
+    if (!this.noEffectVerifier) {
+      throw new Error("A target-backed read-only no-effect verifier is not configured; the uncertain write remains blocked");
+    }
+    const project = this.repository.knowledgeProjects.find((item) => item.id === task.knowledgeProjectId);
+    const system = this.repository.systemProfiles.find((item) => item.id === task.systemId);
+    if (!project || !system || !project.systemIds.includes(system.id)) {
+      throw new Error("No-effect verification target system is not bound to the task knowledge project");
+    }
+    const cleanupLease = task.action === "cleanup" && task.leaseId
+      ? this.getLease(task.leaseId)
+      : undefined;
+    if (task.action === "cleanup" && !cleanupLease) {
+      throw new Error("Cleanup reconciliation requires its leased entity reference");
+    }
+    const query = cleanupLease?.reference ?? task.lookupQuery?.trim() ?? task.entityReference?.trim() ?? `${task.field}=${task.field}`;
+    const verification = await this.noEffectVerifier({
+      task: structuredClone(task),
+      system: structuredClone(system),
+      query
+    });
+    const expectedState = task.action === "cleanup" ? "present" : "absent";
+    const alreadyApplied = task.action === "cleanup" && verification.status === "absent";
+    if (verification.status === "unavailable" ||
+        (verification.status !== expectedState && !alreadyApplied)) {
+      throw new Error(verification.reason?.trim() || (
+        verification.status === "present"
+          ? "The target lookup found the entity; do not retry this write unless the operation-specific no-effect state is proven"
+          : "The target-backed no-effect verification is unavailable; the uncertain write remains blocked"
+      ));
+    }
+    const verifiedRefs = cleanSourceRefs(verification.evidenceRefs ?? []);
+    const evidenceArtifacts = verification.evidenceArtifacts ?? [];
+    if (!verification.provider?.trim() || verification.query !== query || verifiedRefs.length === 0 ||
+        evidenceArtifacts.length === 0 || evidenceArtifacts.some((artifact) =>
+          !artifact.path?.trim() || !/^[a-f0-9]{64}$/i.test(artifact.sha256)
+        ) || !Number.isFinite(Date.parse(verification.checkedAt))) {
+      throw new Error("No-effect verifier returned an incomplete or mismatched verification record");
+    }
+    const artifactValidation = await validateExecutionArtifacts(
+      this.runtimeDir,
+      evidenceArtifacts.map((artifact) => artifact.path),
+      Object.fromEntries(evidenceArtifacts.map((artifact) => [artifact.path, artifact.sha256]))
+    );
+    if (artifactValidation.status !== "valid" || artifactValidation.files.length !== evidenceArtifacts.length) {
+      throw new Error(`No-effect verifier evidence is unreadable or invalid: ${artifactValidation.reasons.join("; ")}`);
+    }
+    const evidenceRoot = await realpath(this.runtimeDir);
+    for (const artifact of evidenceArtifacts) {
+      const artifactPath = await realpath(resolve(evidenceRoot, artifact.path));
+      const relativePath = relative(evidenceRoot, artifactPath);
+      if (!relativePath || relativePath === ".." || relativePath.startsWith("..\\") || relativePath.startsWith("../") || isAbsolute(relativePath)) {
+        throw new Error("No-effect verifier evidence path escaped the runtime artifact root");
+      }
+      const contents = await readFile(artifactPath);
+      const sha256 = createHash("sha256").update(contents).digest("hex");
+      const validatedFile = artifactValidation.files.find((file) => file.path === artifact.path);
+      if (!validatedFile || sha256 !== validatedFile.sha256) {
+        throw new Error("No-effect verifier evidence changed during validation");
+      }
+      let observation: TestDataNoEffectObservation;
+      try {
+        observation = JSON.parse(contents.toString("utf8")) as TestDataNoEffectObservation;
+      } catch {
+        throw new Error("No-effect verifier evidence must be a readable structured JSON observation");
+      }
+      if (observation.schemaVersion !== 1 || observation.type !== "testdata-no-effect-observation" ||
+          observation.systemId !== system.id || observation.query !== query ||
+          observation.result !== verification.status ||
+          (observation.result === "absent" && observation.matchCount !== 0) ||
+          (observation.result === "present" &&
+            (observation.matchCount !== 1 || observation.reference !== query)) ||
+          observation.provider !== verification.provider.trim() ||
+          observation.checkedAt !== verification.checkedAt) {
+        throw new Error("No-effect verifier evidence does not match the target, query, unique entity state, or action phase");
+      }
+    }
+    const now = timestamp();
+    task.operationPhase = alreadyApplied ? "reconciled-applied" : "reconciled-not-applied";
+    if (!alreadyApplied && task.action === "cleanup") {
+      task.cleanupNoticeAcknowledgedAt = undefined;
+    }
+    task.reconciliationVerification = {
+      provider: verification.provider.trim(),
+      query,
+      evidenceRefs: verifiedRefs,
+      artifactHashes: artifactValidation.files,
+      checkedAt: verification.checkedAt
+    };
+    task.reconciliationSourceRefs = unique([...(task.reconciliationSourceRefs ?? []), ...verifiedRefs]);
+    task.reconciliationContextRefs = unique([
+      ...(task.reconciliationContextRefs ?? []),
+      ...cleanSourceRefs(sourceRefs)
+    ]);
+    task.updatedAt = now;
+    if (alreadyApplied) {
+      this.submit({
+        taskId: task.id,
+        status: "succeeded",
+        sourceRefs: unique([...verifiedRefs, ...cleanSourceRefs(sourceRefs)])
+      });
+      return task;
+    }
+    this.repository.persist();
+    return task;
   }
 
   private getCase(input: PrepareInput) {
@@ -299,7 +553,7 @@ export class TestDataProviderService {
     return executableCase;
   }
 
-  private unresolvedOperations(executableCase: ExecutableCase) {
+  private unresolvedOperations(executableCase: ExecutableCase, requirementSuiteRunId?: string) {
     if (!executableCase.dataPlan) return [];
     return executableCase.dataPlan.operations.filter(
       (operation) =>
@@ -310,7 +564,8 @@ export class TestDataProviderService {
             this.repository,
             executableCase,
             executableCase.systemId!,
-            operation
+            operation,
+            requirementSuiteRunId
           ))
     );
   }
@@ -367,6 +622,7 @@ export class TestDataProviderService {
 
   private async createOrReuseTask(input: {
     executableCase: ExecutableCase;
+    requirementSuiteRunId?: string;
     operation: PrepareOperation;
     action: TestDataTask["action"];
     allowCreate: boolean;
@@ -375,6 +631,7 @@ export class TestDataProviderService {
     const idempotencyKey = [
       input.executableCase.systemId,
       input.executableCase.id,
+      input.requirementSuiteRunId ?? "manual",
       input.operation.profileId,
       input.action,
       input.leaseId ?? "none"
@@ -382,18 +639,38 @@ export class TestDataProviderService {
     const existing = this.repository.testDataTasks.find(
       (item) => item.idempotencyKey === idempotencyKey && item.status === "pending"
     );
-    if (existing) return existing;
+    if (existing) {
+      if (existing.action === "cleanup" && existing.leaseId &&
+          (!existing.cleanupNoticeMessage || !existing.cleanupNoticeSha256)) {
+        const lease = this.repository.testDataLeases.find((item) => item.id === existing.leaseId);
+        if (!lease) throw new Error("Cleanup task has no leased entity for its advance notice");
+        const notice = cleanupNoticeFor(lease);
+        existing.cleanupNoticeMessage = notice.message;
+        existing.cleanupNoticeSha256 = notice.sha256;
+        existing.cleanupNoticeAcknowledgedAt = undefined;
+        existing.updatedAt = timestamp();
+        this.repository.persist();
+      }
+      return existing;
+    }
 
     const taskId = id("testDataTask");
     const taskDir = join(this.runtimeDir, "test-data", taskId);
     const contextPath = join(taskDir, "input.context.json");
     const promptPath = join(taskDir, "input.prompt.md");
     const now = timestamp();
+    const cleanupLease = input.leaseId
+      ? this.repository.testDataLeases.find((item) => item.id === input.leaseId)
+      : undefined;
+    const cleanupNotice = input.action === "cleanup" && cleanupLease
+      ? cleanupNoticeFor(cleanupLease)
+      : undefined;
     const task: TestDataTask = {
       id: taskId,
       knowledgeProjectId: input.executableCase.knowledgeProjectId,
       systemId: input.executableCase.systemId!,
       executableCaseId: input.executableCase.id,
+      ...(input.requirementSuiteRunId ? { requirementSuiteRunId: input.requirementSuiteRunId } : {}),
       profileId: input.operation.profileId,
       field: input.operation.field,
       ...(input.operation.entityReference
@@ -402,10 +679,15 @@ export class TestDataProviderService {
       action: input.action,
       status: "pending",
       idempotencyKey,
+      operationPhase: "prepared",
       allowCreate: input.allowCreate,
       cleanup: input.operation.cleanup,
       lookupQuery: input.operation.lookupQuery,
       leaseId: input.leaseId,
+      ...(cleanupNotice ? {
+        cleanupNoticeMessage: cleanupNotice.message,
+        cleanupNoticeSha256: cleanupNotice.sha256
+      } : {}),
       contextPath,
       promptPath,
       sourceRefs: input.operation.sourceRefs,
@@ -420,7 +702,10 @@ export class TestDataProviderService {
         taskId,
         systemId: task.systemId,
         executableCaseId: task.executableCaseId,
+        requirementSuiteRunId: task.requirementSuiteRunId,
         action: task.action,
+        idempotencyKey: task.idempotencyKey,
+        operationPhase: task.operationPhase,
         field: task.field,
         ...(task.entityReference
           ? { entityReference: task.entityReference }
@@ -443,12 +728,23 @@ export class TestDataProviderService {
   }
 
   private taskPrompt(task: TestDataTask, operation: PrepareOperation) {
+    const recovery = [
+      `Stable idempotency key: ${task.idempotencyKey}`,
+      "Mark the task sent before the first external write.",
+      "If a prior response was lost or execution was interrupted, perform a read-only lookup and verify the current business state before doing anything else.",
+      "If the requested result already exists, submit that same entity reference with evidence; do not repeat the create or transition.",
+      "If the requested effect is absent, record read-only evidence of absence before retrying the write."
+    ];
     if (task.action === "cleanup") {
       return [
         "# Test Data Cleanup Task",
         "",
         `Clean up the data lease for field "${task.field}" using policy "${task.cleanup}".`,
+        "Before any cleanup write, send this advance notice to the user, then acknowledge it with the returned SHA-256 using bc_prepare action=confirm-cleanup-notice. Do not mark the task sent or perform cleanup until that acknowledgment succeeds.",
+        task.cleanupNoticeMessage ?? "The cleanup notice is unavailable; stop and do not clean up.",
+        task.cleanupNoticeSha256 ? `Cleanup notice SHA-256: ${task.cleanupNoticeSha256}` : "",
         "Do not modify unrelated business data.",
+        ...recovery,
         "Return source evidence that proves the cleanup result."
       ].join("\n");
     }
@@ -463,6 +759,7 @@ export class TestDataProviderService {
       `Allowed decisions: ${operation.allowedDecisions.join(", ")}`,
       "Prefer reusing an existing matching record.",
       "Do not create data unless lookup cannot satisfy the request and create is explicitly allowed.",
+      ...recovery,
       `If data is created, preserve evidence and apply cleanup policy "${task.cleanup}".`,
       "Do not expose secrets in the result."
     ].join("\n");
@@ -489,6 +786,7 @@ export class TestDataProviderService {
       knowledgeProjectId: input.task.knowledgeProjectId,
       systemId: input.task.systemId,
       executableCaseId: input.task.executableCaseId,
+      ...(input.task.requirementSuiteRunId ? { requirementSuiteRunId: input.task.requirementSuiteRunId } : {}),
       profileId: input.task.profileId,
       taskId: input.task.id,
       decision: input.decision,
@@ -510,15 +808,109 @@ export class TestDataProviderService {
     return lease;
   }
 
-  private findCleanupLease(executableCase: ExecutableCase) {
-    if (!this.hasTerminalEvidence(executableCase.id)) return undefined;
-    return this.repository.testDataLeases.find(
-      (lease) =>
-        lease.executableCaseId === executableCase.id &&
-        lease.decision === "create" &&
+  private findCleanupLease(executableCase: ExecutableCase, requirementSuiteRunId?: string) {
+    return this.repository.testDataLeases.find((lease) => {
+      const isCreatedCleanupLease = lease.decision === "create" &&
         lease.cleanup !== "none" &&
-        (lease.status === "active" || lease.status === "cleanup-failed")
+        (!requirementSuiteRunId || lease.requirementSuiteRunId === requirementSuiteRunId) &&
+        (lease.status === "active" || lease.status === "cleanup-failed");
+      if (!isCreatedCleanupLease) return false;
+      const ownedByCurrentCase = lease.executableCaseId === executableCase.id;
+      const consumerLease = this.consumerLeaseFor(executableCase, lease, requirementSuiteRunId);
+      if (!ownedByCurrentCase && !consumerLease) return false;
+      if (!this.hasTerminalEvidence(executableCase.id, requirementSuiteRunId, consumerLease?.createdAt ?? lease.createdAt)) {
+        return false;
+      }
+      return !this.hasUnfinishedConsumers(lease, requirementSuiteRunId);
+    });
+  }
+
+  private recordCrossCaseLeaseConsumptions(executableCase: ExecutableCase, requirementSuiteRunId?: string) {
+    if (!executableCase.systemId) return;
+    let changed = false;
+    const now = timestamp();
+    for (const operation of executableCase.dataPlan?.operations ?? []) {
+      if ((operation.decision !== "reuse" && operation.decision !== "lookup") || !operation.entityReference) continue;
+      const producerLease = findActiveTestDataLease(
+        this.repository,
+        executableCase,
+        executableCase.systemId,
+        operation,
+        requirementSuiteRunId
+      );
+      if (!producerLease || producerLease.executableCaseId === executableCase.id) continue;
+      const existingConsumption = this.repository.testDataLeases.some(
+        (lease) => lease.executableCaseId === executableCase.id &&
+          lease.requirementSuiteRunId === requirementSuiteRunId &&
+          lease.profileId === operation.profileId &&
+          lease.entityReference === operation.entityReference &&
+          lease.reusedFromLeaseId === producerLease.id
+      );
+      if (existingConsumption) continue;
+      this.repository.testDataLeases.push({
+        id: id("testDataLease"),
+        knowledgeProjectId: executableCase.knowledgeProjectId,
+        systemId: executableCase.systemId,
+        executableCaseId: executableCase.id,
+        ...(requirementSuiteRunId ? { requirementSuiteRunId } : {}),
+        profileId: operation.profileId,
+        taskId: producerLease.taskId,
+        decision: "reuse",
+        reference: producerLease.reference,
+        entityReference: operation.entityReference,
+        cleanup: "none",
+        status: "active",
+        reusedFromLeaseId: producerLease.id,
+        sourceRefs: unique([...producerLease.sourceRefs, ...operation.sourceRefs]),
+        createdAt: now,
+        updatedAt: now
+      });
+      changed = true;
+    }
+    if (changed) this.repository.persist();
+  }
+
+  private consumerLeaseFor(executableCase: ExecutableCase, producerLease: TestDataLease, requirementSuiteRunId?: string) {
+    if (producerLease.executableCaseId === executableCase.id) return undefined;
+    return this.repository.testDataLeases.find(
+      (lease) => lease.executableCaseId === executableCase.id &&
+        lease.reusedFromLeaseId === producerLease.id &&
+        lease.requirementSuiteRunId === requirementSuiteRunId
     );
+  }
+
+  private hasUnfinishedConsumers(producerLease: TestDataLease, requirementSuiteRunId?: string) {
+    if (!producerLease.entityReference) return false;
+    const producerCase = this.repository.executableCases.find(
+      (candidate) => candidate.id === producerLease.executableCaseId
+    );
+    if (!producerCase) return false;
+    const consumers = this.repository.executableCases.filter(
+      (candidate) => candidate.knowledgeProjectId === producerLease.knowledgeProjectId &&
+        candidate.systemId === producerLease.systemId &&
+        candidate.testIntentId !== producerCase.testIntentId &&
+        candidate.status !== "stale" &&
+        candidate.status !== "superseded" &&
+        (candidate.caseDependencyGraph?.edges ?? []).some((edge) =>
+          edge.fromTestIntentId === producerCase.testIntentId &&
+          edge.toTestIntentId === candidate.testIntentId &&
+          edge.entityReference === producerLease.entityReference
+        )
+    );
+    const selectedConsumerIds = requirementSuiteRunId
+      ? new Set(this.repository.requirementSuiteRuns.find((run) => run.id === requirementSuiteRunId)
+          ?.caseRuns.map((caseRun) => caseRun.executableCaseId) ?? [])
+      : undefined;
+    return consumers.some((consumer) => {
+      if (selectedConsumerIds && !selectedConsumerIds.has(consumer.id)) return false;
+      const consumption = this.consumerLeaseFor(consumer, producerLease, requirementSuiteRunId);
+      if (consumption) return consumption.status !== "released";
+      const caseRun = requirementSuiteRunId
+        ? this.repository.requirementSuiteRuns.find((run) => run.id === requirementSuiteRunId)
+            ?.caseRuns.find((item) => item.executableCaseId === consumer.id)
+        : undefined;
+      return !caseRun || !["passed", "skipped", "cancelled"].includes(caseRun.status);
+    });
   }
 
   private recordExternalData(
@@ -550,6 +942,7 @@ export class TestDataProviderService {
         );
       }
       this.testDataBrain.linkDependency({
+        knowledgeProjectId: task.knowledgeProjectId,
         systemId: task.systemId,
         fromReference: lease.reference,
         toReference: dependencyLease.reference,
@@ -583,31 +976,43 @@ export class TestDataProviderService {
     );
   }
 
-  private releaseReusableLeasesAfterExecution(executableCase: ExecutableCase) {
-    if (!this.hasTerminalEvidence(executableCase.id)) return;
+  private releaseReusableLeasesAfterExecution(executableCase: ExecutableCase, requirementSuiteRunId?: string) {
     const now = timestamp();
     let changed = false;
     for (const lease of this.repository.testDataLeases) {
       if (
         lease.executableCaseId === executableCase.id &&
+        lease.requirementSuiteRunId === requirementSuiteRunId &&
         lease.decision === "reuse" &&
-        lease.status === "active"
+        lease.status === "active" &&
+        this.hasTerminalEvidence(executableCase.id, requirementSuiteRunId, lease.createdAt)
       ) {
         lease.status = "released";
         lease.releasedAt = now;
         lease.updatedAt = now;
+        const terminalEvidence = this.terminalEvidence(executableCase.id, requirementSuiteRunId, lease.createdAt);
+        if (terminalEvidence) {
+          lease.sourceRefs = unique([...lease.sourceRefs, `execution-evidence:${terminalEvidence.id}`]);
+        }
         changed = true;
       }
     }
     if (changed) this.repository.persist();
   }
 
-  private hasTerminalEvidence(executableCaseId: string) {
-    return this.repository.executionEvidence.some(
-      (evidence) =>
-        evidence.executableCaseId === executableCaseId &&
-        evidence.status !== "running"
-    );
+  private hasTerminalEvidence(executableCaseId: string, requirementSuiteRunId?: string, after?: string) {
+    return Boolean(this.terminalEvidence(executableCaseId, requirementSuiteRunId, after));
+  }
+
+  private terminalEvidence(executableCaseId: string, requirementSuiteRunId?: string, after?: string) {
+    const afterTime = after ? Date.parse(after) : undefined;
+    return this.repository.executionEvidence.find((evidence) => {
+      if (evidence.executableCaseId !== executableCaseId || evidence.status === "running") return false;
+      if (requirementSuiteRunId && evidence.requirementSuiteRunId !== requirementSuiteRunId) return false;
+      if (afterTime === undefined) return true;
+      const terminalTime = Date.parse(evidence.completedAt ?? evidence.createdAt);
+      return Number.isFinite(terminalTime) && terminalTime >= afterTime;
+    });
   }
 
   private findField(executableCase: ExecutableCase, profileId: string) {
@@ -624,7 +1029,8 @@ export class TestDataProviderService {
 
   private completeTask(task: TestDataTask, sourceRefs: string[], now: string) {
     task.status = "submitted";
-    task.outputSourceRefs = sourceRefs;
+    task.operationPhase = "reconciled-applied";
+    task.outputSourceRefs = unique([...(task.reconciliationSourceRefs ?? []), ...sourceRefs]);
     task.submittedAt = now;
     task.updatedAt = now;
   }
@@ -712,6 +1118,27 @@ export class TestDataProviderService {
     executableCase.updatedAt = now;
     return gap;
   }
+
+  private getTask(taskId: string) {
+    const task = this.repository.testDataTasks.find((item) => item.id === taskId);
+    if (!task) throw new Error("Test data task not found");
+    return task;
+  }
+
+  private canDispatchAgain(task: TestDataTask) {
+    return task.operationPhase === "prepared" || task.operationPhase === "reconciled-not-applied";
+  }
+}
+
+function cleanupNoticeFor(lease: TestDataLease) {
+  const effect = lease.cleanup === "delete-created"
+    ? "remove the test-created record"
+    : "restore the test-created record to its approved prior state";
+  const message = `Advance notice: I am about to clean up test entity "${lease.reference}" using policy "${lease.cleanup}". Expected effect: ${effect}. Timing: immediately after this notice and before the suite continues. Only this leased test entity will be changed.`;
+  return {
+    message,
+    sha256: createHash("sha256").update(message).digest("hex")
+  };
 }
 
 function entityTypeFromReference(reference: string) {

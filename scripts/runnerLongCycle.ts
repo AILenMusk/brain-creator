@@ -35,14 +35,18 @@ export type RunnerCycleOptions = {
 };
 
 export type RunnerCycleReport = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   synthetic: true;
   status: "progressed" | "complete" | "no-due-runs" | "failed";
   owner: string;
   groupId: string;
   targetIterations: number;
   completedIterations: number;
-  strongEvidenceCount: number;
+  strongEvidenceCounts: {
+    realSystem: number;
+    synthetic: number;
+    unclassified: number;
+  };
   activeLeases: number;
   runner: ScheduledRunnerResult;
   generatedAt: string;
@@ -135,12 +139,26 @@ export async function runRunnerCycle(input: RunnerCycleOptions): Promise<RunnerC
     (run) => run.stabilityGroupId === RUNNER_GROUP
   );
   const completedIterations = runs.filter((run) => run.status === "completed").length;
-  const strongEvidenceCount = repository.executionEvidence.filter(
-    (evidence) => evidence.systemId === SYSTEM_ID && evidence.assuranceLevel === "strong"
-  ).length;
+  const runnerEvidenceIds = new Set(
+    runs.flatMap((run) => run.caseRuns.flatMap((caseRun) =>
+      caseRun.executionEvidenceId ? [caseRun.executionEvidenceId] : []
+    ))
+  );
+  const strongEvidenceCounts = repository.executionEvidence
+    .filter((evidence) => runnerEvidenceIds.has(evidence.id) &&
+      evidence.systemId === SYSTEM_ID && evidence.assuranceLevel === "strong")
+    .reduce(
+      (counts, evidence) => {
+        if (evidence.provenance === "real-system") counts.realSystem += 1;
+        else if (evidence.provenance === "synthetic") counts.synthetic += 1;
+        else counts.unclassified += 1;
+        return counts;
+      },
+      { realSystem: 0, synthetic: 0, unclassified: 0 }
+    );
   const activeLeases = runs.filter((run) => Boolean(run.stabilitySchedule?.leaseId)).length;
   const report: RunnerCycleReport = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     synthetic: true,
     status: completedIterations >= targetIterations
       ? "complete"
@@ -153,7 +171,7 @@ export async function runRunnerCycle(input: RunnerCycleOptions): Promise<RunnerC
     groupId: RUNNER_GROUP,
     targetIterations,
     completedIterations,
-    strongEvidenceCount,
+    strongEvidenceCounts,
     activeLeases,
     runner,
     generatedAt: new Date().toISOString()

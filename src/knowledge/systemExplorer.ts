@@ -20,6 +20,7 @@ import type {
 } from "../domain/types.js";
 import { id } from "../shared/id.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
+import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import {
   capturePopupSurfaceEvidence,
   collectBrowserSurfaceEvidence,
@@ -85,6 +86,7 @@ export type SystemExplorerResult = {
 };
 
 export type SystemExplorerInput = {
+  workDir?: string;
   explorationId: string;
   startUrl: string;
   allowedUrls: string[];
@@ -280,6 +282,7 @@ export class SystemExplorationCoordinator {
         followLinks: scope.mode === "full",
         scenario,
         artifactDir,
+        workDir,
         storageStatePath
       });
       assertResultWithinBudget(result, budget, allowedUrls);
@@ -548,8 +551,11 @@ export class PlaywrightSystemExplorer implements SystemExplorer {
       headless: true,
       ...(executablePath ? { executablePath } : {})
     });
+    const storageState = input.storageStatePath
+      ? await readEncryptedAuthStorageState(input.storageStatePath, input.workDir)
+      : undefined;
     const context = await browser.newContext(
-      input.storageStatePath ? { storageState: input.storageStatePath } : {}
+      storageState ? { storageState: storageState as never } : {}
     );
     const initialUrls = input.targetUrls?.length ? input.targetUrls : [input.startUrl];
     const queue: Array<{ url: string; depth: number }> = initialUrls.map((url) => ({

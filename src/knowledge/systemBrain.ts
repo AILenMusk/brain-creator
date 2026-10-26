@@ -13,7 +13,7 @@ export type SystemBrainPage = {
   name: string;
   route: string;
   version: number;
-  screenshotId: string;
+  screenshotId?: string;
   locatorCount: number;
   probeIssueCount: number;
   locators: LocatorPoint[];

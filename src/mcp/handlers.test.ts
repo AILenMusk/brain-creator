@@ -5,6 +5,7 @@ import AdmZip from "adm-zip";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parseCaseSource } from "../caseSource/parser.js";
+import { RunLedgerService } from "../knowledge/runLedger.js";
 import {
   createBrainCreatorMcpContext,
   handleBrainCreatorTool,
@@ -127,6 +128,77 @@ describe("handleBrainCreatorTool", () => {
       restoreEnv("BRAIN_CREATOR_WORKSPACE", previousWorkspace);
       restoreEnv("BRAIN_CREATOR_DATA_FILE", previousDataFile);
     }
+  });
+
+  it("preserves configured execution provenance through the primary system setup facade", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+
+    await handleBrainCreatorTool(context, "bc_configure", {
+      target: "system",
+      name: "Verified Test System",
+      environment: "test",
+      baseUrl: "https://business.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://business.example.test"],
+      executionProvenance: "real-system"
+    });
+
+    expect(context.service.listSystemProfiles()).toEqual([
+      expect.objectContaining({
+        name: "Verified Test System",
+        executionProvenance: "real-system"
+      })
+    ]);
+  });
+
+  it("requires confirmation and appends a system allowlist origin through bc_configure", async () => {
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(await tempDir(), "assets.json")
+    });
+    const system = context.service.createSystemProfile({
+      name: "Test5 GHR",
+      environment: "test",
+      baseUrl: "https://test5-ghr.eminxing.com/index",
+      defaultLocale: "zh-CN",
+      urlAllowlist: ["https://test5-ghr.eminxing.com"]
+    });
+
+    const unconfirmed = await handleBrainCreatorTool(context, "bc_configure", {
+      target: "system",
+      operation: "update",
+      systemId: system.id,
+      urlAllowlist: ["https://test-sso.eminxing.com"]
+    });
+    expect(unconfirmed.isError).toBe(true);
+    expect(unconfirmed.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("requires confirm=true")
+    });
+    expect(context.service.listSystemProfiles()[0].urlAllowlist).toEqual(["https://test5-ghr.eminxing.com"]);
+
+    const updated = await handleBrainCreatorTool(context, "bc_configure", {
+      target: "system",
+      operation: "update",
+      systemId: system.id,
+      urlAllowlist: ["https://test-sso.eminxing.com"],
+      confirm: true
+    });
+    expect(JSON.parse((updated.content[0] as { text: string }).text)).toMatchObject({
+      success: true,
+      data: { baseUrl: "https://test5-ghr.eminxing.com/index", urlAllowlist: [
+        "https://test5-ghr.eminxing.com",
+        "https://test-sso.eminxing.com"
+      ] }
+    });
+    expect(context.service.listSystemProfiles()[0]).toEqual(expect.objectContaining({
+      id: system.id,
+      baseUrl: "https://test5-ghr.eminxing.com/index",
+      urlAllowlist: ["https://test5-ghr.eminxing.com", "https://test-sso.eminxing.com"]
+    }));
   });
 
   it("accepts a system-specific Testdata provider for real CRUD and lifecycle operations", async () => {
@@ -2091,7 +2163,7 @@ describe("handleBrainCreatorTool", () => {
     }
   });
 
-  it("lists test cases, lists gaps, and resolves a gap through MCP", async () => {
+  it("lists test cases and gaps but blocks evidence-free legacy gap resolution", async () => {
     const context = createBrainCreatorMcpContext({ dataFilePath: join(await tempDir(), "assets.json") });
     const system = dataOf(
       await handleBrainCreatorTool(context, "bc_create_system", {
@@ -2126,7 +2198,7 @@ describe("handleBrainCreatorTool", () => {
         status: "open"
       })
     );
-    const resolved = dataOf(
+    const resolveError = errorOf(
       await handleBrainCreatorTool(context, "bc_resolve_gap", {
         projectId: system.id,
         gapId: failed.gap.id
@@ -2135,7 +2207,104 @@ describe("handleBrainCreatorTool", () => {
 
     expect(cases).toEqual([expect.objectContaining({ id: testCase.id })]);
     expect(gaps).toEqual([expect.objectContaining({ id: failed.gap.id, status: "open" })]);
-    expect(resolved.status).toBe("resolved");
+    expect(resolveError).toContain("bc_prepare action=resolve-gap");
+    expect(context.repository.gaps.find((item) => item.id === failed.gap.id)?.status).toBe("open");
+  });
+
+  it("resolves knowledge-project gaps only through scoped, evidence-backed facade confirmation", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+    const knowledgeProject = await context.knowledgeService.createProject({
+      name: "Requirement review",
+      key: "requirement-review",
+      defaultLocale: "zh-CN"
+    });
+    const otherProject = await context.knowledgeService.createProject({
+      name: "Other requirement review",
+      key: "other-requirement-review",
+      defaultLocale: "zh-CN"
+    });
+    const gap = {
+      id: "gap_requirement_review_1",
+      projectId: knowledgeProject.id,
+      sourceType: "requirement-conflict",
+      sourceId: "requirement-set-1",
+      reason: "Offer callback labels require clarification",
+      severity: "high" as const,
+      owner: "requirement-brain",
+      status: "open" as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    context.repository.gaps.push(gap);
+    const confirmationNote = "User confirmed that the source callback label maps to the target Offer status.";
+    const evidenceRefs = ["docs/quality/test5-ghr-candidate-review.md#L23"];
+
+    const preview = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: knowledgeProject.id,
+      gapId: gap.id,
+      confirm: false,
+      confirmationNote,
+      evidenceRefs
+    }));
+
+    expect(preview).toEqual(expect.objectContaining({
+      status: "preview",
+      scope: "knowledge-project",
+      evidenceRefs,
+      confirmationNote,
+      gap: expect.objectContaining({ id: gap.id, status: "open" })
+    }));
+    expect(context.repository.gaps.find((item) => item.id === gap.id)?.status).toBe("open");
+    expect(errorOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: otherProject.id,
+      gapId: gap.id,
+      confirm: true,
+      confirmationNote,
+      evidenceRefs
+    }))).toContain("Gap not found");
+    expect(errorOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: knowledgeProject.id,
+      gapId: gap.id,
+      systemId: "system-unrelated",
+      confirm: true,
+      confirmationNote,
+      evidenceRefs
+    }))).toContain("Specify either knowledgeProjectId or systemId/systemName");
+    expect(errorOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: knowledgeProject.id,
+      gapId: gap.id,
+      confirm: true,
+      confirmationNote,
+      evidenceRefs: []
+    }))).toContain("at least one evidence reference");
+
+    const resolved = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: knowledgeProject.id,
+      gapId: gap.id,
+      confirm: true,
+      confirmationNote,
+      evidenceRefs
+    }));
+
+    expect(resolved).toEqual(expect.objectContaining({
+      id: gap.id,
+      projectId: knowledgeProject.id,
+      status: "resolved",
+      lifecycle: [expect.objectContaining({
+        operation: "resolve",
+        note: confirmationNote,
+        evidenceRefs
+      })]
+    }));
   });
 
   it("records and resumes a user-interrupted manual auth flow through MCP", async () => {
@@ -2437,13 +2606,18 @@ describe("handleBrainCreatorTool", () => {
         urlAllowlist: ["https://hrms.example.test"]
       })
     );
-    await handleBrainCreatorTool(context, "bc_configure", {
+    const auth = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
       target: "auth",
       systemId: system.id,
       env: "test",
       role: "qa",
       loginMethod: "token",
       secrets: { token: "secret-token" }
+    }));
+    context.service.verifyAuthProfile(auth.id, {
+      targetUrl: system.baseUrl,
+      finalUrl: system.baseUrl,
+      title: "HRMS"
     });
 
     const status = dataOf(
@@ -2511,6 +2685,7 @@ describe("handleBrainCreatorTool", () => {
     expect(JSON.stringify(status)).not.toContain("secret-token");
   });
 
+
   it("returns a compact system picker when bc_status has no system context", async () => {
     const context = createBrainCreatorMcpContext({
       dataFilePath: join(await tempDir(), "assets.json")
@@ -2567,6 +2742,81 @@ describe("handleBrainCreatorTool", () => {
     expect(status.selectionMarkdown).not.toContain(firstHrms.id);
     expect(status.selectionMarkdown).not.toContain(secondHrms.id);
     expect(status.nextAction).toBe("select_system");
+  });
+
+  it("blocks readiness and recommends authentication when a system has no auth profile", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+    const system = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "system",
+      name: "Unconfigured Test System",
+      environment: "test",
+      baseUrl: "https://unconfigured.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://unconfigured.example.test"]
+    }));
+
+    const status = dataOf(await handleBrainCreatorTool(context, "bc_status", { systemId: system.id }));
+
+    expect(status.facadeNextAction).toBe("configure_auth");
+    expect(status.userSummary).toEqual(expect.objectContaining({
+      readiness: "blocked",
+      nextAction: "configure_auth",
+      nextCommand: `bc_configure target=auth systemId=${system.id}`
+    }));
+    expect(status.statusMarkdown).toContain("- Readiness: blocked");
+    expect(status.statusMarkdown).toContain("Configure and verify an authentication profile");
+    expect(status.quickCommands[0]).toEqual(expect.objectContaining({
+      command: `bc_configure target=auth systemId=${system.id}`
+    }));
+    expect(status.toolGuidance.nextFacadeTool).toBe("bc_configure");
+  });
+
+  it("blocks readiness and recommends recapturing a failed auth profile", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+    const system = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "system",
+      name: "Expired Auth Test System",
+      environment: "test",
+      baseUrl: "https://expired-auth.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://expired-auth.example.test"]
+    }));
+    const auth = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "auth",
+      systemId: system.id,
+      env: "test",
+      role: "qa",
+      loginMethod: "script",
+      secrets: {}
+    }));
+    context.service.failAuthProfileVerification(auth.id, "Stored browser authentication redirected to a login page.");
+
+    const status = dataOf(await handleBrainCreatorTool(context, "bc_status", { systemId: system.id }));
+    const captureCommand = `brain-creator auth capture --system ${system.id} --profile ${auth.id}`;
+
+    expect(status.facadeNextAction).toBe("reauthenticate_auth");
+    expect(status.userSummary).toEqual(expect.objectContaining({
+      readiness: "blocked",
+      nextAction: "reauthenticate_auth",
+      nextCommand: captureCommand,
+      nextStep: "Re-authenticate the existing profile in the isolated browser and verify it before planning or execution."
+    }));
+    expect(status.userSummary.counts).toEqual(expect.objectContaining({
+      authProfiles: 1,
+      verifiedAuthProfiles: 0
+    }));
+    expect(status.quickCommands[0]).toEqual(expect.objectContaining({ command: captureCommand }));
+    expect(status.statusMarkdown).toContain("- Readiness: blocked");
+    expect(status.statusMarkdown).toContain("- Verified auth profiles: 0");
+    expect(status.toolGuidance.nextFacadeTool).toBe("brain-creator auth capture");
   });
 
   it("routes context-free /bc status to the system picker", async () => {
@@ -3233,6 +3483,105 @@ describe("handleBrainCreatorTool", () => {
     }));
   });
 
+  it("reviews knowledge-project gaps without mixing system-scoped gaps", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+    const project = await context.knowledgeService.createProject({
+      name: "Gap review scope",
+      key: "gap-review-scope",
+      defaultLocale: "en-US"
+    });
+    const now = new Date().toISOString();
+    context.repository.gaps.push(
+      {
+        id: "gap-project-open",
+        projectId: project.id,
+        sourceType: "requirement-host-harness",
+        sourceId: "requirement-set-a",
+        reason: "Requirement model needs review",
+        severity: "high",
+        owner: "requirement-brain",
+        status: "open",
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "gap-project-resolved",
+        projectId: project.id,
+        sourceType: "requirement-host-harness",
+        sourceId: "requirement-set-b",
+        reason: "Resolved requirement model review",
+        severity: "medium",
+        owner: "requirement-brain",
+        status: "resolved",
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "gap-system-open",
+        projectId: "system-unrelated",
+        sourceType: "page-model",
+        sourceId: "page-unrelated",
+        reason: "No locator evidence found",
+        severity: "high",
+        owner: "qa",
+        status: "open",
+        createdAt: now,
+        updatedAt: now
+      }
+    );
+
+    const openReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "gap",
+      knowledgeProjectId: project.id,
+      status: "open"
+    }));
+    const allReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "gap",
+      knowledgeProjectId: project.id
+    }));
+
+    expect(openReview.scope).toBe("knowledge-project");
+    expect(openReview.items.map((gap: { id: string }) => gap.id)).toEqual(["gap-project-open"]);
+    expect(openReview.reviewSummary.metrics).toEqual(expect.objectContaining({ total: 1, open: 1 }));
+    expect(allReview.items.map((gap: { id: string }) => gap.id)).toEqual([
+      "gap-project-open",
+      "gap-project-resolved"
+    ]);
+
+    const preview = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: project.id,
+      gapId: "gap-project-open",
+      confirmationNote: "Archive attachment download was fixed and revalidated through the official pipeline.",
+      evidenceRefs: ["attachment-analysis:analysis-a"],
+      confirm: false
+    }));
+    expect(preview).toEqual(expect.objectContaining({
+      status: "preview",
+      scope: "knowledge-project",
+      requiresConfirmation: true
+    }));
+
+    const resolved = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "resolve-gap",
+      knowledgeProjectId: project.id,
+      gapId: "gap-project-open",
+      confirmationNote: "Archive attachment download was fixed and revalidated through the official pipeline.",
+      evidenceRefs: ["attachment-analysis:analysis-a"],
+      confirm: true
+    }));
+    expect(resolved).toEqual(expect.objectContaining({
+      id: "gap-project-open",
+      status: "resolved",
+      lifecycle: [expect.objectContaining({ evidenceRefs: ["attachment-analysis:analysis-a"] })]
+    }));
+    expect(context.service.listGaps({ projectId: project.id, status: "open" })).toEqual([]);
+  });
+
   it("previews natural-language entrypoints as facade calls without executing", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
@@ -3451,9 +3800,11 @@ describe("handleBrainCreatorTool", () => {
       expect.objectContaining({
         mode: "case-source-suite",
         status: "cancelled",
+        reportPath: expect.any(String),
         suite: expect.objectContaining({ id: suite.id, status: "cancelled" })
       })
     );
+    expect(await readFile(result.reportPath, "utf8")).toContain("Case source could not be read");
     expect(context.service.getCaseSuite(suite.id).status).toBe("cancelled");
     expect(context.service.listAgentTasks(system.id)).toEqual([
       expect.objectContaining({ id: "agentTask_legacy_suite", status: "cancelled" })
@@ -4963,7 +5314,7 @@ describe("handleBrainCreatorTool", () => {
         await handleBrainCreatorTool(context, "bc_status", { systemId: system.id })
       );
 
-      expect(status.userSummary.readiness).toBe("action-required");
+      expect(status.userSummary.readiness).toBe("blocked");
       expect(status.facadeNextAction).toBe("continue_case_source_suite");
       expect(status.userSummary.nextCommand).toBe("/bc continue");
       expect(status.userSummary.activeSuite).toEqual(expect.objectContaining({
@@ -5009,6 +5360,80 @@ describe("handleBrainCreatorTool", () => {
           })
         })
       ]);
+
+      const staleAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const persistedSuite = context.repository.caseSuites.find(
+        (suite) => suite.id === firstRun.suite.id
+      );
+      if (!persistedSuite) throw new Error("Expected the created document suite to exist");
+      persistedSuite.updatedAt = staleAt;
+      for (const entry of context.repository.runLedgerEntries) {
+        if (entry.caseSuiteId === firstRun.suite.id || entry.requirementSuiteRunId === firstRun.suite.id) {
+          entry.createdAt = staleAt;
+        }
+      }
+      for (const run of context.repository.caseSuiteRuns) {
+        if (run.suiteId === firstRun.suite.id) {
+          run.createdAt = staleAt;
+          if (run.completedAt) run.completedAt = staleAt;
+        }
+      }
+      for (const task of context.repository.agentTasks) {
+        if (task.suiteContext?.suiteId === firstRun.suite.id) {
+          task.createdAt = staleAt;
+          task.updatedAt = staleAt;
+        }
+      }
+      const staleStatus = dataOf(
+        await handleBrainCreatorTool(context, "bc_status", { systemId: system.id })
+      );
+      expect(staleStatus.facadeNextAction).toBe("review_stalled_task");
+      expect(staleStatus.nextAction).toBe("review_stalled_task");
+      expect(staleStatus.sessionResumeNextAction).toMatch(/^resolve_gaps/);
+      expect(staleStatus.userSummary.nextCommand).toBe(
+        `bc_review target=run-ledger systemId=${system.id} id=${firstRun.suite.id}`
+      );
+      expect(staleStatus.toolGuidance.nextFacadeTool).toBe("bc_review");
+      expect(staleStatus.userSummary.nextStep).toContain("do not replay pending writes");
+      expect(staleStatus.userSummary.activeExecutionTask).toEqual(expect.objectContaining({
+        possiblyStalled: true
+      }));
+      expect(staleStatus.quickCommands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "/bc review suite" })
+      ]));
+      expect(staleStatus.quickCommands).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "/bc continue" })
+      ]));
+
+      const runLedger = new RunLedgerService(context.repository);
+      runLedger.recordAction({
+        runType: "document-suite",
+        systemId: system.id,
+        caseSuiteId: firstRun.suite.id,
+        caseNo: "TC-001",
+        actionKey: "TC-001:submit",
+        phase: "sent",
+        actionSemantic: "Submit order",
+        entityReference: "order:order-001",
+        postcondition: "Order status is submitted"
+      });
+      const pendingWriteStatus = dataOf(
+        await handleBrainCreatorTool(context, "bc_status", { systemId: system.id })
+      );
+      expect(pendingWriteStatus.facadeNextAction).toBe("reconcile_pending_write");
+      expect(pendingWriteStatus.userSummary.nextCommand).toBe(
+        `bc_review target=run-ledger systemId=${system.id} id=${firstRun.suite.id}`
+      );
+      expect(pendingWriteStatus.userSummary.nextStep).toContain("query the original business postcondition");
+      expect(pendingWriteStatus.toolGuidance.nextFacadeTool).toBe("bc_review");
+      expect(pendingWriteStatus.quickCommands).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          command: `bc_review target=run-ledger systemId=${system.id} id=${firstRun.suite.id}`
+        })
+      ]));
+      expect(pendingWriteStatus.quickCommands).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "/bc continue" })
+      ]));
     } finally {
       restoreEnv("BRAIN_CREATOR_AGENT_PROVIDER", previousProvider);
     }
@@ -6245,7 +6670,9 @@ function dataOf(result: CallToolResult) {
   if (firstContent.type !== "text") {
     throw new Error("Expected text result");
   }
-  return JSON.parse(firstContent.text).data;
+  const envelope = JSON.parse(firstContent.text);
+  if (!envelope.success) throw new Error(envelope.errors?.join("; ") || "MCP request failed");
+  return envelope.data;
 }
 
 function errorOf(result: CallToolResult) {

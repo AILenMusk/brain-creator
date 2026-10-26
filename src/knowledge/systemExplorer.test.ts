@@ -10,6 +10,7 @@ import { BrainCreatorService } from "../domain/service.js";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import { KnowledgeService } from "./service.js";
 import { SystemBrainSnapshotService } from "../brain/systemSnapshot.js";
+import { writeEncryptedAuthStorageState } from "../shared/authStorageState.js";
 import {
   classifySafeInteractionCandidate,
   isAllowedExplorationUrl,
@@ -155,6 +156,43 @@ describe("System exploration coordinator", () => {
       );
     }
   }, 60_000);
+
+  it("uses encrypted auth state in memory for a read-only system exploration", async () => {
+    const server = createServer((request, response) => {
+      const authenticated = request.headers.cookie?.includes("session=state-secret") ?? false;
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(authenticated ? "<main>Authenticated demand list</main>" : "<main>Login required</main>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}/demands`;
+
+    try {
+      const fixture = await createLocalFixture(baseUrl);
+      const storageStatePath = join(fixture.workDir, ".brain-creator", "auth", "state.json");
+      await writeEncryptedAuthStorageState(storageStatePath, {
+        cookies: [{ name: "session", value: "state-secret", url: baseUrl }],
+        origins: []
+      }, fixture.workDir);
+      const result = await new PlaywrightSystemExplorer().explore({
+        explorationId: "exploration-auth-state",
+        workDir: fixture.workDir,
+        startUrl: baseUrl,
+        allowedUrls: [baseUrl],
+        budget: { maxPages: 1, maxDepth: 0, maxInteractionsPerPage: 0, maxDurationMs: 10_000 },
+        interactionMode: "off",
+        artifactDir: join(fixture.workDir, "evidence"),
+        storageStatePath
+      });
+
+      expect(result.pages[0]?.evidence.domText).toContain("Authenticated demand list");
+      expect(result.pages[0]?.evidence.domText).not.toContain("Login required");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+  }, 30_000);
 
   it("keeps aria-controls selectors consistent for safe interactions", async () => {
     const server = createServer((_request, response) => {

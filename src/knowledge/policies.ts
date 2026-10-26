@@ -262,7 +262,9 @@ function coverageDimensionsForClause(clause: RequirementClause): CoverageDimensi
 }
 
 export function evaluatePolicyOutput(analysis: RequirementAnalysis): RequirementPolicyEvaluation {
-  const allowedSourceRefs = new Set(analysis.clauses.map((clause) => clause.sourceRef));
+  const allowedSourceRefs = new Set(
+    analysis.clauses.flatMap((clause) => [clause.sourceRef, ...clause.sourceRefs])
+  );
   const unsupportedClaims = analysis.nodes.flatMap((node) => {
     if (node.sourceRefs.length === 0) return [`${node.type}:${node.title} has no source evidence`];
     const unknownRefs = node.sourceRefs.filter((sourceRef) => !allowedSourceRefs.has(sourceRef));

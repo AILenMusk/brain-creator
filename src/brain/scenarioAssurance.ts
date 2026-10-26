@@ -108,7 +108,8 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
   };
 
   for (const model of input.workflows) {
-    const related = relatedIntents(input.testIntents, model.sourceRefs, model.id);
+    const related = relatedIntents(input.testIntents, model.sourceRefs, model.id)
+      .filter((intent) => intent.scenarioType !== "negative");
     const outcomes = unique(
       related.flatMap((intent) => intent.expectedResults)
     );
@@ -132,7 +133,8 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
       if (!transition.condition && !transition.trigger) continue;
       const from = model.steps.find((step) => step.id === transition.from)?.label ?? transition.from;
       const to = model.steps.find((step) => step.id === transition.to)?.label ?? transition.to;
-      const transitionIntents = relatedIntents(input.testIntents, transition.sourceRefs, model.id);
+      const transitionIntents = relatedIntents(input.testIntents, transition.sourceRefs, model.id)
+        .filter((intent) => intent.scenarioType !== "negative");
       add(baseScenario({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
@@ -176,7 +178,8 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
     for (const transition of model.transitions) {
       const from = model.states.find((state) => state.id === transition.from)?.label ?? transition.from;
       const to = model.states.find((state) => state.id === transition.to)?.label ?? transition.to;
-      const related = relatedIntents(input.testIntents, transition.sourceRefs, model.id);
+      const related = relatedIntents(input.testIntents, transition.sourceRefs, model.id)
+        .filter((intent) => intent.scenarioType !== "negative");
       add(baseScenario({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
@@ -231,7 +234,8 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
       const ruleLabel = Object.entries(rule.conditionValues)
         .map(([condition, value]) => `${condition}=${value}`)
         .join(", ");
-      const related = relatedIntents(input.testIntents, rule.sourceRefs, undefined);
+      const related = relatedIntents(input.testIntents, rule.sourceRefs)
+        .filter((intent) => intent.scenarioType !== "negative");
       add(baseScenario({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
@@ -317,7 +321,7 @@ export function buildScenarioAssurance(input: ScenarioAssuranceInput): ScenarioA
   const testDataReadiness: ScenarioAssuranceContract["testDataReadiness"] = input.dataPlan
     ? input.dataPlan.readiness
     : input.scenario.testDataNeeds.length === 0
-      ? "ready"
+      ? "blocked"
       : missingData.length > 0
         ? "blocked"
         : input.scenario.testDataNeeds.every((profileId) => input.readyDataProfileIds?.includes(profileId))
@@ -326,6 +330,9 @@ export function buildScenarioAssurance(input: ScenarioAssuranceInput): ScenarioA
   if (missingData.length > 0) {
     reasons.push(`Missing test data profiles: ${missingData.join(", ")}.`);
     requiredActions.push("Create or bind the required test data before execution.");
+  } else if (input.scenario.testDataNeeds.length === 0) {
+    reasons.push("No scenario-scoped test data profiles are declared.");
+    requiredActions.push("Review and bind the scenario test data plan before execution.");
   } else if (input.dataPlan?.readiness === "blocked") {
     reasons.push(...input.dataPlan.reasons);
     requiredActions.push("Resolve the scenario data plan before execution.");
@@ -336,12 +343,13 @@ export function buildScenarioAssurance(input: ScenarioAssuranceInput): ScenarioA
   const requirementRefs = requirementRefsFor(input.scenario.sourceRefs);
   const oracleStrength: ScenarioAssuranceContract["oracleStrength"] = input.scenario.expectedBusinessOutcomes.length === 0
     ? "none"
-    : requirementRefs.length === 0
-      ? "limited"
-      : "strong";
-  if (oracleStrength !== "strong") {
-    reasons.push("Expected business outcomes do not have complete requirement evidence.");
-    requiredActions.push("Attach a requirement clause or confirmed model source to the expected outcome.");
+    : "limited";
+  if (oracleStrength === "limited") {
+    reasons.push("Free-text business outcomes are not a structured business oracle.");
+    requiredActions.push("Attach an explicit source-backed comparison, applicability, and entity contract before claiming strong assurance.");
+  } else {
+    reasons.push("No business outcome is defined for this scenario.");
+    requiredActions.push("Define a source-backed expected business outcome.");
   }
 
   const unsupportedInferences = [
@@ -514,8 +522,8 @@ function baseScenario(input: Omit<ScenarioDraft, "id" | "status" | "testDataNeed
 
 function relatedIntents(intents: TestIntent[], refs: string[], modelId?: string) {
   return intents.filter((intent) =>
-    (modelId ? intent.processModelRefs?.includes(modelId) : true) ||
-    intent.requirementRefs.some((ref) => refs.includes(ref))
+    intent.requirementRefs.some((ref) => refs.includes(ref)) &&
+    (!modelId || !intent.processModelRefs?.length || intent.processModelRefs.includes(modelId))
   );
 }
 

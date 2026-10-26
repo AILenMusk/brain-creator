@@ -3,6 +3,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import AdmZip from "adm-zip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import { KnowledgeService } from "./service.js";
@@ -72,6 +73,88 @@ describe("requirement attachment pipeline", () => {
     expect(prepared.gaps).toEqual([]);
   });
 
+  it("extracts hash-verified XLSX attachments into deterministic draft tables", async () => {
+    const root = await tempDir();
+    const attachmentPath = join(root, "demand-fields.xlsx");
+    await writeFile(attachmentPath, createXlsxFixture());
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, join(root, "knowledge"), root);
+    const project = await service.createProject({ name: "GHR requirements", key: "ghr-xlsx", defaultLocale: "zh-CN" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: {
+        title: "Demand fields",
+        content: "Demand form rules are attached.",
+        blocks: [{ type: "paragraph", text: "Demand form rules are attached." }],
+        attachments: [{ name: "demand-fields.xlsx", fileToken: "lark-sheet-token", contentHash: "source-hash" }],
+        source: "https://example.larkenterprise.com/wiki/demand",
+        sourceType: "feishu",
+        contentHash: "source-hash",
+        warnings: []
+      }
+    });
+
+    const prepared = await service.prepareRequirementAttachments({
+      sourceId: ingested.source.id,
+      hostDownloadedAttachments: [{
+        attachmentId: ingested.source.attachments[0].id!,
+        localPath: "demand-fields.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }]
+    });
+
+    expect(prepared.gaps).toEqual([]);
+    expect(prepared.recognitionRequests).toEqual([]);
+    expect(prepared.analyses).toEqual([
+      expect.objectContaining({
+        kind: "table",
+        provider: "adapter",
+        status: "draft",
+        markdown: expect.stringContaining("实习需求同样必填")
+      })
+    ]);
+    expect(ingested.source.attachments[0]).toMatchObject({
+      status: "structured",
+      contentHash: expect.stringMatching(/^[0-9a-f]{64}$/)
+    });
+    expect(repository.attachmentAnalyses[0].markdown).toContain("需求人数");
+  });
+
+  it("creates a recognition Gap instead of accepting invalid XLSX bytes", async () => {
+    const root = await tempDir();
+    const attachmentPath = join(root, "invalid.xlsx");
+    await writeFile(attachmentPath, Buffer.from("not an xlsx workbook"));
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, join(root, "knowledge"), root);
+    const project = await service.createProject({ name: "GHR requirements", key: "ghr-invalid-xlsx", defaultLocale: "zh-CN" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: {
+        title: "Demand fields",
+        content: "Demand form rules are attached.",
+        blocks: [{ type: "paragraph", text: "Demand form rules are attached." }],
+        attachments: [{ name: "invalid.xlsx", fileToken: "lark-sheet-token" }],
+        source: "https://example.larkenterprise.com/wiki/invalid-demand",
+        sourceType: "feishu",
+        contentHash: "invalid-source-hash",
+        warnings: []
+      }
+    });
+
+    const prepared = await service.prepareRequirementAttachments({
+      sourceId: ingested.source.id,
+      hostDownloadedAttachments: [{
+        attachmentId: ingested.source.attachments[0].id!,
+        localPath: "invalid.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }]
+    });
+
+    expect(prepared.analyses).toEqual([]);
+    expect(prepared.gaps).toEqual([expect.objectContaining({ sourceType: "requirement-attachment", status: "open" })]);
+    expect(ingested.source.attachments[0].status).toBe("failed");
+  });
+
   it("accepts a host-downloaded attachment through the controlled workspace boundary", async () => {
     const root = await tempDir();
     const downloadedPath = join(root, "feishu-image.png");
@@ -109,6 +192,42 @@ describe("requirement attachment pipeline", () => {
     ]);
     expect(attachment.status).toBe("downloaded");
     expect(attachment.contentHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("uses a workspace-contained archive attachment before requiring the Feishu connector", async () => {
+    const root = await tempDir();
+    const archivePath = join(root, "source-export.zip");
+    const archive = new AdmZip();
+    archive.addFile("word/media/flow.png", Buffer.from("archive-image"));
+    archive.writeZip(archivePath);
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, join(root, "knowledge"), root);
+    const project = await service.createProject({ name: "Feishu archive", key: "feishu-archive", defaultLocale: "zh-CN" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: {
+        title: "Feishu archive flow",
+        content: "A request requires approval.",
+        blocks: [{ type: "paragraph", text: "A request requires approval." }],
+        attachments: [{
+          name: "flow.png",
+          fileToken: "file-token",
+          containerPath: "source-export.zip",
+          containerEntry: "word/media/flow.png",
+          mimeType: "image/png"
+        }],
+        source: "https://example.larkenterprise.com/wiki/archive",
+        sourceType: "feishu",
+        contentHash: "feishu-archive",
+        warnings: []
+      }
+    });
+
+    const prepared = await service.prepareRequirementAttachments({ sourceId: ingested.source.id });
+
+    expect(prepared.gaps).toEqual([]);
+    expect(prepared.recognitionRequests).toHaveLength(1);
+    expect(prepared.recognitionRequests[0].localPath).toContain("knowledge");
   });
 
   it("rejects a host attachment outside the Brain Creator workspace", async () => {
@@ -242,11 +361,42 @@ describe("requirement attachment pipeline", () => {
     });
 
     expect(submitted.status).toBe("draft");
+    const revised = service.submitRequirementAttachmentAnalysis({
+      sourceId,
+      attachmentId: request.attachmentId,
+      provider: "host-agent",
+      result: {
+        kind: "flowchart",
+        markdown: "Start -> Submit -> Confirm",
+        nodes: [
+          { id: "start", type: "step", label: "Start" },
+          { id: "submit", type: "step", label: "Submit" }
+        ],
+        edges: [{ from: "start", to: "submit" }],
+        confidence: 0.93
+      }
+    });
+
+    expect(revised.id).toBe(submitted.id);
+    expect(revised.status).toBe("draft");
+    expect(revised.markdown).toBe("Start -> Submit -> Confirm");
     const confirmed = service.confirmRequirementAttachmentAnalysis({
-      analysisId: submitted.id,
+      analysisId: revised.id,
       confirmedBy: "qa"
     });
     expect(confirmed.status).toBe("confirmed");
+    expect(() => service.submitRequirementAttachmentAnalysis({
+      sourceId,
+      attachmentId: request.attachmentId,
+      provider: "host-agent",
+      result: {
+        kind: "flowchart",
+        markdown: "Changed after confirmation",
+        nodes: [],
+        edges: [],
+        confidence: 0.93
+      }
+    })).toThrow("Only the linked draft attachment analysis can be revised");
   });
 
   it("blocks approval before critical process evidence is confirmed without creating a premature Gap", async () => {
@@ -374,4 +524,25 @@ async function tempDir() {
   const dir = await mkdtemp(join(tmpdir(), "brain-attachment-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function createXlsxFixture() {
+  const zip = new AdmZip();
+  zip.addFile("xl/workbook.xml", Buffer.from(
+    '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="发起" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "utf8"
+  ));
+  zip.addFile("xl/_rels/workbook.xml.rels", Buffer.from(
+    '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>',
+    "utf8"
+  ));
+  zip.addFile("xl/sharedStrings.xml", Buffer.from(
+    '<sst><si><t>字段</t></si><si><t>必填</t></si><si><t>校验规则</t></si><si><t>职位</t></si><si><t>是</t></si><si><t></t><r><t>实习需求</t></r><r><t>同样必填</t></r></si><si><t>需求人数</t></si><si><t>正整数</t></si></sst>',
+    "utf8"
+  ));
+  zip.addFile("xl/worksheets/sheet1.xml", Buffer.from(
+    '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row><row r="2"><c r="A2" t="s"><v>3</v></c><c r="B2" t="s"><v>4</v></c><c r="C2" t="s"><v>5</v></c></row><row r="3"><c r="A3" t="s"><v>6</v></c><c r="B3" t="s"><v>4</v></c><c r="C3" t="s"><v>7</v></c></row></sheetData></worksheet>',
+    "utf8"
+  ));
+  return zip.toBuffer();
 }

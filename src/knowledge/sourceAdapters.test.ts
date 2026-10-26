@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import AdmZip from "adm-zip";
@@ -61,6 +61,36 @@ describe("resolveRequirementSource", () => {
           status: "discovered"
         })
       ]);
+    }
+  });
+
+  it("decodes percent-encoded local Markdown image paths before hashing attachments", async () => {
+    const root = await tempDir();
+    const attachmentDirectory = join(root, "附件目录");
+    await mkdir(attachmentDirectory);
+    const source = join(root, "requirement.md");
+    const imagePath = join(attachmentDirectory, "approval state.png");
+    await writeFile(source, "# Approval Flow\n\n![Approval state](./附件目录/approval%20state.png)", "utf8");
+    await writeFile(imagePath, Buffer.from("approval-image"));
+
+    const result = await resolveRequirementSource({ source });
+
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.contentPackage.attachments).toEqual([
+        expect.objectContaining({
+          name: "Approval state",
+          url: imagePath,
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          status: "discovered"
+        })
+      ]);
+      expect(result.contentPackage.blocks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "image",
+          image: expect.objectContaining({ reference: "./附件目录/approval%20state.png" })
+        })
+      ]));
     }
   });
 
