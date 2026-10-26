@@ -2095,3 +2095,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - The register-only commit `759af76b5787ec15957b9e33b00b547ccf5982fe` passed CI run 481 on Node 20 and Node 22; both jobs completed successfully. Documentation run 191 also completed successfully.
 - This was documentation-only. It does not change the **0/6** formal acceptance count or the unmeasured Test5 metrics.
+
+## 2026-10-26 Acceptance Register CI Recheck
+
+- The acceptance-register commit `1ecb25d6b62559252c5b7c4cf406ac1c059f7675` passed CI run 482 on Node 20 and Node 22; both matrix jobs completed successfully. Documentation run 192 passed for the same head.
+- This was also documentation-only. It confirms the acceptance records build and package checks remain green; it does not add implementation changes or real Trial evidence. Formal acceptance remains **0/6**.
