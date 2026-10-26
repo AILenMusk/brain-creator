@@ -242,6 +242,7 @@ export function compileIntentSemanticSteps(input: {
       const steps = path.transitions.flatMap((transition) => {
         const from = stateLabels.get(transition.from) ?? transition.from;
         const to = stateLabels.get(transition.to) ?? transition.to;
+        const transitionRef = transitionSourceRef({ source: "state-machine", model: path.model, transition });
         const actor = transition.actor ? ` as ${transition.actor}` : "";
         const conditions = [
           ...(transition.preconditions ?? []),
@@ -254,7 +255,7 @@ export function compileIntentSemanticSteps(input: {
           businessContext: transitionBusinessContext(transition.businessObject, transition.sideEffects),
           targetSemantic: transition.trigger || `transition to ${to}`,
           expected: `State becomes ${to}`,
-          sourceRefs: unique([...pathRefs, ...transition.sourceRefs, transitionSourceRef({ source: "state-machine", model: path.model, transition })])
+          sourceRefs: unique([...sourceRefs, `state-machine:${path.model.id}`, ...transition.sourceRefs, transitionRef])
         });
       }).map((step, index) => ({ ...step, id: id("step"), order: index + 1 }));
       return {
@@ -324,6 +325,7 @@ export function compileIntentSemanticSteps(input: {
         const to = stepLabels.get(transition.to) ?? transition.to;
         const fromStep = path.model.steps.find((step) => step.id === transition.from);
         const toStep = path.model.steps.find((step) => step.id === transition.to);
+        const transitionRef = transitionSourceRef({ source: "workflow", model: path.model, transition });
         const actor = transition.actor ?? fromStep?.actor;
         const conditions = [
           ...(transition.preconditions ?? []),
@@ -341,11 +343,12 @@ export function compileIntentSemanticSteps(input: {
           targetSemantic: transition.trigger || transition.condition || to,
           expected: `Workflow reaches ${to}`,
           sourceRefs: unique([
-            ...pathRefs,
+            ...sourceRefs,
+            `workflow:${path.model.id}`,
             ...(fromStep?.sourceRefs ?? []),
             ...transition.sourceRefs,
             ...(toStep?.sourceRefs ?? []),
-            transitionSourceRef({ source: "workflow", model: path.model, transition })
+            transitionRef
           ])
         });
       }).map((step, index) => ({ ...step, id: id("step"), order: index + 1 }));

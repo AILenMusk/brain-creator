@@ -205,6 +205,46 @@ describe("KnowledgeService", () => {
     expect(repository.gaps).toEqual([]);
   });
 
+  it("blocks requirement baseline approval while source extraction warnings remain", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({ name: "Wiki", key: "wiki-source-closure", defaultLocale: "en-US" });
+    const incompletePackage = requirementPackage("wiki-source-v1", "Employees submit hiring requests.");
+    incompletePackage.source = "https://tenant.larkenterprise.com/wiki/hiring";
+    incompletePackage.sourceType = "feishu";
+    incompletePackage.warnings = ["Feishu sheet block fields-1 requires separate extraction"];
+    const incomplete = await service.ingestRequirement({ projectId: project.id, contentPackage: incompletePackage });
+
+    await service.generateTestDesign(incomplete.requirementSet.id);
+
+    expect(() => service.approveRequirementSet(incomplete.requirementSet.id)).toThrow(
+      "Requirement source has unresolved extraction warnings"
+    );
+
+    const completePackage: RequirementContentPackage = {
+      ...incompletePackage,
+      contentHash: "wiki-source-v2-complete",
+      blocks: [
+        {
+          type: "paragraph",
+          text: "Employees submit hiring requests.",
+          sourceRef: "https://tenant.larkenterprise.com/wiki/hiring#revision:12"
+        },
+        {
+          type: "table",
+          text: "",
+          table: { headers: ["Field", "Required"], rows: [["Position", "Yes"]] },
+          sourceRef: "https://tenant.larkenterprise.com/wiki/hiring#sheet:fields-1:revision:4"
+        }
+      ],
+      warnings: []
+    };
+    const complete = await service.ingestRequirement({ projectId: project.id, contentPackage: completePackage });
+    await service.generateTestDesign(complete.requirementSet.id);
+
+    expect(service.approveRequirementSet(complete.requirementSet.id).status).toBe("approved");
+  });
+
   it("does not trust host-provided attachment lifecycle state", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const service = new KnowledgeService(repository, await tempDir());

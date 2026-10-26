@@ -1,0 +1,223 @@
+{
+  "manifestVersion": 1,
+  "capturedOn": "2026-10-26",
+  "captureTool": {
+    "name": "lark-cli",
+    "version": "1.0.98",
+    "identity": "user"
+  },
+  "authority": {
+    "formalReleaseStatus": "user-confirmed",
+    "mainDocumentRevision": 2045,
+    "trialBaselineApproved": false,
+    "trialCreated": false
+  },
+  "scope": {
+    "target": "Test5 Group / GHR",
+    "localGhrPathsIncluded": true,
+    "beisenCrossSystemRequirementIncluded": true,
+    "beisenExecution": "blocked until a second real system is provided and separately authorized; include selected cases in the denominator when the scenario roster is frozen",
+    "oehrExternalSideEffects": "excluded unless separately scoped and authorized",
+    "cleanup": "advance notice required before any cleanup"
+  },
+  "sourceDocuments": [
+    {
+      "title": "HRone-【招聘管理】招聘需求及offer流程适配",
+      "wikiNodeToken": "LcplwQLQ4imQyVkNvxZcze9UnCc",
+      "documentId": "CUfpd8f0WocXeAxofKvcXjWpnEc",
+      "revision": 2045,
+      "xmlContentSha256": "15e169668a4192560cfa7dbc3081acb9a0b5c9057f1f121b72bf5a3653d5d93f",
+      "snapshotFile": "main-document-rev-2045.json",
+      "snapshotFileSha256": "ca8486e14497c00aa3d6d83bb1eae408176ba1791092eb6125185267811b8b18"
+    },
+    {
+      "title": "流程梳理",
+      "wikiNodeToken": "RC8Nw6hGribhOrkYg80c3MDjnKc",
+      "documentId": "MzeNd6nZxoxI9Gxzp9pcIahjnoh",
+      "revision": 5,
+      "xmlContentSha256": "5dc2147bb95956a206fbaaa83aeb61dd0943726dea0c02b143999466e483e9d0",
+      "snapshotFile": "flow-child-rev-5.json",
+      "snapshotFileSha256": "017d8138e1b7f8f6aa20be654088eba685adaad3b38d1ff36648ba85a1c9e80d",
+      "embeddedWhiteboardToken": "IE8xwCAqxh43qpbphAacgn2JnKF"
+    }
+  ],
+  "workbooks": [
+    {
+      "title": "招聘需求字段",
+      "wikiNodeToken": "G80BwyRnoiqOlukrRipcpTdQnUb",
+      "spreadsheetToken": "Htels4Pi9hTHKOtMIHFc4yIPn5c",
+      "revision": 154,
+      "modifiedAt": "2026-06-15T05:52:49Z",
+      "snapshotFile": "bc-trust-demand-20261026.xlsx",
+      "snapshotSizeBytes": 17612,
+      "snapshotSha256": "d20e1db27b08bfad7eac9683fa69dfa27217c507c27cc6f351f0ccc717907cc2",
+      "sheets": [
+        {
+          "title": "发起",
+          "sheetId": "16fc74",
+          "range": "A1:U198",
+          "hasMore": false,
+          "dataSha256": "7bdbed4e8ec6e76492686731f4cabd29b885166b57edaad646acb36a988fbff2",
+          "snapshotFile": "bc-trust-demand_fields-20261026.json",
+          "snapshotSha256": "94c442439fe51a4709385abf0710a18d377374bf81595291a34e1b88b4ee16b9"
+        }
+      ]
+    },
+    {
+      "title": "正式员工offer字段",
+      "wikiNodeToken": "U6CBwk6O0iYoFQkLOamcLLMWnMh",
+      "spreadsheetToken": "QyaQsCTbfhdQKitVRGrczp1qnue",
+      "revision": 607,
+      "modifiedAt": "2026-08-12T09:43:52Z",
+      "snapshotFile": "bc-trust-offer_regular-20261026.xlsx",
+      "snapshotSizeBytes": 23106,
+      "snapshotSha256": "df225bb66608c56e5ed55c4ed50741796e6feb09cfa8047dfa966ff546f1d6b6",
+      "sheets": [
+        {
+          "title": "申请",
+          "sheetId": "1c9ca4",
+          "range": "A1:V215",
+          "hasMore": false,
+          "dataSha256": "956ffedd5bb6a69b1a88da820883cbde11fb350d42a24567d30a67f89c456a4b",
+          "snapshotFile": "bc-trust-offer_regular-20261026.json",
+          "snapshotSha256": "bc1952256bed57a5222f50e49e4b46e14cca4cbfe9c1ae94ad9516ba0acce82e"
+        }
+      ]
+    },
+    {
+      "title": "实习生offer字段",
+      "wikiNodeToken": "C3nEwmHzLiGvKVkkaYBcHNgknFh",
+      "spreadsheetToken": "NUdmsbSnIhTNzDtfmGtcUSt2nGh",
+      "revision": 175,
+      "modifiedAt": "2026-06-29T02:31:42Z",
+      "snapshotFile": "bc-trust-offer_intern-20261026.xlsx",
+      "snapshotSizeBytes": 29084,
+      "snapshotSha256": "a9dd9870cfa9d690be9b807b0197b35f11bd669252c44b5b1aaddbf4325d2edc",
+      "sheets": [
+        {
+          "title": "申请",
+          "sheetId": "1c9ca4",
+          "range": "A1:V200",
+          "hasMore": false,
+          "dataSha256": "6b765734fc4a191d1d6466d9f09c3680caac5bcea52e41c3108e9c58212d3f5b",
+          "snapshotFile": "bc-trust-offer_intern-20261026.json",
+          "snapshotSha256": "0f893f1d031df6468a75878e98301ad7b16fc2dfa06f1f942328779d9ef23165"
+        }
+      ]
+    },
+    {
+      "title": "字典",
+      "wikiNodeToken": "H3zzw2BTBirx76kSYTPcDNy5nih",
+      "spreadsheetToken": "CelOsGMOhhLolKteIJJcteTlnDz",
+      "revision": 62,
+      "modifiedAt": "2026-06-09T06:13:43Z",
+      "snapshotFile": "bc-trust-dictionary-20261026.xlsx",
+      "snapshotSizeBytes": 21841,
+      "snapshotSha256": "15c500d6bb02ca195ee224c6b0f2836c2c06c86046b44c24e9f75856b9fa1a0c",
+      "sheets": [
+        {
+          "title": "列表",
+          "sheetId": "c69y2R",
+          "range": "A1:T200",
+          "hasMore": false,
+          "dataSha256": "3fa909a7d9ede4a128f625eb8e8a1c87691dc70f25ce3bd8fe89153b7c527f7a",
+          "snapshotFile": "bc-trust-dict_list-20261026.json",
+          "snapshotSha256": "c3729acea5693b5c98702cc0f22cbce1b617145f9727870d1ef2fb43aea60685"
+        },
+        {
+          "title": "毕业年限",
+          "sheetId": "9eae26",
+          "range": "A1:T200",
+          "hasMore": false,
+          "dataSha256": "27717bb7b510350086a33366112609b4484f72c3e95912c9820429ac8c26a153",
+          "snapshotFile": "bc-trust-dict_grad_years-20261026.json",
+          "snapshotSha256": "e5848899c5e762d4fc97b5e544b2be2cab32cadcbe1d7a2c49f9e7dff5bb53c0"
+        },
+        {
+          "title": "生源性质",
+          "sheetId": "66f6kY",
+          "range": "A1:T200",
+          "hasMore": false,
+          "dataSha256": "584b595980c35d909f85090339e0ce96ac1a9d485531295f9613de34af25e570",
+          "snapshotFile": "bc-trust-dict_origin-20261026.json",
+          "snapshotSha256": "bb2a1fb163ffa3ecbbda313a83a1ca177ce2145c8698dc7d19371d0327f824cd"
+        },
+        {
+          "title": "院校等级",
+          "sheetId": "AsxcRE",
+          "range": "A1:T200",
+          "hasMore": false,
+          "dataSha256": "5c4a5ce8824e9022063a78a49475bffb32cfd00188d0a16cb96fdfc1c67521cb",
+          "snapshotFile": "bc-trust-dict_school-20261026.json",
+          "snapshotSha256": "36952fe40165f584268c6aa4244e4300ae1fa10188d0a16cb96fdfc1c67521cb"
+        },
+        {
+          "title": "语言等级",
+          "sheetId": "FU53Y3",
+          "range": "A1:T200",
+          "hasMore": false,
+          "dataSha256": "68501d612402fe95612a8041db0aa170b744509d69d6e979c6beabf13977e899",
+          "snapshotFile": "bc-trust-dict_language-20261026.json",
+          "snapshotSha256": "167e51a893e94f9b2255f9ee3a6ad5b42effb0736d557d2ce3eade92656c0301"
+        }
+      ]
+    }
+  ],
+  "embeddedWhiteboards": [
+    {
+      "name": "招聘需求状态",
+      "token": "GLQowgsk1hpnxkbCqWfcqf8ynQe",
+      "nodeCount": 28,
+      "rawNodesCanonicalSha256": "5b0b35cd70329ef9813f5d2fb2c5cb5f9170481b6818a5e19132f37f01b9a273",
+      "rawSnapshotFile": "demand-state-raw.json",
+      "rawSnapshotSha256": "87315d188225e84907ec89145d87e5510c14878f6669f1af5ff59c255c172bdb",
+      "previewFile": "bc-trust-whiteboard-1-20261026.jpg",
+      "previewSizeBytes": 107909,
+      "previewSha256": "a067ec7e231db44a333325c2fcc8a628380818550d3c41c85270989690d2fa88"
+    },
+    {
+      "name": "Offer状态",
+      "token": "Rhhpwtm22hNqS0bEQO3c6wQUnKf",
+      "nodeCount": 34,
+      "rawNodesCanonicalSha256": "76a2c47916ab5b800018bff349bd0da0e896576d139594d96dbf33a4837221f3",
+      "rawSnapshotFile": "offer-state-raw.json",
+      "rawSnapshotSha256": "cde66cc6a37976690421548c0355e433b0913655394fee7942d4fdc542cf5a79",
+      "previewFile": "bc-trust-whiteboard-2-20261026.jpg",
+      "previewSizeBytes": 99254,
+      "previewSha256": "432e525cbc5fb1ad58174a6d190d9f590103fc8c14248abd0a2d654efc45ee52"
+    },
+    {
+      "name": "流程梳理业务提供与配置",
+      "token": "IE8xwCAqxh43qpbphAacgn2JnKF",
+      "nodeCount": 59,
+      "rawNodesCanonicalSha256": "c74caaf5285ea96e68bdcb08b43eacc8385aa9e62f90f71c258d76862cdd74a2",
+      "rawSnapshotFile": "approval-route-raw.json",
+      "rawSnapshotSha256": "bb2f7219797c037497d4863420adbdefa1d78f514fead4d9b46d44b2c4aa68a6",
+      "previewFile": "bc-trust-flow-child-20261026.jpg",
+      "previewSizeBytes": 215023,
+      "previewSha256": "cd006a9050fd922caac055c8a856979aa0254aadb3a8facf1867e8073be72470"
+    }
+  ],
+  "embeddedMedia": [
+    { "name": "demand-status-table", "token": "TEX2bxy91onwmyxBus4c5fIjnLd", "file": "bc-trust-demand_status-20261026.png", "sizeBytes": 131911, "sha256": "c93ca76037d7468660173de15b37e812f336f838d71f996b98b80fe8e79f708d" },
+    { "name": "offer-approval-status-table", "token": "GQhybfSqloApEIxpatlcm9bFnRh", "file": "bc-trust-offer_approval_status-20261026.png", "sizeBytes": 131911, "sha256": "c93ca76037d7468660173de15b37e812f336f838d71f996b98b80fe8e79f708d" },
+    { "name": "demand-close-rule", "token": "LE5abwQYeonFE0xuBm5cr3GvnGI", "file": "bc-trust-demand_close_rule-20261026.png", "sizeBytes": 208302, "sha256": "fe87a8bad560ff80d154f37474535a97884bb127b231623b242cf3220ac98c52" },
+    { "name": "salary-project-mapping", "token": "FQQPbPzZnokNv3xPk9ec5bAHnYe", "file": "bc-trust-salary_project_mapping-20261026.png", "sizeBytes": 48424, "sha256": "df0498569a68848fc50d809cfa3f22880abb5dd6a9825a9403cdbaca54f7440d" },
+    { "name": "salary-fields", "token": "RUXebiJGPoemVZxUe9Mcm44Nn4b", "file": "bc-trust-salary_fields-20261026.png", "sizeBytes": 49657, "sha256": "1076119b17d79f28ef7cf0f8c2e4beff854967128aab2f42e209747c9367188c" },
+    { "name": "approval-route-inline", "token": "IijKbY9CposHWyxmi66ct06pn1c", "file": "bc-trust-approval_route-20261026.png", "sizeBytes": 199146, "sha256": "25d0fbcae9ff60f8377f0b91e27b86f43ee52640a642db3030f6b4de43364794" },
+    { "name": "salary-project-config", "token": "UE0wb9RFloLj0Bxz14ucFCzWnTe", "file": "bc-trust-salary_project_config-20261026.png", "sizeBytes": 60734, "sha256": "7d3259583e9d6a91405309c461928a42a33565ab17354995fd89995986c4a711" }
+  ],
+  "reviewGates": {
+    "scenarioDenominatorFrozen": false,
+    "oracleBaselineApproved": false,
+    "currentTest5AuthVerified": false,
+    "targetSystemBindingsAndIndependentPostconditionVerifierReady": false,
+    "testDataProviderReady": false,
+    "notes": [
+      "The parent document's inline approval-route image and the child flow whiteboard expose different route representations; role, rank, department-level, organization-root, and diagram-version applicability must be reconciled before freezing the selected scenario list.",
+      "The captured source set is complete as a revision-bound input package; it does not approve generated Oracles, system bindings, execution roles, or a Trial.",
+      "A fresh Test5 authentication check previously redirected to SSO; re-verify before any exploration or execution."
+    ]
+  },
+  "localSnapshotDirectory": "%LOCALAPPDATA%/BrainCreator/trial-snapshots/2026-10-26-test5-ghr-formal"
+}

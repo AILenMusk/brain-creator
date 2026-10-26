@@ -60,6 +60,7 @@ export class FeishuOpenApiAdapter {
     const accessToken = await this.tenantAccessToken();
     let documentId = target.token;
     let wikiTitle: string | undefined;
+    let wikiHierarchyWarning: string | undefined;
     if (target.type === "wiki") {
       const result = await this.requestJson(
         `${this.baseUrl}/wiki/v2/spaces/get_node?token=${encodeURIComponent(target.token)}`,
@@ -73,6 +74,11 @@ export class FeishuOpenApiAdapter {
       documentId = stringValue(node.obj_token);
       wikiTitle = stringValue(node.title);
       if (!documentId) throw new Error("Feishu Wiki response is missing obj_token");
+      if (node.has_child === true) {
+        wikiHierarchyWarning = "Feishu Wiki node has child nodes that require separate source extraction";
+      } else if (typeof node.has_child !== "boolean") {
+        wikiHierarchyWarning = "Feishu Wiki child-node completeness could not be verified";
+      }
     }
 
     const documentResult = await this.requestJson(`${this.baseUrl}/docx/v1/documents/${documentId}`, {
@@ -83,6 +89,7 @@ export class FeishuOpenApiAdapter {
     const revision = numberValue(document.revision_id);
     const items = await this.listBlocks(documentId, accessToken);
     const normalized = normalizeBlocks(items, source);
+    if (wikiHierarchyWarning) normalized.warnings.push(wikiHierarchyWarning);
     const content = normalized.blocks.map((block) => block.text).filter(Boolean).join("\n").trim();
     if (!content) throw new Error("Feishu document contains no readable text blocks");
     return {

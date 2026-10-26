@@ -752,6 +752,18 @@ export class KnowledgeService {
 
   validateRequirementSetApproval(requirementSetId: string) {
     const requirementSet = this.getRequirementSet(requirementSetId);
+    const requirementSource = this.repository.requirementSources.find(
+      (item) => item.id === requirementSet.sourceId && item.knowledgeProjectId === requirementSet.knowledgeProjectId
+    );
+    if (!requirementSource) {
+      throw new Error("Requirement source is missing from the selected knowledge project");
+    }
+    const unresolvedSourceWarnings = requirementSource.warnings.filter((warning) => warning.trim().length > 0);
+    if (unresolvedSourceWarnings.length > 0) {
+      throw new Error(
+        `Requirement source has unresolved extraction warnings (${unresolvedSourceWarnings.length}); refresh it with a complete content package before approval`
+      );
+    }
     if ([...this.repository.workflowModels, ...this.repository.stateMachineModels].some(
       (item) => item.requirementSetId === requirementSet.id && item.status === "conflicted"
     )) {

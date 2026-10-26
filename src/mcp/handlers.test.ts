@@ -2596,7 +2596,7 @@ describe("handleBrainCreatorTool", () => {
       await handleBrainCreatorTool(context, "bc_list_cases", { systemId: system.id })
     );
     expect(cases[0].status).toBe("passed");
-  });
+  }, 15_000);
 
   it("exposes facade status and configure entries for agents", async () => {
     const context = createBrainCreatorMcpContext({

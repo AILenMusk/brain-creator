@@ -14,6 +14,7 @@ import { verifyStoredBrowserAuth } from "./authStateVerifier.js";
 
 const tempDirs: string[] = [];
 const servers: ReturnType<typeof createServer>[] = [];
+const chromiumUnsafePorts = new Set([1719, 1720]);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -137,8 +138,20 @@ async function localFixture() {
     response.end(`<!doctype html><title>Auth Fixture</title><body><script>document.title = document.cookie.includes('session_id=cookie-secret') || localStorage.getItem('session_token') === 'token-secret' ? 'Authenticated' : 'Login';</script></body>`);
   });
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address() as AddressInfo;
+  let address: AddressInfo | undefined;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    address = await new Promise<AddressInfo>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve(server.address() as AddressInfo);
+      });
+    });
+    if (!chromiumUnsafePorts.has(address.port)) break;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    address = undefined;
+  }
+  if (!address) throw new Error("Could not allocate a Chromium-safe local fixture port.");
   const baseUrl = `http://127.0.0.1:${address.port}/`;
   return {
     system: {

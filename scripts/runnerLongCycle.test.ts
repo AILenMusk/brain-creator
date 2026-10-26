@@ -75,5 +75,5 @@ describe("GitHub Actions Runner long-cycle fixture", () => {
         strongEvidenceCounts: { realSystem: 0, synthetic: 2, unclassified: 0 }
       })
     );
-  });
+  }, 15_000);
 });

@@ -2,7 +2,7 @@
 
 The current runtime identity and evidence-gate work is tracked in [Trust Convergence](trust-convergence.md). It is partial implementation, not real-system acceptance; existing issue statuses are not automatically closed by these changes.
 
-This sanitized register is derived from a real end-to-end execution review. The source material remains outside this repository because it contains environment-specific evidence. The original summary said 34 problems; the numbered inventory contains **41 problems**: A1-G4.
+This sanitized register is derived from a real end-to-end execution review. The source material remains outside this repository because it contains environment-specific evidence. The original summary said 34 problems; the numbered inventory contains **42 problems** across A1-G4, including the newly added B6 source-completeness issue.
 
 Status meanings:
 
@@ -14,7 +14,7 @@ Status meanings:
 The focused regression sample for the remaining execution-quality partials is
 documented in [Real-system regression samples](real-system-regression.md) and
 implemented by `src/quality/realSystemRegression.test.ts`. It strengthens the
-evidence for B1/B4, C1, B5/E6, E4/E5, and F5 without pretending that the wider
+evidence for B1/B4, C1, B5/B6/E6, E4/E5, and F5 without pretending that the wider
 production acceptance conditions are closed.
 
 | ID | Sanitized problem | Status | Target | Acceptance condition / check |
@@ -32,6 +32,7 @@ production acceptance conditions are closed.
 | B3 | Shadow DOM actions were not reliably reachable | resolved | PR E | Open Shadow DOM, Wujie-like open containers, and same-origin iframe candidates now carry surface-scoped evidence, safe actions, state changes, and System Brain transitions; same-URL iframe candidates now also carry a stable frame ordinal; closed or cross-origin surfaces remain observational |
 | B4 | SPA remount invalidated the active Page | partial | PR E | Safe exploration now reacquires a closed/invalid active page at the last known allowlisted URL before continuing, retries a stale safe target once, and shares one BrowserSurface child-frame ordinal contract before allowlist filtering; it filters disallowed iframe state/locators, scopes Shadow DOM/Wujie actions by a stable host selector chain, treats Popup as a scoped interactive surface with allowlist checks and state transitions, isolates closed Popup evidence without dropping the main page, disambiguates same-URL iframe targets after recovery, records structured recovery trigger/method/attempt evidence, and fails closed when a surface disappears instead of falling back to a main-document selector; full cross-surface recovery remains |
 | B5 | Initial-state exploration missed conditional actions | partial | PR E/PR F | ExplorationScenario now carries role, prerequisite state, reusable data references, and approved selector values into safe exploration; active current-system TestDataLease references are validated before opening a browser and state-dependent controls are persisted into System Brain; `bc_prepare action=prepare-test-data automatic=true confirm=true` and `bc_run mode=requirement-suite automaticTestData=true` resolve deterministic generated/unique values locally without a target-system write, while lookup/create/cleanup still require system evidence or Host Agent execution |
+| B6 | Feishu Wiki hierarchy could be treated as a complete requirement source after reading only the root page | partial | PR B | Host connector requests recursive child-node, Doc, all Sheet-tab, whiteboard, diagram, and media capture with source anchors and a complete input hash; baseline approval now blocks non-empty source extraction warnings and the source can be refreshed with a complete content package; `sourceAdapters.test.ts` and `service.test.ts`. Automatic remote hierarchy completeness still requires a live source acceptance check |
 | C1 | Short-lived login state expired during suites | partial | PR D | Fresh-context preflight now accepts one host-provided AuthStateRefresher attempt, re-verifies the refreshed protected storageState, and returns suite-level `authState.authRefresh` provider/attempt evidence; otherwise it creates AuthCheckpoint; provider-specific refresh implementations remain |
 | C2 | Generated seed omitted a supported auth reference | resolved | PR D | Verified Token/Cookie profiles materialize protected storageState before execution; seed and execution-boundary integration tests cover the path |
 | C3 | Test credentials appeared in generated files | partial | PR D/PR E | Token/cookie values are removed from generated seeds; Agent bridge output, tool and Host Agent Playwright stdout/stderr, structured reporter files, Run Ledger, Bug/Gap text, artifact manifests, Host Agent logs, submissions, and Suite export redact or block known values plus high-confidence credential patterns (including JSON fields such as `{"token":"..."}`); materialized storageState is kept under protected auth directories, submitted Host Agent output paths are constrained to the Brain Creator workspace, and owned artifact directories scan unlisted files; subprocess and external-workspace lifecycle scan remains |
@@ -71,10 +72,10 @@ production acceptance conditions are closed.
 | Status | Count |
 |---|---:|
 | resolved | 16 |
-| partial | 24 |
+| partial | 25 |
 | open | 0 |
 | deferred | 1 |
-| total | 41 |
+| total | 42 |
 
 This register closes only through its stated acceptance checks. A passing feature test does not close broader evidence, security, or reliability work assigned to a later PR.
 

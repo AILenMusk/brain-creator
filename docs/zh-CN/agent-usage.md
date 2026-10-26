@@ -26,9 +26,11 @@ Agent 通过 `bc_configure target=knowledge-project` 创建知识项目，此时
 
 `bc_prepare action=ingest-requirement` 支持 Markdown、TXT、DOCX、PDF、HTTP(S)、Obsidian 和飞书。
 
-飞书优先使用 OpenAPI；没有凭据时，宿主 Agent 读取文档并提交标准 `RequirementContentPackage`。
+飞书优先使用 OpenAPI；没有凭据时，宿主 Agent 读取来源并提交标准 `RequirementContentPackage`。Wiki 链接可能只指向一个节点，因此要递归枚举其子 Wiki 节点，并读取每个关联文档、每个电子表格页签及引用的白板、流程图、图片和文件。每个来源锚点要保留原节点、revision、页签和块信息，并对完整规范化输入计算 hash。仍无法读取或提取的内容写入 `warnings`；可以继续做草稿分析，但在完整内容包重新接入前不得批准基线或创建 Trial。
 
 来源接入会保留 Markdown、HTML、DOCX 的有序文档块 AST：标题保留层级，表格保留表头和行，图片保留引用，每个块都有稳定来源锚点；`.larkenterprise.com` 与标准飞书、Lark 域名一样受支持。未指定 provider 时，`generate-analysis` 默认使用 host-agent Harness；对结构化或包含图片的来源显式选择 builtin 只返回预览，不能批准或执行。
+
+若直接 OpenAPI 接入返回 Sheet、表格、白板或其他待单独提取的来源警告，必须补齐内容包。非空 `RequirementSource.warnings` 会阻止基线批准；请通过包含已提取内容且 hash 更新的完整内容包重新接入，不要直接删除警告。
 
 来源包含图片时，生成测试设计前必须使用返回的 `requirementSourceId` 调用 `bc_prepare action=analyze-attachments`。Brain Creator 先把附件下载到受控本地路径；返回 `needs-host-vision` 时，宿主使用多模态能力读取每个 `recognitionRequests[].localPath`，再通过 `submit-attachment-analysis` 提交符合 schema 的结构化结果。结果保持 draft，展示给用户并明确确认后，才能调用 `confirm-attachment-analysis confirm=true`。仅发现附件不是失败，只有已记录的下载或识别重试耗尽后才能创建 Gap。
 

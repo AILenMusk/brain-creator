@@ -281,9 +281,18 @@ describe("resolveRequirementSource", () => {
       expect.objectContaining({
         status: "needs-host-connector",
         connector: "feishu",
-        request: expect.objectContaining({ sourceType: "feishu" })
+        request: expect.objectContaining({
+          sourceType: "feishu",
+          requiredOutput: "RequirementContentPackage",
+          instructions: expect.stringContaining("enumerate child Wiki nodes recursively")
+        })
       })
     );
+    if (result.status === "needs-host-connector") {
+      expect(result.request.instructions).toContain("enumerate child Wiki nodes recursively");
+      expect(result.request.instructions).toContain("every tab of each Sheet");
+      expect(result.request.instructions).toContain("do not approve a baseline or start a Trial");
+    }
   });
 
   it("recognizes enterprise Feishu links as host connector sources", async () => {

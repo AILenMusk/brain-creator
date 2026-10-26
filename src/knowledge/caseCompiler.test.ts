@@ -213,6 +213,11 @@ describe("Agent executable case compiler", () => {
 
     expect(result.ambiguity).toBeUndefined();
     expect(result.steps).toHaveLength(pathTransitions.length * 3);
+    const firstTransitionRef = `state-machine:${pathModel.id}#transition:transition-0`;
+    const lastTransitionRef = `state-machine:${pathModel.id}#transition:transition-${pathTransitions.length - 1}`;
+    expect(result.steps.slice(0, 3).every((step) => step.sourceRefs.includes(firstTransitionRef))).toBe(true);
+    expect(result.steps.slice(0, 3).some((step) => step.sourceRefs.includes(lastTransitionRef))).toBe(false);
+    expect(result.processPathSourceRefs).toContain(lastTransitionRef);
   });
 
   it("does not select one of multiple confirmed state paths", () => {

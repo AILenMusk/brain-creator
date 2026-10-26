@@ -63,7 +63,7 @@ export async function resolveRequirementSource(
         sourceType: "feishu",
         requiredOutput: "RequirementContentPackage",
         instructions:
-          "Read the Feishu Wiki/Doc with the host lark capability and submit title, content, blocks, attachments, source URL, updatedAt, contentHash, and warnings."
+          "Read the complete Feishu source hierarchy, not only the linked page: enumerate child Wiki nodes recursively and capture every linked Doc, every tab of each Sheet, embedded whiteboards/diagrams, and media. Submit one RequirementContentPackage with ordered blocks and stable sourceRef/sourceRefs that identify the originating node, revision, sheet/tab, and block; include extracted tables and every media attachment. Compute contentHash from the canonical complete source inputs, including node revisions and content/artifact hashes. List every unreadable or unextracted node/block in warnings. If the source is incomplete, keep analysis as draft and do not approve a baseline or start a Trial. Use the host Lark capability or read-only lark-cli; never include credentials, tokens, or expiring download URLs."
       }
     };
   }
