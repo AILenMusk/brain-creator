@@ -362,6 +362,155 @@ describe("Agent executable case compiler", () => {
     expect(result.processPathSourceRefs).toContain(model.transitions[0].sourceRefs[0]);
   });
 
+  it("uses explicit workflow endpoints before a single source-matched edge", () => {
+    const model = workflowModel();
+    const sourceRef = "source:order-approval";
+    const pathModel: WorkflowModel = {
+      ...model,
+      steps: [
+        ...model.steps,
+        { id: "approve", label: "Approve order", actor: "director", sourceRefs: ["attachment:2#approve"] },
+        { id: "cancelled", label: "Cancel order", actor: "manager", sourceRefs: ["attachment:2#cancel"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "cancel", from: "create", to: "cancelled", condition: "cancel", sourceRefs: [sourceRef] },
+        { ...model.transitions[0], id: "submit", from: "create", to: "review", condition: "submit", sourceRefs: ["attachment:2#submit"] },
+        { ...model.transitions[0], id: "approve", from: "review", to: "approve", condition: "approve", sourceRefs: ["attachment:2#approve"] }
+      ],
+      endStepIds: ["approve"]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [sourceRef],
+        preconditions: ["Start at Create order"],
+        expectedResults: ["Workflow reaches Approve order"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [pathModel],
+      stateMachineModels: [],
+      additionalSourceRefs: []
+    });
+
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.steps.map((step) => step.instruction).join("\n")).toContain("Create order to Review order");
+    expect(result.steps.map((step) => step.instruction).join("\n")).toContain("Review order to Approve order");
+    expect(result.steps.map((step) => step.instruction).join("\n")).not.toContain("Cancel order");
+  });
+
+  it("blocks a source-matched workflow edge when the explicit target step is unreachable", () => {
+    const model = workflowModel();
+    const sourceRef = "source:order-approval";
+    const pathModel: WorkflowModel = {
+      ...model,
+      steps: [
+        ...model.steps,
+        { id: "approve", label: "Approve order", actor: "director", sourceRefs: ["attachment:2#approve"] },
+        { id: "cancelled", label: "Cancel order", actor: "manager", sourceRefs: ["attachment:2#cancel"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "cancel", from: "create", to: "cancelled", condition: "cancel", sourceRefs: [sourceRef] }
+      ],
+      endStepIds: ["approve"]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [sourceRef],
+        preconditions: ["Start at Create order"],
+        expectedResults: ["Workflow reaches Approve order"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [pathModel],
+      stateMachineModels: [],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("do not resolve to a unique confirmed workflow path");
+  });
+
+  it("does not choose the first of multiple confirmed workflow paths", () => {
+    const model = workflowModel();
+    const pathModel: WorkflowModel = {
+      ...model,
+      steps: [
+        ...model.steps,
+        { id: "manager-review", label: "Manager review", actor: "manager", sourceRefs: ["attachment:2#manager"] },
+        { id: "finance-review", label: "Finance review", actor: "finance", sourceRefs: ["attachment:2#finance"] },
+        { id: "approve", label: "Approve order", actor: "director", sourceRefs: ["attachment:2#approve"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "submit-manager", from: "create", to: "manager-review", condition: "manager path", sourceRefs: ["attachment:2#manager"] },
+        { ...model.transitions[0], id: "manager-approve", from: "manager-review", to: "approve", condition: "manager approval", sourceRefs: ["attachment:2#manager-approve"] },
+        { ...model.transitions[0], id: "submit-finance", from: "create", to: "finance-review", condition: "finance path", sourceRefs: ["attachment:2#finance"] },
+        { ...model.transitions[0], id: "finance-approve", from: "finance-review", to: "approve", condition: "finance approval", sourceRefs: ["attachment:2#finance-approve"] }
+      ],
+      endStepIds: ["approve"]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: ["source:order-approval"],
+        preconditions: ["Start at Create order"],
+        expectedResults: ["Workflow reaches Approve order"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [pathModel],
+      stateMachineModels: [],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("Multiple confirmed workflow paths");
+    expect(result.ambiguity?.sourceRefs).toContain("workflow:workflow-model-1#transition:submit-finance");
+  });
+
+  it("blocks when state and workflow models both provide a path for the same explicit endpoints", () => {
+    const state = {
+      ...stateModel(),
+      states: [
+        { id: "draft", label: "Draft", initial: true, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [{
+        ...stateModel().transitions[0],
+        from: "draft",
+        to: "approved",
+        sourceRefs: ["attachment:1#approve"]
+      }]
+    };
+    const workflow = {
+      ...workflowModel(),
+      steps: [
+        { id: "draft", label: "Draft", actor: "requester", sourceRefs: ["attachment:2"] },
+        { id: "approved", label: "Approved", actor: "approver", sourceRefs: ["attachment:2"] }
+      ],
+      transitions: [{
+        ...workflowModel().transitions[0],
+        from: "draft",
+        to: "approved",
+        sourceRefs: ["attachment:2#approve"]
+      }],
+      startStepIds: ["draft"],
+      endStepIds: ["approved"]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"],
+        processModelRefs: [state.id, workflow.id]
+      }),
+      workflowModels: [workflow],
+      stateMachineModels: [state],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("Both state and workflow models provide confirmed endpoint paths");
+    expect(result.ambiguity?.sourceRefs).toEqual(expect.arrayContaining([
+      "state-machine:state-model-1#transition:transition-1",
+      "workflow:workflow-model-1#transition:workflow-transition-1"
+    ]));
+  });
+
   it("returns bounded ambiguity instead of selecting the first edge that shares a source ref", () => {
     const model = stateModel();
     const sharedRef = "attachment-analysis:shared#edge:1";
