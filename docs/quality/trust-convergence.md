@@ -2090,3 +2090,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - The later ledger-only commit `a57d1397069e4098af8b39577142328823ffeb65` passed CI run 480 on Node 20 and Node 22; both matrix jobs completed successfully. Documentation run 190 also completed successfully. This verifies the exact remote candidate head following the acceptance-strategy and register updates.
 - No implementation code changed in that commit. Formal acceptance remains **0/6** while PR #186 is unmerged; Test5 Trial remains 0 and real business/autonomy metrics remain **not measured**.
+
+## 2026-10-26 Latest Register Head CI
+
+- The register-only commit `759af76b5787ec15957b9e33b00b547ccf5982fe` passed CI run 481 on Node 20 and Node 22; both jobs completed successfully. Documentation run 191 also completed successfully.
+- This was documentation-only. It does not change the **0/6** formal acceptance count or the unmeasured Test5 metrics.
