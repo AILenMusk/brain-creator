@@ -4,9 +4,9 @@
 
 候选基线：`origin/main` / PR #185，`62d7487dded6bb444eb9eb32ef6c4363fa3f3238`
 
-候选实现：`codex/trust-closure-main`；远程候选头 `fde5723ddab685f5c7ebb14cc37f117f2913012d`
+候选实现：`codex/trust-closure-main`；最新远程头 `ffb00091a8e0dd8251515cc7493ae3b394376c0e`（验收策略/台账更新）
 
-候选分支最新远程头：PR #186，提交 `fde5723`；CI run 473 在 Node 20/22 通过，Documentation run 183 通过。B 包 Reporter 证据绑定由 run 472 验证，C 包唯一活跃租约检查由 run 473 验证。
+候选代码头：PR #186，提交 `fde5723`；CI run 473 在 Node 20/22 通过，Documentation run 183 通过。最新文档头 `ffb0009` 的 CI run 474 和 Documentation run 184 也均通过。B 包 Reporter 证据绑定由 run 472 验证，C 包唯一活跃租约检查由 run 473 验证。
 正式需求源：用户指定的 GHR 需求主文档，`lark-cli` 最近读取 revision `2045`
 
 ## 1. 验收目的与结论口径
@@ -102,7 +102,7 @@
 
 ## 5. 当前状态与下一步执行顺序
 
-1. **候选工程验证：A–C 的改动已通过候选 CI。** PR #186 head `fde5723` 的 CI run 473 在 Node 20/22 均通过测试、类型检查、构建、文档、包内容、仓库卫生和新目录安装；Documentation run 183 通过。该 head 包含调度 Runner 身份、Reporter 证据绑定及唯一活跃数据租约修复。本地全量检查通过 141 文件 / 1,181 测试、类型检查、构建、文档、package contents（176 项 / 1,690,588 bytes）、新目录安装、订单夹具 6/6 与仓库卫生。宿主链、插件安装、源码 MCP 身份、工作区隔离和安装版浏览器文档套件 smoke 也通过；文档套件第一次遇到一次性 Windows `EPERM rename`，隔离重跑通过。文档构建有既有大块警告。
+1. **候选工程验证：A–C 的改动已通过候选 CI。** PR #186 code head `fde5723` 的 CI run 473 在 Node 20/22 均通过测试、类型检查、构建、文档、包内容、仓库卫生和新目录安装；Documentation run 183 通过。最新文档头 `ffb0009` 的 CI run 474 与 Documentation run 184 也通过。候选代码包含调度 Runner 身份、Reporter 证据绑定及唯一活跃数据租约修复。本地全量检查通过 141 文件 / 1,181 测试、类型检查、构建、文档、package contents（176 项 / 1,690,588 bytes）、新目录安装、订单夹具 6/6 与仓库卫生。宿主链、插件安装、源码 MCP 身份、工作区隔离和安装版浏览器文档套件 smoke 也通过；文档套件第一次遇到一次性 Windows `EPERM rename`，隔离重跑通过。文档构建有既有大块警告。
 2. **合入验收：未完成。** 候选分支已推送并以 PR #186 草稿提交评审；最新远程头 `fde5723` 尚未合入 `origin/main`，所以 accepted 仍为 `0/6`。
 3. **真实 Trial：未开始。** 最近 AuthProfile 校验未通过；系统后置 verifier 与 TestData provider 未配置；当前 Scenario Assurance 仍为 blocked，缺系统绑定和结构化 Oracle；EvaluationTrial 数为 0。
 4. **当前仅能继续：** 评审候选代码、完善流程/Oracle 标注、修复本策略中被评审发现的实现问题。进入真实系统执行需重新满足 Gate 0 与 Gate 3，不跳过门禁。
