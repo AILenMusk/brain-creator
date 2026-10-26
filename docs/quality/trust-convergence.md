@@ -2080,3 +2080,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - The latest fresh Test5 auth verification failed. No EvaluationTrial, independent Test5 postcondition verifier, or live TestData provider exists. The approved scenario/Oracle roster is not frozen; real business completion, autonomy, recovery, cleanup, and baseline-comparison metrics remain **not measured**. No business write, cleanup, Beisen run, or npm publication occurred.
 - Beisen remains part of cross-system requirement scope and must remain in the eventual fixed denominator as blocked until a second real system and separate authorization are available. Synthetic order-approval fixture results remain separate.
 - This reconciliation changes documentation only. Untracked `runner-report.json` remains excluded from candidate evidence.
+
+## 2026-10-26 Acceptance Documentation CI
+
+- The strategy/register documentation commit `97dd506e0074d3100db811f508d49764e03fdbd1` passed PR CI run 479 on Node 20 and Node 22, including full tests, typecheck, build, docs build, package contents, repository hygiene, and fresh package installation. Documentation workflow run 189 passed. Local docs build, repository hygiene, and `git diff --check` also passed for the edited files.
+- This verifies the exact documentation commit's CI, but does not change package-level gates or live Trial status. PR #186 remains open/draft/unmerged; accepted delivery is **0/6**. Test5 real business/autonomy metrics remain **not measured**; Beisen stays blocked as a second-system dependency.
