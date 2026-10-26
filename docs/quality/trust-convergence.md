@@ -2085,3 +2085,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - The strategy/register documentation commit `97dd506e0074d3100db811f508d49764e03fdbd1` passed PR CI run 479 on Node 20 and Node 22, including full tests, typecheck, build, docs build, package contents, repository hygiene, and fresh package installation. Documentation workflow run 189 passed. Local docs build, repository hygiene, and `git diff --check` also passed for the edited files.
 - This verifies the exact documentation commit's CI, but does not change package-level gates or live Trial status. PR #186 remains open/draft/unmerged; accepted delivery is **0/6**. Test5 real business/autonomy metrics remain **not measured**; Beisen stays blocked as a second-system dependency.
+
+## 2026-10-26 Latest Candidate Head Verification
+
+- The later ledger-only commit `a57d1397069e4098af8b39577142328823ffeb65` passed CI run 480 on Node 20 and Node 22; both matrix jobs completed successfully. Documentation run 190 also completed successfully. This verifies the exact remote candidate head following the acceptance-strategy and register updates.
+- No implementation code changed in that commit. Formal acceptance remains **0/6** while PR #186 is unmerged; Test5 Trial remains 0 and real business/autonomy metrics remain **not measured**.
