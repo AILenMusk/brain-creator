@@ -73,6 +73,71 @@ describe("Agent executable case compiler", () => {
     expect(result.steps[4].sourceRefs).toContain("state-machine:state-model-1#transition:transition-approve");
   });
 
+  it("uses explicit state endpoints before a single source-matched edge", () => {
+    const model = stateModel();
+    const sourceRef = "source:order-approval";
+    const pathModel: StateMachineModel = {
+      ...model,
+      states: [
+        { id: "draft", label: "Draft", initial: true, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "submitted", label: "Submitted", initial: false, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] },
+        { id: "cancelled", label: "Cancelled", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "cancel", from: "draft", to: "cancelled", trigger: "cancel", sourceRefs: [sourceRef] },
+        { ...model.transitions[0], id: "submit", from: "draft", to: "submitted", trigger: "submit", sourceRefs: ["attachment:1#submit"] },
+        { ...model.transitions[0], id: "approve", from: "submitted", to: "approved", trigger: "approve", sourceRefs: ["attachment:1#approve"] }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [sourceRef],
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.steps.map((step) => step.instruction).join("\n")).toContain("Draft to Submitted");
+    expect(result.steps.map((step) => step.instruction).join("\n")).toContain("Submitted to Approved");
+    expect(result.steps.map((step) => step.instruction).join("\n")).not.toContain("Draft to Cancelled");
+  });
+
+  it("blocks a source-matched edge when the explicit target is unreachable", () => {
+    const model = stateModel();
+    const sourceRef = "source:order-approval";
+    const pathModel: StateMachineModel = {
+      ...model,
+      states: [
+        { id: "draft", label: "Draft", initial: true, terminal: false, sourceRefs: ["attachment:1"] },
+        { id: "approved", label: "Approved", initial: false, terminal: true, sourceRefs: ["attachment:1"] },
+        { id: "cancelled", label: "Cancelled", initial: false, terminal: true, sourceRefs: ["attachment:1"] }
+      ],
+      transitions: [
+        { ...model.transitions[0], id: "cancel", from: "draft", to: "cancelled", trigger: "cancel", sourceRefs: [sourceRef] }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [sourceRef],
+        preconditions: ["Order state is Draft"],
+        expectedResults: ["Order state is Approved"],
+        processModelRefs: [pathModel.id]
+      }),
+      workflowModels: [],
+      stateMachineModels: [pathModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("do not resolve to a unique confirmed path");
+  });
+
   it("resolves a long confirmed state path without recursive stack growth", () => {
     const model = stateModel();
     const intermediateStates = Array.from({ length: 6000 }, (_, index) => ({

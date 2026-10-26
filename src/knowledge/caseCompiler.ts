@@ -130,43 +130,10 @@ export function compileIntentSemanticSteps(input: {
       }
     };
   }
-  const matches = selectedTransitionRefs.length > 0 ? [] : matchingIntentTransitions(input.intent, candidates);
-  if (matches.length > 1) {
-    const ambiguousSourceRefs = unique([
-      ...sourceRefs,
-      ...matches.flatMap((match) => [
-        ...match.transition.sourceRefs,
-        modelSourceRef(match),
-        transitionSourceRef(match)
-      ])
-    ]);
-    const missingStateEndpoint = matches.some(
-      (match) => match.source === "state-machine" && (
-        !match.model.states.some((state) => state.id === match.transition.from) ||
-        !match.model.states.some((state) => state.id === match.transition.to)
-      )
-    );
-    return {
-      source: compilationSourceFor(matches),
-      processPathSourceRefs: ambiguousSourceRefs,
-      steps: [],
-      ambiguity: {
-        reason: [
-          `Multiple confirmed process transitions match the intent; an explicit model and transition reference or a unique confirmed path is required (${matches.length} candidates).`,
-          "The compiler resolves directly referenced edges only and does not select a path by keyword scoring.",
-          ...(missingStateEndpoint
-            ? ["At least one candidate state transition has an endpoint missing from the model; endpoint inference is outside this compiler."]
-            : [])
-        ].join(" "),
-        sourceRefs: ambiguousSourceRefs
-      }
-    };
-  }
 
-  if (matches.length === 0) {
-    const confirmedStateModels = confirmedModels(input.intent, input.stateMachineModels);
-    const paths = confirmedStateModels
-      .flatMap((model) => statePathsForIntent(input.intent, model));
+  const confirmedStateModels = confirmedModels(input.intent, input.stateMachineModels);
+  if (hasExplicitStatePath(input.intent, confirmedStateModels)) {
+    const paths = confirmedStateModels.flatMap((model) => statePathsForIntent(input.intent, model));
     if (paths.length > 1) {
       const pathRefs = unique([
         ...sourceRefs,
@@ -223,28 +190,59 @@ export function compileIntentSemanticSteps(input: {
         steps
       };
     }
-    if (hasExplicitStatePath(input.intent, confirmedStateModels)) {
-      const pathRefs = unique([
-        ...sourceRefs,
-        ...confirmedStateModels.flatMap((model) => [
-          `state-machine:${model.id}`,
-          ...model.sourceRefs,
-          ...model.transitions.flatMap((transition) => [
-            ...transition.sourceRefs,
-            `state-machine:${model.id}#transition:${transition.id}`
-          ])
+    const pathRefs = unique([
+      ...sourceRefs,
+      ...confirmedStateModels.flatMap((model) => [
+        `state-machine:${model.id}`,
+        ...model.sourceRefs,
+        ...model.transitions.flatMap((transition) => [
+          ...transition.sourceRefs,
+          `state-machine:${model.id}#transition:${transition.id}`
         ])
-      ]);
-      return {
-        source: "state-machine",
-        processPathSourceRefs: pathRefs,
-        steps: [],
-        ambiguity: {
-          reason: "The explicit starting and target states do not resolve to a unique confirmed path; the compiler will not replace a missing path with generic clause steps.",
-          sourceRefs: pathRefs
-        }
-      };
-    }
+      ])
+    ]);
+    return {
+      source: "state-machine",
+      processPathSourceRefs: pathRefs,
+      steps: [],
+      ambiguity: {
+        reason: "The explicit starting and target states do not resolve to a unique confirmed path; the compiler will not replace a missing path with generic clause steps.",
+        sourceRefs: pathRefs
+      }
+    };
+  }
+
+  const matches = selectedTransitionRefs.length > 0 ? [] : matchingIntentTransitions(input.intent, candidates);
+  if (matches.length > 1) {
+    const ambiguousSourceRefs = unique([
+      ...sourceRefs,
+      ...matches.flatMap((match) => [
+        ...match.transition.sourceRefs,
+        modelSourceRef(match),
+        transitionSourceRef(match)
+      ])
+    ]);
+    const missingStateEndpoint = matches.some(
+      (match) => match.source === "state-machine" && (
+        !match.model.states.some((state) => state.id === match.transition.from) ||
+        !match.model.states.some((state) => state.id === match.transition.to)
+      )
+    );
+    return {
+      source: compilationSourceFor(matches),
+      processPathSourceRefs: ambiguousSourceRefs,
+      steps: [],
+      ambiguity: {
+        reason: [
+          `Multiple confirmed process transitions match the intent; an explicit model and transition reference or a unique confirmed path is required (${matches.length} candidates).`,
+          "The compiler resolves directly referenced edges only and does not select a path by keyword scoring.",
+          ...(missingStateEndpoint
+            ? ["At least one candidate state transition has an endpoint missing from the model; endpoint inference is outside this compiler."]
+            : [])
+        ].join(" "),
+        sourceRefs: ambiguousSourceRefs
+      }
+    };
   }
 
   const match = matches[0];
