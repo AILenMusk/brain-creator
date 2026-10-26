@@ -6,7 +6,7 @@
 
 本策略用于验收已实施的 A–F 六个交付包。重点是逐项证明“代码实现了什么、反例是否被拦截、运行证据是否可信、哪些能力仍未在真实系统验证”。代码存在、测试通过、PR 合入和真实业务完成是不同结论，不能互相代替。
 
-本轮代码基线为 `origin/main` `62d7487`（PR #185）。候选实现位于 `codex/trust-closure-main`、PR #186；此前远程分支头为 `4f45319`。本次 C 包目标查询校验改动仍在工作树，尚未形成新的远程 commit。已核实的上一候选 CI 为代码 run 473（`fde5723`，Node 20/22 通过）和文档 run 184（`ffb0009` 通过）；它们不覆盖本次 C 包改动。PR 尚未合入。
+本轮代码基线为 `origin/main` `62d7487`（PR #185）。候选实现位于 `codex/trust-closure-main`、PR #186；本次 C 包目标查询校验已提交并推送为 `da46d4d5a03d8f699b800c0bf91deb362c21125f`。该 commit 的 CI run 477 已在 Node 20/22 通过完整工程门禁，Documentation run 187 通过。PR 尚未合入。
 
 ## 2. 结论和计数规则
 
@@ -72,16 +72,16 @@ npm run verify:order-fixture
 | --- | --- | --- | --- |
 | **A 运行身份与基线** | CLI、MCP、调度入口能返回同一进程的包版本、commit/build ID、PID、启动时间、workspace、Store schema、Provider；Trial 绑定需求/系统/代码/场景；受控投影不泄露授权外数据。 | 身份缺失仍称 ready；输入变化复用旧 Trial；synthetic 进入真实统计；人工介入漏采。 | Runner/MCP 身份修复及 CI run 471 候选检查通过。Trial 前置和基线实测尚未完成；PR 未合入，A 只记候选证据。 |
 | **B 证据与符合性** | Reporter、合同、步骤、业务 Oracle 和文件产物准确绑定；文件可读且 hash 一致；Conformance 分别说明适用性、证据充分性、实际业务值及比较；历史完整产物可重评估。 | 错配合同、数组顺序兜底、缺失/替换/损坏产物、仅凭 `passed + strong` 晋升、改目标或删断言后沿用结果。 | Reporter 文件绑定修复由 run 472/473 候选 CI 覆盖，相关测试通过。未在 Test5 验证独立业务 Oracle；PR 未合入。 |
-| **C 路径与数据** | 从明确前置状态求到目标状态；多条路径和多匹配保持歧义；保留角色、副作用及跨用例实体依赖；查询唯一匹配才复用；创建后核实目标实体再发放 lease；消费后按批准策略清理或保留。 | 共享来源选第一条流程；多条租约/实体取第一条；仅提交自由字符串引用即可建立已验证租约；恢复重复创建/转换；未经通知清理。 | 本次候选改动让 lookup/create 成功提交先通过绑定 `systemId` 的目标 Provider 精确查询，要求唯一匹配、匹配提交值和 Provider evidence；cleanup 成功要求同一租约引用的结构化 `absent` 观察及经读取/hash 校验的产物。新增反例和正向用例，定向 3 个文件 82 项、全量 141 文件 / 1,187 项通过。**候选状态：** 本地工程证据通过，待形成新 commit 并由该 commit 的 CI 覆盖；Provider 仍是测试夹具，Test5 尚无真实 Provider，因此 C 尚不能验收通过。 |
+| **C 路径与数据** | 从明确前置状态求到目标状态；多条路径和多匹配保持歧义；保留角色、副作用及跨用例实体依赖；查询唯一匹配才复用；创建后核实目标实体再发放 lease；消费后按批准策略清理或保留。 | 共享来源选第一条流程；多条租约/实体取第一条；仅提交自由字符串引用即可建立已验证租约；恢复重复创建/转换；未经通知清理。 | lookup/create 成功提交先通过绑定 `systemId` 的目标 Provider 精确查询，要求唯一匹配、匹配提交值和 Provider evidence；cleanup 成功要求同一租约引用的结构化 `absent` 观察及经读取/hash 校验的产物。新增反例和正向用例，定向 3 个文件 82 项、全量 141 文件 / 1,187 项通过。commit `da46d4d` 的 CI run 477 已在 Node 20/22 通过。**候选状态：** 工程门禁通过；Provider 仍是测试夹具，Test5 尚无真实 Provider，C 的真实业务验收未通过。 |
 | **D 连续推进与恢复** | 新会话用同一恢复标识显示场景、角色、实体、步骤、等待原因和唯一下一步；写动作阶段持久化；恢复通过独立后置查询确认已发生或未发生，并保证不重复写入。 | 响应丢失即重放提交；恢复更换实体/Trial；只凭进程存在宣称浏览器可见；本地 mock 冒充目标系统验证。 | 任务投影、Ledger reconciliation、配置型 verifier 与订单 Chromium 中断夹具通过候选检查。夹具为 synthetic；Test5 后置 verifier 和真实恢复未验证。 |
 | **E 真实业务评估** | 冻结分母下完成三轮独立 Test5 GHR 流程；每步有过程证据和独立业务列表/详情后置状态；报告人工介入、失败、清理/保留、复用和恢复。订单夹具另测拒绝、角色/金额分支、实体复用。 | 旧截图、历史 Trial、夹具结果替代真实结果；删掉 blocked 项；未验证即 conform；清理无预告；重复写入。 | 订单审批夹具 6/6 是 synthetic 证据。Test5 EvaluationTrial 为 0；当前登录验证失败，场景/Oracle 未冻结，独立后置查询和 TestData provider 未配置。E 阻塞，真实完成度未测量。 |
 | **F 复核与交付** | 指标从固定 Trial 数据计算，保留完整分母和缺测；业务标注有评审者/版本；文档、包安装、新目录启动、恢复、报告和宿主 smoke 可复现；最终报告分列实现、实测、未完成和外部依赖。 | 缺数据记零/通过；synthetic 混入实测；错误 Bug 不复核；未解决问题标 resolved；未授权发布。 | 指标门禁测试能保留 blocked/未执行并隔离 synthetic，候选文档/安装检查已有证据。真实基线、业务标注、合入后的安装与宿主 smoke 未完成；npm 发布需另行明确授权。 |
 
 ## 5. 当前可复核的候选验证记录
 
-此前已归档的 `fde5723` 候选验证为 141 个 Vitest 文件 / 1,181 个测试、Node 20/22 CI 通过。针对本次 C 修复的最新本地工作树，重新通过 141 个文件 / 1,187 个测试、TypeScript 检查、构建、文档构建、package contents（176 项 / 1,693,174 bytes）、新目录安装和订单审批 Chromium 夹具 6/6。另补跑并通过宿主 Agent 链、安装包文档套件（真实 Playwright Chromium）、Codex 原生入口/插件安装、源码 MCP 身份、工作区隔离、Brain Creator 订单夹具 smoke 和仓库卫生检查。文档构建有既有大块警告；宿主 smoke 和订单夹具使用隔离合成系统。
+此前已归档的 `fde5723` 候选验证为 141 个 Vitest 文件 / 1,181 个测试、Node 20/22 CI 通过。针对本次 C 修复的代码快照，重新通过 141 个文件 / 1,187 个测试、TypeScript 检查、构建、文档构建、package contents（176 项 / 1,693,174 bytes）、新目录安装和订单审批 Chromium 夹具 6/6。另补跑并通过宿主 Agent 链、安装包文档套件（真实 Playwright Chromium）、Codex 原生入口/插件安装、源码 MCP 身份、工作区隔离、Brain Creator 订单夹具 smoke 和仓库卫生检查。该代码快照已提交为 `da46d4d`；其 CI run 477 在 Node 20/22 通过，Documentation run 187 通过。文档构建有既有大块警告；宿主 smoke 和订单夹具使用隔离合成系统。
 
-本次本地结果来自 `4f45319` 加 C 包工作树改动，运行时 MCP identity 返回 `dirty=true`，因此可以确认身份接口识别了未提交状态；它不是已发布包身份或干净 commit 证明。本次代码变更尚未获得对应远程 CI。上述 smoke 与测试只证明隔离工程行为，不证明 Test5 真实业务闭环。
+本地 MCP identity smoke 返回 commit `da46d4d` 且 `dirty=true`；当前唯一未跟踪项 `runner-report.json` 不属于本次提交，因此该结果证明进程报告了实际 commit 和脏工作树状态，不应写作 clean-checkout 构建。上述 smoke 与测试只证明隔离工程行为，不证明 Test5 真实业务闭环。
 
 这组记录只说明对应候选 commit 的工程行为。PR #186 未合入 `origin/main`；A–F 正式实现验收仍为 **0/6**。不能把候选全量测试或夹具通过写成 Test5 实测通过。
 
