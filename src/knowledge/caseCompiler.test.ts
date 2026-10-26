@@ -138,6 +138,49 @@ describe("Agent executable case compiler", () => {
     expect(result.ambiguity?.reason).toContain("do not resolve to a unique confirmed path");
   });
 
+  it("does not treat a negated state mention as an explicit starting state", () => {
+    const model = stateModel();
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [model.transitions[0].sourceRefs[0]],
+        preconditions: ["Order state is not Draft"],
+        expectedResults: ["Order state is Submitted"],
+        processModelRefs: [model.id]
+      }),
+      workflowModels: [],
+      stateMachineModels: [model],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("negated process-state mention");
+  });
+
+  it("blocks negated Chinese state endpoints instead of inferring a positive route", () => {
+    const model = stateModel();
+    const chineseModel: StateMachineModel = {
+      ...model,
+      states: [
+        { ...model.states[0], label: "草稿" },
+        { ...model.states[1], label: "已提交" }
+      ]
+    };
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [chineseModel.transitions[0].sourceRefs[0]],
+        preconditions: ["需求状态不是草稿"],
+        expectedResults: ["需求状态为已提交"],
+        processModelRefs: [chineseModel.id]
+      }),
+      workflowModels: [],
+      stateMachineModels: [chineseModel],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("negated process-state mention");
+  });
+
   it("resolves a long confirmed state path without recursive stack growth", () => {
     const model = stateModel();
     const intermediateStates = Array.from({ length: 6000 }, (_, index) => ({
@@ -426,6 +469,23 @@ describe("Agent executable case compiler", () => {
 
     expect(result.steps).toEqual([]);
     expect(result.ambiguity?.reason).toContain("do not resolve to a unique confirmed workflow path");
+  });
+
+  it("does not treat a negated workflow target as the path endpoint", () => {
+    const model = workflowModel();
+    const result = compileIntentSemanticSteps({
+      intent: intent({
+        requirementRefs: [model.transitions[0].sourceRefs[0]],
+        expectedResults: ["Order must not reach Review order"],
+        processModelRefs: [model.id]
+      }),
+      workflowModels: [model],
+      stateMachineModels: [],
+      additionalSourceRefs: []
+    });
+
+    expect(result.steps).toEqual([]);
+    expect(result.ambiguity?.reason).toContain("negated process-state mention");
   });
 
   it("does not choose the first of multiple confirmed workflow paths", () => {

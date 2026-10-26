@@ -143,6 +143,20 @@ export function compileIntentSemanticSteps(input: {
     };
   }
 
+  const negatedStateRefs = negatedProcessStateRefs(input.intent, confirmedStateModels, confirmedWorkflowModels);
+  if (negatedStateRefs.length > 0) {
+    const refs = unique([...sourceRefs, ...negatedStateRefs]);
+    return {
+      source: "requirement-clause",
+      processPathSourceRefs: refs,
+      steps: [],
+      ambiguity: {
+        reason: "The intent contains a negated process-state mention; the compiler cannot treat it as an explicit path endpoint. Clarify the intended starting state or target outcome before compilation.",
+        sourceRefs: refs
+      }
+    };
+  }
+
   if (selectedPathSource === "mixed") {
     const refs = unique([...sourceRefs, ...selectedTransitionRefs]);
     return {
@@ -846,6 +860,50 @@ function hasExplicitWorkflowPath(intent: TestIntent, models: WorkflowModel[]) {
     );
     return targets.length > 0 && (starts.length > 0 || model.startStepIds.length === 1);
   });
+}
+
+function negatedProcessStateRefs(
+  intent: TestIntent,
+  stateModels: StateMachineModel[],
+  workflowModels: WorkflowModel[]
+) {
+  const endpointText = [...intent.preconditions, ...intent.expectedResults];
+  const refs: string[] = [];
+  for (const model of stateModels) {
+    for (const state of model.states) {
+      if ([state.id, state.label].some((candidate) =>
+        endpointText.some((value) => hasNegatedStateMention(value, candidate)))) {
+        refs.push(`state-machine:${model.id}`, `state-machine:${model.id}#state:${state.id}`, ...state.sourceRefs);
+      }
+    }
+  }
+  for (const model of workflowModels) {
+    for (const step of model.steps) {
+      if ([step.id, step.label].some((candidate) =>
+        endpointText.some((value) => hasNegatedStateMention(value, candidate)))) {
+        refs.push(`workflow:${model.id}`, `workflow:${model.id}#step:${step.id}`, ...step.sourceRefs);
+      }
+    }
+  }
+  return unique(refs);
+}
+
+function hasNegatedStateMention(value: string, stateLabel: string) {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase();
+  const candidate = stateLabel.normalize("NFKC").toLocaleLowerCase();
+  if (!candidate) return false;
+  const clauseSeparators = [".", "!", "?", ";", ":", "。", "！", "？", "；", "：", "，", ","];
+  let occurrence = normalized.indexOf(candidate);
+  while (occurrence >= 0) {
+    const clauseStart = Math.max(-1, ...clauseSeparators.map((separator) => normalized.lastIndexOf(separator, occurrence - 1)));
+    const prefix = normalized.slice(clauseStart + 1, occurrence).trimEnd();
+    const englishNegation = /\b(?:not|never|without|cannot|can't|won't|shouldn't|mustn't|doesn't|don't|isn't|aren't|no)(?:\s+[\p{L}\p{N}'’-]+){0,3}\s*$/iu;
+    const chineseNegation = /(?:并非|不允许|不应|不得|不能|不会|不是|不为|不在|不处于|尚未|未曾|没有|未|无|非)(?:为|是|处于|进入|达到|变成|成为|在)?\s*$/u;
+    if ((englishNegation.test(prefix) && !/\bnot\s+(?:only|just)\s*$/iu.test(prefix)) ||
+        (chineseNegation.test(prefix) && !/(?:不只是|不但|不仅)\s*$/u.test(prefix))) return true;
+    occurrence = normalized.indexOf(candidate, occurrence + candidate.length);
+  }
+  return false;
 }
 
 function mentionsState(value: string, stateId: string, stateLabel: string) {
