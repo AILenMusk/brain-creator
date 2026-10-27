@@ -11,7 +11,7 @@
 
 The user-approved fixed denominator is the 28 local Test5 Group/GHR outcomes in the Test5 Review Paths inventory. Blocked and unexecuted outcomes stay in the denominator. Six Offer transitions with OEHR side effects are excluded from local execution. Beisen remains a separate cross-system requirement, blocked until a second real system is available and separately authorized.
 
-The formal Feishu source set remains the main document revision 2045, process child revision 5, and workbook revisions 154, 607, 175, 62, and 50. The source labels itself formally released; its cover version field remains “待定”. Current RequirementSet v3 is requirementSet_kxl74yef, sourced from requirementSource_8dk46kq4 with content hash 583d1a7647f59f7deccdbf076fca7823e925aea87e662a05dce2163f5095f217.
+Read-only `lark-cli` revalidation on 2026-10-28 found the main document at revision 2045 and five direct Wiki children: four spreadsheets and the “流程梳理” document. The process document is revision 5; the four spreadsheet revisions are 154 (招聘需求字段), 607 (正式员工offer字段), 175 (实习生offer字段), and 62 (字典). The Wiki has no fifth spreadsheet at revision 50; that value in the earlier report was an erroneous carry-forward and is corrected here. The source labels itself formally released; its cover version field remains “待定”. Current RequirementSet v3 is requirementSet_kxl74yef, sourced from requirementSource_8dk46kq4 with content hash 583d1a7647f59f7deccdbf076fca7823e925aea87e662a05dce2163f5095f217.
 
 The user selected Test5’s current page configuration as the route Oracle. The latest clarification confirms the no-approval branch is 流程管理员, not 编制管理员, and excludes that branch from this acceptance. Brain Creator recorded this decision as evalAction_tdn0a7kp. The same note explicitly leaves the HSSC system-administrator branch and other unlabeled A07 conditions unresolved. The live Test5 configuration has not yet been read in a valid session, so the route Oracle is selected but not independently verified.
 
@@ -19,9 +19,9 @@ The six approved attachment transcriptions remain analysis inputs. A04 and A07 r
 
 ## Current Brain Creator evidence
 
-A fresh Brain Creator Facade process from candidate commit 02d490b6701005b2047b6722f098effbe2d74336 reported package 2.1.1, build ID source:02d490b6701005b2047b6722f098effbe2d74336, schema 21, dirty=false, provider codex, and the isolated workspace trust-closure-main. This is a source MCP identity, not an installed host MCP identity.
+A fresh Brain Creator Facade process from candidate commit c6e884ebb6fb83ce85512eac12f55e6934363538 reported package 2.1.1, build ID source:c6e884ebb6fb83ce85512eac12f55e6934363538, schema 21, dirty=false, provider codex, and the isolated workspace trust-closure-main. This is a source MCP identity, not an installed host MCP identity.
 
-The current RequirementSet is still draft and its gate is blocked: 35 Eval actions total, with 1 confirmed, 30 pending, and 4 blocked. Coverage is 266/271 clauses; the five remaining references are attachment-analysis clauses. The 10 current Stage Eval records contain 8 passes and 2 blocked results. The Gate is not baseline approval.
+The current RequirementSet is still draft and its gate is blocked: 35 Eval actions total, with 4 confirmed, 27 pending, and 4 blocked. Coverage is 266/271 clauses; the five remaining references are attachment-analysis clauses. The 10 current Stage Eval records contain 8 passes and 2 blocked results. The Gate is not baseline approval. The four confirmed decisions include formal-source status, Beisen scope, local Test5 write boundaries, and exclusion of the no-approval 流程管理员 branch from this acceptance.
 
 The latest project Gap review returns 64 high-severity Gaps: 60 open and 4 resolved. The current status still exposes brainTask_knwg0rvb waiting for approval against superseded RequirementSet v2 requirementSet_hxbgqxwh while v3 is current.
 
@@ -31,7 +31,7 @@ Brain Creator’s current system-scoped projection contains 180 BusinessScenario
 
 ## F engineering evidence
 
-- Mainline origin/main is eedc217d41b631815ca32d0142a3e4dfe26399d9. Candidate head 4a65f578ed0a2f1b834eef9edb320af8c36eb33d passed exact-head CI run 507 and Documentation run 217; PR #187 is open, Draft, mergeable, and unmerged.
+- Mainline origin/main is eedc217d41b631815ca32d0142a3e4dfe26399d9. Candidate head c6e884ebb6fb83ce85512eac12f55e6934363538 passed exact-head CI run 508 on Node 20/22 and Documentation run 218; PR #187 is open, Draft, mergeable, and unmerged.
 - Exact-head CI run 504 passed on Node 20 and Node 22; Documentation run 214 passed for commit 02d490b6701005b2047b6722f098effbe2d74336. CI run 505 exposed a repository-hygiene flag on Node 22 because the new report contained a restricted test-environment URL; that URL was removed in c8cb8af. Exact-head CI run 506 passed on Node 20 and Node 22, including tests, typecheck, build, docs, package contents, repository hygiene, and fresh package installation; Documentation run 216 passed. The follow-up candidate head 4a65f578ed0a2f1b834eef9edb320af8c36eb33d also passed exact-head CI run 507 and Documentation run 217. The current report-only refresh passed local docs build, repository hygiene, and git diff checks.
 - The candidate code tree at 3d221503af58c28e4f6852e2a22e11da03b4f198 passed 141 test files / 1,207 tests, TypeScript checking, build, documentation build, package-content verification (177 entries / 1,713,163 bytes), fresh package installation, and synthetic order/host-agent smoke checks.
 - The latest documentation-only head passed local docs build and git diff validation. Synthetic order approval passed 6/6; it does not count toward Test5 outcomes or cross-system migration.
