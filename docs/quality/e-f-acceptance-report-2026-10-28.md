@@ -8,7 +8,7 @@
 
 ## Fixed scope and source
 
-The user-approved Trial scope remains the 28 local Test5 Group/GHR outcomes listed in `Test5 Review Paths`. The six Offer transitions that write to OEHR and the Beisen cross-system path remain outside executable scope. Beisen remains an external dependency pending a second real system and separate scenario authorization. The process-admin no-approval branch is excluded. The HSSC system-admin branch and other unlabeled A07 conditions remain unresolved within `GHR-STAFF-01`; they do not reduce the denominator.
+The user-approved Trial scope remains the 28 local Test5 Group/GHR outcomes listed in `Test5 Review Paths`. The six Offer transitions that write to OEHR and the Beisen cross-system path remain outside executable scope. Beisen remains an external dependency pending a second real system and separate scenario authorization. The user clarified that the diagram's no-approval branch is `流程管理员` (not `编制管理员`) and may be excluded from this acceptance. The HSSC system-administrator branch and other unlabeled A07 conditions remain unresolved within `GHR-STAFF-01`; they do not reduce the denominator.
 
 The user confirmed the source is the formal release. `lark-cli` revalidation returned main document revision 2045, process child revision 5, and workbook revisions 154, 607, 175, 62, and 50. The pinned source set remains current. The current RequirementSet v3 is `requirementSet_kxl74yef` from source `requirementSource_8dk46kq4`, with content hash `583d1a7647f59f7deccdbf076fca7823e925aea87e662a05dce2163f5095f217`.
 
