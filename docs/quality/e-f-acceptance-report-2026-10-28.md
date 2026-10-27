@@ -25,7 +25,7 @@ The current RequirementSet is still draft and its gate is blocked: 35 Eval actio
 
 The latest project Gap review returns 64 high-severity Gaps: 60 open and 4 resolved. The current status still exposes brainTask_knwg0rvb waiting for approval against superseded RequirementSet v2 requirementSet_hxbgqxwh while v3 is current.
 
-The Test5 system is system_nny1q7wk at https://test5-ghr.eminxing.com/index. AuthProfile auth_onb5ja03 is failed; its last recorded verification at 2026-10-27T16:03:37.443Z redirected to the SSO login page. The current system next action is reauthenticate_auth. TestData Provider is not-configured. No EvaluationTrial exists.
+The Test5 system is system_nny1q7wk. AuthProfile auth_onb5ja03 is failed; its last recorded verification at 2026-10-27T16:03:37.443Z redirected to the SSO login page. The current system next action is reauthenticate_auth. TestData Provider is not-configured. No EvaluationTrial exists.
 
 Brain Creator’s current system-scoped projection contains 180 BusinessScenarios: 179 stale and 1 draft. None maps to a frozen GHR outcome ID. Scenario Assurance blocks all 180 for missing system binding and limited Oracle. These draft/stale projections do not make any of the 28 outcomes executable or passed.
 
@@ -35,6 +35,7 @@ Brain Creator’s current system-scoped projection contains 180 BusinessScenario
 - Exact-head CI run 504 passed on Node 20 and Node 22; Documentation run 214 passed for commit 02d490b6701005b2047b6722f098effbe2d74336. The report-only edits made after that head passed a local documentation build and git diff check; exact-head workflows will rerun after this update is pushed.
 - The candidate code tree at 3d221503af58c28e4f6852e2a22e11da03b4f198 passed 141 test files / 1,207 tests, TypeScript checking, build, documentation build, package-content verification (177 entries / 1,713,163 bytes), fresh package installation, and synthetic order/host-agent smoke checks.
 - The latest documentation-only head passed local docs build and git diff validation. Synthetic order approval passed 6/6; it does not count toward Test5 outcomes or cross-system migration.
+- CI run 505 on report-only commit 943e258 exposed repository-hygiene scanning because the report contained a restricted test-environment URL. Node 22 tests (141 files; 1,205 passed, 2 skipped), typecheck, build, docs build, and package-content checks passed; repository hygiene failed and package-install verification was skipped. The URL has been removed. Local repository hygiene now passes for 367 tracked files, and docs build plus git diff checks pass; the corrected exact-head workflow is pending.
 - The PR remains unmerged. No post-merge installation verification has occurred.
 
 ## Metrics
