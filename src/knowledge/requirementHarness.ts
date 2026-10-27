@@ -242,9 +242,16 @@ export class RequirementAnalysisHostHarness {
       const requirementSet = this.requirementSet(task.requirementSetId!);
       const source = this.repository.requirementSources.find((item) => item.id === requirementSet.sourceId);
       const prefix = `source-snapshot:${requirementSet.sourceId}:sha256:`;
-      const pinned = sourceSnapshotReference?.ref.startsWith(prefix) ? sourceSnapshotReference.ref.slice(prefix.length) : undefined;
+      const pinned = sourceSnapshotReference?.ref.startsWith(prefix)
+        ? sourceSnapshotReference.ref.slice(prefix.length).match(/^([a-f0-9]{64}):line-offset:(\d+)$/)
+        : undefined;
       const snapshot = source && await this.verifiedSourceSnapshot(requirementSet.id, source.content);
-      if (!pinned || !/^[a-f0-9]{64}$/.test(pinned) || !snapshot || snapshot.bodySha256 !== pinned) {
+      if (
+        !pinned ||
+        !snapshot ||
+        snapshot.bodySha256 !== pinned[1] ||
+        snapshot.lineOffset !== Number(pinned[2])
+      ) {
         throw new Error("Frozen requirement source snapshot changed or is unavailable; restart analysis with the current source");
       }
     }
@@ -912,7 +919,7 @@ function buildContextPack(
   const references = unique([
     ...sourceLines.map((line) => line.ref),
     ...blockSourceRefs,
-    ...(sourceSnapshot ? [`source-snapshot:${source.id}:sha256:${sourceSnapshot.bodySha256}`] : []),
+    ...(sourceSnapshot ? [`source-snapshot:${source.id}:sha256:${sourceSnapshot.bodySha256}:line-offset:${sourceSnapshot.lineOffset}`] : []),
     ...(structuredSnapshot ? [`structured-output-snapshot:sha256:${structuredSnapshot.sha256}`] : []),
     ...attachmentAnalyses.flatMap((analysis) => [`attachment-analysis:${analysis.id}`, ...analysis.sourceRefs])
   ]).map((ref) => ({ ref, kind: "requirement" as const }));

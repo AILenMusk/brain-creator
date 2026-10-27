@@ -448,6 +448,33 @@ describe("RequirementAnalysisHostHarness", () => {
     expect(fixture.repository.brainTasks[0].state).toBe("waiting-provider");
   });
 
+  it("rejects host output if the frozen source body shifts to a different file line offset", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) => `Rule ${index + 1}: ${"x".repeat(40)}`).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1100);
+    const directory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "source.md");
+    const prefix = "---\nsource_id: req-source\n---\n\n# Order approval\n\n";
+    await writeFile(path, `${prefix}${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    expect(mapper.task.contextPack!.references.some((item) => item.ref.includes(":line-offset:"))).toBe(true);
+
+    await writeFile(path, `---\nsource_id: req-source\n---\n\n# Added metadata line\n\n# Order approval\n\n${source.content}`, "utf8");
+
+    await expect(coordinator.submit({ taskId: mapper.task.id, output: documentMap() })).rejects.toThrow(
+      "Frozen requirement source snapshot changed or is unavailable"
+    );
+    expect(fixture.repository.brainTasks).toHaveLength(1);
+    expect(fixture.repository.brainTasks[0].state).toBe("waiting-provider");
+  });
+
   it("pins complete structured stage outputs when they cannot fit with confirmed attachments", async () => {
     const fixture = await createFixture();
     const source = fixture.repository.requirementSources[0];
