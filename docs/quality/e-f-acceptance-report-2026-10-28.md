@@ -14,11 +14,13 @@ The user confirmed the source is the formal release. `lark-cli` revalidation ret
 
 ## Brain Creator Trial Store findings
 
-The PR #187 source process was started with `BRAIN_CREATOR_WORKSPACE` isolated to `trust-closure-main`, then queried through the Brain Creator Facade. Runtime identity was package `2.1.1`, commit `ebac2c4ac5b4dd1beb911b580b66974b422d7e22`, schema 21, `dirty=false`, `builtAt=unknown`, Provider `codex`. This identifies the candidate MCP process, not an installed host process.
+The PR #187 source process was started with `BRAIN_CREATOR_WORKSPACE` isolated to `trust-closure-main`, then queried through the Brain Creator Facade. The latest identity read was package `2.1.1`, code commit `3d221503af58c28e4f6852e2a22e11da03b4f198`, build ID `0dc2e5c2decbf6580ebe409dbed53c04a8185636bdffeb3f315245a857637968`, schema 21, `dirty=false`, Provider `codex`, PID 34572, started at `2026-10-27T18:40:17.834Z`, with workspace `trust-closure-main`. This identifies the isolated source MCP process, not an installed host process.
 
-The project `knowledgeProject_o3mtvnlm` is bound to the Test5 profile `system_nny1q7wk`. RequirementSet v3 is `draft` and its evaluation gate is `blocked`: 31 actions total (2 confirmed, 2 blocked, 27 pending), 44 open high-severity Gaps, and 55 Stage Eval records (10 current, 45 stale). EvaluationTrial count is **0**.
+The project `knowledgeProject_o3mtvnlm` is bound to the Test5 profile `system_nny1q7wk`. RequirementSet v3 is `draft` and its evaluation gate is `blocked`: 31 actions total (3 confirmed, 2 blocked, 26 pending), 44 open high-severity Gaps, and 55 Stage Eval records (10 current, 45 stale). EvaluationTrial count is **0**.
 
 The system-scoped projection contains 180 BusinessScenarios: 16 draft and 164 stale. None maps to a frozen `GHR-*` ID. All 180 Scenario Assurance records are `unknown`, with missing system binding and limited Oracle; test-data readiness is blocked for 34 and ready for 146. These records cannot establish the fixed 28 as executable or passed. The prior 288-record projection was not reproduced against this exact Store and must not be mixed with it.
+
+A fresh read-only `bc_status` reports `nextAction=revise_blocked_requirement`, 44 open Gaps, `TestData Provider=not-configured`, and automatic postcondition verification `not-configured`. It also exposes `brainTask_knwg0rvb` waiting for approval against older RequirementSet `requirementSet_hxbgqxwh`, while the current set is `requirementSet_kxl74yef`; this stale-task linkage is unresolved and is not Trial readiness. The user-confirmed `流程管理员` exclusion was recorded against Eval action `evalAction_qt9zb8so`; the gate remains blocked with 3 confirmed, 26 pending, and 2 blocked actions. A process-attachment confirmation and missing-process-coverage action remain blocked, so this confirmation did not approve the baseline.
 
 The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`. A fresh Brain Creator Playwright auth verification redirected to the SSO login page and returned `BC_AUTH_VERIFICATION_FAILED`; `bc_status` then reported readiness blocked, `nextAction=reauthenticate_auth`, and zero verified auth profiles. No password was entered in this verification. `TestData Provider` and automatic postcondition verification remain `not-configured`.
 
@@ -26,6 +28,7 @@ The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`.
 
 - At verification, PR #187 was open/draft at candidate head `3d221503af58c28e4f6852e2a22e11da03b4f198`, based on `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`.
 - Exact-head GitHub CI run 500 passed on Node 20 and Node 22; Documentation run 210 passed. This includes the full test, typecheck, build, documentation, package-content, repository-hygiene, and fresh package-install checks. The PR remains unmerged, so the accepted mainline count stays 4/6.
+- The next documentation-only head `d39e2633f40be3432fe7da1c02f0361587aa21d6` also passed exact-head CI run 501 on Node 20/22 and Documentation run 211.
 - On the same candidate tree, local `npm test` passed 141 files / 1,207 tests; `npx tsc --noEmit`, `npm run build`, and `npm run docs:build` passed. Package contents passed at 177 entries / 1,713,163 bytes, and `npm run verify:package-install` passed in a fresh temporary business directory.
 - Candidate browser verification passed the order approval fixture 6/6, Brain Creator order fixture smoke, and Host Agent chain smoke. These use local synthetic fixtures or a stubbed host runner and do not contribute to real Test5 outcomes or migration results.
 - This report does not authorize npm publication. No package was published.
