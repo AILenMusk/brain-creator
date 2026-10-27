@@ -47,3 +47,9 @@ The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`.
 | EvaluationTrials | 0 |
 
 The next external input is clarification of whether the whitespace in the previously supplied password was literal. No altered-password retry will be made without that clarification. After authentication is restored, the approved baseline must still be mapped to all 28 IDs, role and route evidence must be verified, and an independent read-only postcondition query plus TestData Provider must be configured before the Trial can start. Any cleanup requires advance notice. Three separate real rounds are required; Beisen remains unverified until its system is provided.
+
+## Same-day source and candidate recheck
+
+- A fresh read-only `lark-cli docs +fetch` of the user-provided formal document still returns revision `2045`. The Wiki child listing still contains the same five source inputs; the process child remains revision `5` with no document outline content. No source content was edited.
+- GitHub currently reports PR #187 as open, draft, mergeable, and unmerged, based on `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9` at candidate head `c76837e7f14be9f49de863cfde7bd2325a01d22b`. Exact-head CI run `502` and Documentation run `212` both completed successfully.
+- This refresh revalidated source and candidate CI only. It did not create an EvaluationTrial or refresh the Brain Creator Store/AuthProfile, so the Store and Test5 readiness findings above retain their recorded observation time and still block E.
