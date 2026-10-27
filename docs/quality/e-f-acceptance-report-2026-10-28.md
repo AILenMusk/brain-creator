@@ -24,9 +24,10 @@ The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`.
 
 ## F engineering evidence
 
-- PR #187 remains open/draft at `ebac2c4ac5b4dd1beb911b580b66974b422d7e22`, based on current `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`.
-- Exact-head GitHub CI run 498 passed on Node 20 and Node 22; Documentation run 208 passed. The CI includes the full test, typecheck, build, documentation, package-content, repository-hygiene, and fresh package-install checks.
-- Candidate order-browser and Brain Creator order-fixture checks are synthetic controls only. They do not contribute to Test5 outcomes or real-system migration results.
+- At verification, PR #187 was open/draft at candidate head `3d221503af58c28e4f6852e2a22e11da03b4f198`, based on `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`.
+- Exact-head GitHub CI run 500 passed on Node 20 and Node 22; Documentation run 210 passed. This includes the full test, typecheck, build, documentation, package-content, repository-hygiene, and fresh package-install checks. The PR remains unmerged, so the accepted mainline count stays 4/6.
+- On the same candidate tree, local `npm test` passed 141 files / 1,207 tests; `npx tsc --noEmit`, `npm run build`, and `npm run docs:build` passed. Package contents passed at 177 entries / 1,713,163 bytes, and `npm run verify:package-install` passed in a fresh temporary business directory.
+- Candidate browser verification passed the order approval fixture 6/6, Brain Creator order fixture smoke, and Host Agent chain smoke. These use local synthetic fixtures or a stubbed host runner and do not contribute to real Test5 outcomes or migration results.
 - This report does not authorize npm publication. No package was published.
 
 ## Metrics and remaining gates
