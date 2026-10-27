@@ -1,43 +1,47 @@
 # E/F Acceptance Report — 2026-10-28
 
-## Acceptance result
+## Acceptance verdict
 
-- **E — real business evaluation: blocked.** No EvaluationTrial has been created and no business outcome has independent Test5 postcondition evidence. The approved denominator remains **28**; real business completion is **0/28**.
-- **F — review and delivery: partial.** Candidate engineering checks pass, and this report records the latest source, Store, and auth evidence. Real baseline comparison, human result labels, and business accuracy metrics remain unmeasured.
-- **Mainline implementation acceptance: 4/6.** This is the latest accepted count on `origin/main`; PR #187 is still open/draft and does not change that count.
+- **E — real business evaluation: blocked.** The fixed Test5 Group/GHR denominator is 28 outcomes. No EvaluationTrial or independently verified business outcome exists, so the evidence-backed result is **0/28**.
+- **F — review and delivery: partial.** Candidate engineering and documentation checks are recorded below, and the current Trial state is refreshed through Brain Creator Facade. Real baseline comparison, human outcome labels, and business accuracy metrics are still unmeasured.
+- **Implementation acceptance: 4/6 on the selected mainline.** PR #187 is still Draft, open, and unmerged. Candidate changes do not change the mainline count until merge and post-merge checks.
+- Synthetic fixture results are kept separate from real Test5 results. No npm package was published.
 
-## Fixed scope and source
+## Frozen scope and source
 
-The user-approved Trial scope remains the 28 local Test5 Group/GHR outcomes listed in `Test5 Review Paths`. The six Offer transitions that write to OEHR and the Beisen cross-system path remain outside executable scope. Beisen remains an external dependency pending a second real system and separate scenario authorization. The user clarified that the diagram's no-approval branch is `流程管理员` (not `编制管理员`) and may be excluded from this acceptance. The HSSC system-administrator branch and other unlabeled A07 conditions remain unresolved within `GHR-STAFF-01`; they do not reduce the denominator.
+The user-approved fixed denominator is the 28 local Test5 Group/GHR outcomes in the Test5 Review Paths inventory. Blocked and unexecuted outcomes stay in the denominator. Six Offer transitions with OEHR side effects are excluded from local execution. Beisen remains a separate cross-system requirement, blocked until a second real system is available and separately authorized.
 
-The user confirmed the source is the formal release. `lark-cli` revalidation returned main document revision 2045, process child revision 5, and workbook revisions 154, 607, 175, 62, and 50. The pinned source set remains current. The current RequirementSet v3 is `requirementSet_kxl74yef` from source `requirementSource_8dk46kq4`, with content hash `583d1a7647f59f7deccdbf076fca7823e925aea87e662a05dce2163f5095f217`.
+The formal Feishu source set remains the main document revision 2045, process child revision 5, and workbook revisions 154, 607, 175, 62, and 50. The source labels itself formally released; its cover version field remains “待定”. Current RequirementSet v3 is requirementSet_kxl74yef, sourced from requirementSource_8dk46kq4 with content hash 583d1a7647f59f7deccdbf076fca7823e925aea87e662a05dce2163f5095f217.
 
-## Brain Creator Trial Store findings
+The user selected Test5’s current page configuration as the route Oracle. The latest clarification confirms the no-approval branch is 流程管理员, not 编制管理员, and excludes that branch from this acceptance. Brain Creator recorded this decision as evalAction_tdn0a7kp. The same note explicitly leaves the HSSC system-administrator branch and other unlabeled A07 conditions unresolved. The live Test5 configuration has not yet been read in a valid session, so the route Oracle is selected but not independently verified.
 
-The PR #187 source process was started with `BRAIN_CREATOR_WORKSPACE` isolated to `trust-closure-main`, then queried through the Brain Creator Facade. The latest identity read was package `2.1.1`, code commit `3d221503af58c28e4f6852e2a22e11da03b4f198`, build ID `0dc2e5c2decbf6580ebe409dbed53c04a8185636bdffeb3f315245a857637968`, schema 21, `dirty=false`, Provider `codex`, PID 34572, started at `2026-10-27T18:40:17.834Z`, with workspace `trust-closure-main`. This identifies the isolated source MCP process, not an installed host process.
+The six approved attachment transcriptions remain analysis inputs. A04 and A07 remain drafts. Five attachment-analysis references are still uncovered in the current Requirement Eval coverage.
 
-The project `knowledgeProject_o3mtvnlm` is bound to the Test5 profile `system_nny1q7wk`. RequirementSet v3 is `draft` and its evaluation gate is `blocked`: 31 actions total (3 confirmed, 2 blocked, 26 pending), 44 open high-severity Gaps, and 55 Stage Eval records (10 current, 45 stale). EvaluationTrial count is **0**.
+## Current Brain Creator evidence
 
-The system-scoped projection contains 180 BusinessScenarios: 16 draft and 164 stale. None maps to a frozen `GHR-*` ID. All 180 Scenario Assurance records are `unknown`, with missing system binding and limited Oracle; test-data readiness is blocked for 34 and ready for 146. These records cannot establish the fixed 28 as executable or passed. The prior 288-record projection was not reproduced against this exact Store and must not be mixed with it.
+A fresh Brain Creator Facade process from candidate commit 02d490b6701005b2047b6722f098effbe2d74336 reported package 2.1.1, build ID source:02d490b6701005b2047b6722f098effbe2d74336, schema 21, dirty=false, provider codex, and the isolated workspace trust-closure-main. This is a source MCP identity, not an installed host MCP identity.
 
-A fresh read-only `bc_status` reports `nextAction=revise_blocked_requirement`, 44 open Gaps, `TestData Provider=not-configured`, and automatic postcondition verification `not-configured`. It also exposes `brainTask_knwg0rvb` waiting for approval against older RequirementSet `requirementSet_hxbgqxwh`, while the current set is `requirementSet_kxl74yef`; this stale-task linkage is unresolved and is not Trial readiness. The user-confirmed `流程管理员` exclusion was recorded against Eval action `evalAction_qt9zb8so`; the gate remains blocked with 3 confirmed, 26 pending, and 2 blocked actions. A process-attachment confirmation and missing-process-coverage action remain blocked, so this confirmation did not approve the baseline.
+The current RequirementSet is still draft and its gate is blocked: 35 Eval actions total, with 1 confirmed, 30 pending, and 4 blocked. Coverage is 266/271 clauses; the five remaining references are attachment-analysis clauses. The 10 current Stage Eval records contain 8 passes and 2 blocked results. The Gate is not baseline approval.
 
-The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`. A fresh Brain Creator Playwright auth verification redirected to the SSO login page and returned `BC_AUTH_VERIFICATION_FAILED`; `bc_status` then reported readiness blocked, `nextAction=reauthenticate_auth`, and zero verified auth profiles. No password was entered in this verification. `TestData Provider` and automatic postcondition verification remain `not-configured`.
+The latest project Gap review returns 64 high-severity Gaps: 60 open and 4 resolved. The current status still exposes brainTask_knwg0rvb waiting for approval against superseded RequirementSet v2 requirementSet_hxbgqxwh while v3 is current.
+
+The Test5 system is system_nny1q7wk at https://test5-ghr.eminxing.com/index. AuthProfile auth_onb5ja03 is failed; its last recorded verification at 2026-10-27T16:03:37.443Z redirected to the SSO login page. The current system next action is reauthenticate_auth. TestData Provider is not-configured. No EvaluationTrial exists.
+
+Brain Creator’s current system-scoped projection contains 180 BusinessScenarios: 179 stale and 1 draft. None maps to a frozen GHR outcome ID. Scenario Assurance blocks all 180 for missing system binding and limited Oracle. These draft/stale projections do not make any of the 28 outcomes executable or passed.
 
 ## F engineering evidence
 
-- At verification, PR #187 was open/draft at candidate head `3d221503af58c28e4f6852e2a22e11da03b4f198`, based on `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`.
-- Exact-head GitHub CI run 500 passed on Node 20 and Node 22; Documentation run 210 passed. This includes the full test, typecheck, build, documentation, package-content, repository-hygiene, and fresh package-install checks. The PR remains unmerged, so the accepted mainline count stays 4/6.
-- The next documentation-only head `d39e2633f40be3432fe7da1c02f0361587aa21d6` also passed exact-head CI run 501 on Node 20/22 and Documentation run 211.
-- On the same candidate tree, local `npm test` passed 141 files / 1,207 tests; `npx tsc --noEmit`, `npm run build`, and `npm run docs:build` passed. Package contents passed at 177 entries / 1,713,163 bytes, and `npm run verify:package-install` passed in a fresh temporary business directory.
-- Candidate browser verification passed the order approval fixture 6/6, Brain Creator order fixture smoke, and Host Agent chain smoke. These use local synthetic fixtures or a stubbed host runner and do not contribute to real Test5 outcomes or migration results.
-- This report does not authorize npm publication. No package was published.
+- Mainline origin/main is eedc217d41b631815ca32d0142a3e4dfe26399d9. PR #187 is open, Draft, mergeable, and unmerged at candidate head 02d490b6701005b2047b6722f098effbe2d74336.
+- Exact-head CI run 504 passed on Node 20 and Node 22; Documentation run 214 passed for commit 02d490b6701005b2047b6722f098effbe2d74336. The report-only edits made after that head passed a local documentation build and git diff check; exact-head workflows will rerun after this update is pushed.
+- The candidate code tree at 3d221503af58c28e4f6852e2a22e11da03b4f198 passed 141 test files / 1,207 tests, TypeScript checking, build, documentation build, package-content verification (177 entries / 1,713,163 bytes), fresh package installation, and synthetic order/host-agent smoke checks.
+- The latest documentation-only head passed local docs build and git diff validation. Synthetic order approval passed 6/6; it does not count toward Test5 outcomes or cross-system migration.
+- The PR remains unmerged. No post-merge installation verification has occurred.
 
-## Metrics and remaining gates
+## Metrics
 
 | Measure | Current result |
 |---|---:|
-| Accepted implementation packages | 4/6 |
+| Accepted implementation packages on mainline | 4/6 |
 | Real Test5 outcomes with independent evidence | 0/28 |
 | Autonomous real outcomes | 未测量 |
 | Business verification rate | 未测量 |
@@ -46,19 +50,14 @@ The saved Test5 AuthProfile last reported success at `2026-10-27T16:03:37.443Z`.
 | Real false-positive / false-negative rate | 未测量 |
 | EvaluationTrials | 0 |
 
-The next external input is clarification of whether the whitespace in the previously supplied password was literal. No altered-password retry will be made without that clarification. After authentication is restored, the approved baseline must still be mapped to all 28 IDs, role and route evidence must be verified, and an independent read-only postcondition query plus TestData Provider must be configured before the Trial can start. Any cleanup requires advance notice. Three separate real rounds are required; Beisen remains unverified until its system is provided.
+## Remaining acceptance gates
 
-## Same-day source and candidate recheck
+1. Resolve the pending password-whitespace question without reposting the secret, then verify a fresh Test5 login through Brain Creator.
+2. Read the current Test5 route and role evidence in that session; reconcile the HSSC/A07 branches while keeping the 流程管理员 exclusion out of scope.
+3. Map each of the 28 frozen outcome IDs to a reviewed BusinessScenario, requirement source, role/path, data plan, structured Oracle, and independent postcondition query. The current 180 scenario records do not satisfy this mapping.
+4. Configure and validate the TestData Provider and independent read-only postcondition verification before any Trial.
+5. Close Requirement Eval blockers, review the design, and approve the baseline only after the gates pass.
+6. Run three separate real rounds with fresh run identities and evidence. Preserve every blocked, failed, and unexecuted outcome. Announce any cleanup in advance; no cleanup has occurred.
+7. Complete F’s real-data comparison and human business annotations after the rounds, then finish merge and post-merge install/report/host verification. npm publication remains a separate authorization.
 
-- A fresh read-only `lark-cli docs +fetch` of the user-provided formal document still returns revision `2045`. The Wiki child listing still contains the same five source inputs; the process child remains revision `5` with no document outline content. No source content was edited.
-- GitHub currently reports PR #187 as open, draft, mergeable, and unmerged, based on `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9` at candidate head `c76837e7f14be9f49de863cfde7bd2325a01d22b`. Exact-head CI run `502` and Documentation run `212` both completed successfully.
-- This refresh revalidated source and candidate CI only. It did not create an EvaluationTrial or refresh the Brain Creator Store/AuthProfile, so the Store and Test5 readiness findings above retain their recorded observation time and still block E.
-
-## Brain Creator Facade readiness recheck
-
-Read-only Facade calls (`bc_status`, `bc_review`, and a `bc_prepare action=confirm-eval-actions confirm=false` preview) refreshed the Trial workspace without approving or changing the baseline. The source MCP identity was package `2.1.1`, code commit `3d221503af58c28e4f6852e2a22e11da03b4f198`, build ID `0dc2e5c2decbf6580ebe409dbed53c04a8185636bdffeb3f315245a857637968`, schema 21, `dirty=false`, provider `codex`, with workspace `.worktrees/trust-closure-main`.
-
-- The current RequirementSet is `requirementSet_kxl74yef` v3, `draft`; its gate is `blocked`, with 31 actions (3 confirmed, 26 pending, 2 blocked), 255/260 clauses covered, and five uncovered attachment-analysis references. The current action preview keeps `evalAction_7yh0d0uh` (unconfirmed process evidence) and `evalAction_bsbuhlui` (missing process coverage) blocked. The user's `流程管理员` exclusion remains confirmed.
-- System `system_nny1q7wk` is the selected Test5 GHR system. Its current AuthProfile `auth_onb5ja03` is `failed`; the last verification redirected to login. `TestData Provider` and automatic postcondition verification remain `not-configured`.
-- System-scoped Brain Creator review returns 180 scenarios (16 draft, 164 stale) and 180 Scenario Assurance records, all `blocked`, with missing system binding and `limited` Oracle. `bc_review target=evaluation-trial` returns 0 total, active, invalidated, or completed trials. Gap review returns 48 high-severity Gaps: 44 open and 4 resolved.
-- `bc_status` still recommends `revise_blocked_requirement` and exposes `brainTask_knwg0rvb` waiting for approval against superseded RequirementSet v2 `requirementSet_hxbgqxwh`, while v3 is current. This stale task remains unresolved; no Trial, business write, cleanup, or baseline approval was performed.
+**Current conclusion:** E has not passed. F has produced a current, source-backed acceptance report but remains partial. The remaining limits are explicit blockers, not measured failures or synthetic passes.
