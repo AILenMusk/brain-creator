@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { BrainEvalResult, BrainTask, BrainContextPack, StageEvalRecord } from "../brain/types.js";
 import type { HarnessRuntime } from "../brain/harness.js";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
@@ -127,6 +127,15 @@ type StageOutputs = Partial<{
   "coverage-critic": CoverageCriticOutput;
 }>;
 
+type VerifiedSourceSnapshot = {
+  path: string;
+  bodySha256: string;
+  lineOffset: number;
+  lineCount: number;
+};
+
+type StructuredOutputSnapshot = { path: string; sha256: string };
+
 export const REQUIREMENT_HOST_HARNESS_STAGES: readonly RequirementHarnessStage[] = [
   "document-mapper",
   "clause-analyst",
@@ -227,6 +236,31 @@ export class RequirementAnalysisHostHarness {
     }
     if (task.state !== "waiting-provider") {
       throw new Error(`Requirement Host Harness task is not waiting for output: ${task.state}`);
+    }
+    const sourceSnapshotReference = task.contextPack?.references.find((reference) => reference.ref.startsWith("source-snapshot:"));
+    if (sourceSnapshotReference || task.contextPack?.content.includes("[Complete frozen requirement source is in the verified local file below;")) {
+      const requirementSet = this.requirementSet(task.requirementSetId!);
+      const source = this.repository.requirementSources.find((item) => item.id === requirementSet.sourceId);
+      const prefix = `source-snapshot:${requirementSet.sourceId}:sha256:`;
+      const pinned = sourceSnapshotReference?.ref.startsWith(prefix) ? sourceSnapshotReference.ref.slice(prefix.length) : undefined;
+      const snapshot = source && await this.verifiedSourceSnapshot(requirementSet.id, source.content);
+      if (!pinned || !/^[a-f0-9]{64}$/.test(pinned) || !snapshot || snapshot.bodySha256 !== pinned) {
+        throw new Error("Frozen requirement source snapshot changed or is unavailable; restart analysis with the current source");
+      }
+    }
+    const structuredSnapshotReference = task.contextPack?.references.find((reference) => reference.ref.startsWith("structured-output-snapshot:sha256:"));
+    if (structuredSnapshotReference || task.contextPack?.content.includes("[Complete structured stage outputs are in the verified local file below;")) {
+      const prefix = "structured-output-snapshot:sha256:";
+      const pinned = structuredSnapshotReference?.ref.slice(prefix.length);
+      if (!pinned || !/^[a-f0-9]{64}$/.test(pinned) || !task.sessionId) {
+        throw new Error("Structured requirement output snapshot is unavailable; restart analysis");
+      }
+      const path = this.structuredSnapshotPath(task.requirementSetId!, task.sessionId, pinned);
+      const current = serializeStageOutputs(await this.readStageOutputs(task.sessionId));
+      const stored = await readFile(path, "utf8").catch(() => undefined);
+      if (stored === undefined || createHash("sha256").update(stored).digest("hex") !== pinned || stored !== current) {
+        throw new Error("Structured requirement output snapshot changed or is unavailable; restart analysis");
+      }
     }
     const stage = stageFromTask(task);
     const validation = validateStageOutput(stage, input.output, this.allowedSourceRefs(task.requirementSetId!));
@@ -335,9 +369,11 @@ export class RequirementAnalysisHostHarness {
     const source = this.repository.requirementSources.find((item) => item.id === requirementSet.sourceId)!;
     const outputs = await this.readStageOutputs(sessionId);
     if (stageOutput) outputs[stageOutput.stage] = stageOutput.output as never;
+    const sourceSnapshot = await this.verifiedSourceSnapshot(requirementSet.id, source.content);
+    const structuredSnapshot = await this.writeStructuredSnapshot(requirementSet.id, sessionId, outputs);
     const contextPack = buildContextPack(stage, requirementSet.id, source, this.repository.attachmentAnalyses.filter(
       (analysis) => analysis.requirementSetId === requirementSetId && analysis.status === "confirmed"
-    ), outputs);
+    ), outputs, sourceSnapshot, structuredSnapshot);
     const task = this.harness.startDeferredTask({
       brain: "requirement",
       operation: `requirement-analysis:${stage}`,
@@ -381,6 +417,8 @@ export class RequirementAnalysisHostHarness {
   ) {
     const requirementSet = this.requirementSet(requirementSetId);
     const outputs = await this.readStageOutputs(sessionId);
+    const sourceSnapshot = await this.verifiedSourceSnapshot(requirementSet.id, source.content);
+    const structuredSnapshot = await this.writeStructuredSnapshot(requirementSet.id, sessionId, outputs);
     const contextPack = buildContextPack(
       stage,
       requirementSetId,
@@ -388,7 +426,9 @@ export class RequirementAnalysisHostHarness {
       this.repository.attachmentAnalyses.filter(
         (analysis) => analysis.requirementSetId === requirementSetId && analysis.status === "confirmed"
       ),
-      outputs
+      outputs,
+      sourceSnapshot,
+      structuredSnapshot
     );
     const task = this.harness.createTask({
       brain: "requirement",
@@ -507,6 +547,50 @@ export class RequirementAnalysisHostHarness {
       outputs[stage] = JSON.parse(await readFile(path, "utf8")) as never;
     }
     return outputs;
+  }
+
+  private structuredSnapshotPath(requirementSetId: string, sessionId: string, sha256: string) {
+    const requirementSet = this.requirementSet(requirementSetId);
+    const project = this.repository.knowledgeProjects.find((item) => item.id === requirementSet.knowledgeProjectId);
+    if (!project) throw new Error("Knowledge project for requirement source not found");
+    return join(this.knowledgeDir, project.key, "requirements", requirementSet.id, "host-harness", sessionId, `structured-${sha256}.json`);
+  }
+
+  private async writeStructuredSnapshot(requirementSetId: string, sessionId: string, outputs: StageOutputs): Promise<StructuredOutputSnapshot | undefined> {
+    if (STAGES.every((stage) => outputs[stage] === undefined)) return undefined;
+    const content = serializeStageOutputs(outputs);
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const path = this.structuredSnapshotPath(requirementSetId, sessionId, sha256);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content, "utf8");
+    return { path, sha256 };
+  }
+
+  private async verifiedSourceSnapshot(requirementSetId: string, content: string): Promise<VerifiedSourceSnapshot | undefined> {
+    const requirementSet = this.requirementSet(requirementSetId);
+    const project = this.repository.knowledgeProjects.find((item) => item.id === requirementSet.knowledgeProjectId);
+    if (!project) throw new Error("Knowledge project for requirement source not found");
+    const path = join(this.knowledgeDir, project.key, "requirements", requirementSet.id, "source.md");
+    let file: string;
+    try {
+      file = await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    if (!file.endsWith(content)) {
+      throw new Error("Frozen requirement source file differs from the current RequirementSet content");
+    }
+    const prefix = file.slice(0, file.length - content.length);
+    if (!prefix.endsWith("\n")) {
+      throw new Error("Frozen requirement source file has no separate source body");
+    }
+    return {
+      path,
+      bodySha256: createHash("sha256").update(content).digest("hex"),
+      lineOffset: (prefix.match(/\n/g) ?? []).length,
+      lineCount: content.split(/\r?\n/).length
+    };
   }
 
   private assembleResult(
@@ -667,6 +751,10 @@ export class RequirementAnalysisHostHarness {
   }
 }
 
+function serializeStageOutputs(outputs: StageOutputs) {
+  return JSON.stringify(Object.fromEntries(STAGES.filter((stage) => outputs[stage] !== undefined).map((stage) => [stage, outputs[stage]])));
+}
+
 function buildContextPack(
   stage: RequirementHarnessStage,
   requirementSetId: string,
@@ -678,7 +766,9 @@ function buildContextPack(
     attachments: Array<{ id?: string; name: string; status?: string }>;
   },
   attachmentAnalyses: Array<{ id: string; kind: string; markdown: string; nodes: unknown[]; edges: unknown[]; sourceRefs: string[] }>,
-  outputs: StageOutputs
+  outputs: StageOutputs,
+  sourceSnapshot?: VerifiedSourceSnapshot,
+  structuredSnapshot?: StructuredOutputSnapshot
 ): BrainContextPack {
   const sourceLines = source.content.split(/\r?\n/).map((line, index) => ({
     ref: `source:${source.id}#line:${index + 1}`,
@@ -717,7 +807,15 @@ function buildContextPack(
         sourceRefPrefix: blockRefPrefix,
         blocks: source.blocks.map((block) => compactRequirementBlock(block, source.id, blockRefPrefix))
       });
-  const fixed = [
+  const sourcePointer = sourceSnapshot ? [
+    "[Complete frozen requirement source is in the verified local file below; inline source lines exceed this task's context budget.]",
+    `Source file: ${JSON.stringify(sourceSnapshot.path)}`,
+    `Source body SHA-256: ${sourceSnapshot.bodySha256}`,
+    `Source body starts at file line ${sourceSnapshot.lineOffset + 1} and contains ${sourceSnapshot.lineCount} lines.`,
+    `Verify the source body SHA-256 and read the complete body in bounded line ranges before producing this stage. Map source:${source.id}#line:<n> to file line ${sourceSnapshot.lineOffset}+<n>.`,
+    "Cite the exact source:<id>#line:<n> anchors from task references. Do not infer a missing line from this pointer."
+  ].join("\n") : undefined;
+  const fixedContent = (structuredContent: string) => [
     `Requirement: ${source.title}`,
     `Stage: ${stage}`,
     "Confirmed attachment evidence:",
@@ -725,11 +823,22 @@ function buildContextPack(
     "Document block AST:",
     documentBlocks,
     "Structured outputs from completed independent stages:",
-    structured,
+    structuredContent,
     ...(structuredRefPrefix
       ? [`Structured source reference encoding: #line:<n> means source:${source.id}#line:<n>; full anchors remain in the task references.`]
       : [])
   ].join("\n");
+  let fixed = fixedContent(structured);
+  let usedStructuredSnapshot = false;
+  if (structuredSnapshot && fixed.length + 160 + (sourcePointer?.length ?? 32) > MAX_CONTEXT_CHARS) {
+    fixed = fixedContent([
+      "[Complete structured stage outputs are in the verified local file below; inline outputs exceed this task's context budget.]",
+      `Structured outputs file: ${JSON.stringify(structuredSnapshot.path)}`,
+      `Structured outputs SHA-256: ${structuredSnapshot.sha256}`,
+      "Verify the file SHA-256 and read the complete JSON in bounded ranges. Preserve the exact source references in those outputs."
+    ].join("\n"));
+    usedStructuredSnapshot = true;
+  }
   if (fixed.length + 32 > MAX_CONTEXT_CHARS) {
     throw new Error(
       "Structured requirement context exceeds the Harness budget; key flows and sourceRefs will not be silently truncated"
@@ -752,21 +861,33 @@ function buildContextPack(
   });
   let sourceContentLines = formatSourceLines(320);
   let fullSource = sourceContentLines.join("\n");
-  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget) {
+  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget && !sourceSnapshot) {
     sourceContentLines = formatSourceLines(100);
     fullSource = sourceContentLines.join("\n");
   }
   const hasSourceExcerpts = selectedSourceLines.some((line) => line.content.length - line.ref.length - 1 > 320);
-  const truncated = fullSource.length > sourceBudget || selectedSourceLines.length < sourceLines.length || hasSourceExcerpts;
+  const truncated = usedStructuredSnapshot || fullSource.length > sourceBudget || selectedSourceLines.length < sourceLines.length || hasSourceExcerpts;
   if (citedSourceRefs.size > 0 && selectedSourceLines.length < citedSourceRefs.size) {
     throw new Error("Structured requirement output references source lines that are unavailable in the frozen source");
   }
-  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget) {
+  if (citedSourceRefs.size > 0 && fullSource.length > sourceBudget && !sourceSnapshot) {
     throw new Error(`Cited requirement source lines exceed the Harness budget (${fullSource.length} > ${sourceBudget}; fixed context ${fixed.length}); source evidence will not be silently truncated`);
   }
   let sourceContent: string;
+  const sourceFileReference = () => {
+    if (!sourceSnapshot) {
+      throw new Error("Source line references exceed the Harness budget; source evidence will not be silently dropped");
+    }
+    const reference = sourcePointer!;
+    if (reference.length > sourceBudget) {
+      throw new Error("Verified requirement source file reference exceeds the Harness budget");
+    }
+    return reference;
+  };
   if (fullSource.length <= sourceBudget) {
     sourceContent = fullSource;
+  } else if (sourceSnapshot) {
+    sourceContent = sourceFileReference();
   } else if (citedSourceRefs.size === 0) {
     const excerptNotice = "[source lines excerpted; full requirement remains pinned by references]";
     const anchorNotice = `Source line labels L<n> map to source:${source.id}#line:<n>; exact anchors are listed in references.`;
@@ -791,6 +912,8 @@ function buildContextPack(
   const references = unique([
     ...sourceLines.map((line) => line.ref),
     ...blockSourceRefs,
+    ...(sourceSnapshot ? [`source-snapshot:${source.id}:sha256:${sourceSnapshot.bodySha256}`] : []),
+    ...(structuredSnapshot ? [`structured-output-snapshot:sha256:${structuredSnapshot.sha256}`] : []),
     ...attachmentAnalyses.flatMap((analysis) => [`attachment-analysis:${analysis.id}`, ...analysis.sourceRefs])
   ]).map((ref) => ({ ref, kind: "requirement" as const }));
   return {

@@ -12,7 +12,7 @@ export type AuthStateCaptureInput = {
   system: SystemProfile;
   authProfile: AuthProfile;
   service: Pick<BrainCreatorService, "getCaptureAuth" | "setAuthStorageStatePath" | "verifyAuthProfile">;
-  waitForManualLogin: () => Promise<void>;
+  waitForManualLogin: (page: Page) => Promise<void>;
   launchBrowser?: () => Promise<Browser>;
   verifyAuth?: typeof verifyStoredBrowserAuth;
 };
@@ -24,7 +24,7 @@ export async function captureAuthState(input: AuthStateCaptureInput) {
   const allowedOrigins = new Set(
     [input.system.baseUrl, ...input.system.urlAllowlist].map((value) => allowedHttpOrigin(value))
   );
-  const configuredPath = input.service.getCaptureAuth(input.authProfile.id)?.secrets.storageStatePath;
+  const configuredPath = input.service.getCaptureAuth(input.authProfile.id, input.workDir)?.secrets.storageStatePath;
   const relativePath = configuredPath ?? join(
     ".brain-creator",
     "auth",
@@ -63,7 +63,7 @@ export async function captureAuthState(input: AuthStateCaptureInput) {
       throw new Error("Authentication capture navigated outside the configured system allowlist");
     }
 
-    await input.waitForManualLogin();
+    await input.waitForManualLogin(page);
 
     const finalUrl = page.url();
     if (!isAllowedOrigin(finalUrl, allowedOrigins)) {
@@ -89,7 +89,7 @@ export async function captureAuthState(input: AuthStateCaptureInput) {
     destinationCommitted = true;
     await chmod(destinationPath, 0o600).catch(() => undefined);
     const storedPath = relative(input.workDir, destinationPath).replace(/\\/g, "/");
-    input.service.setAuthStorageStatePath(input.authProfile.id, storedPath);
+    input.service.setAuthStorageStatePath(input.authProfile.id, storedPath, input.workDir);
     const profile = input.service.verifyAuthProfile(input.authProfile.id, {
       targetUrl: input.system.baseUrl,
       finalUrl: verification.finalUrl,

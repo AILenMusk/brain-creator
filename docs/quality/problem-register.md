@@ -11,6 +11,8 @@ Status meanings:
 - `open`: planned work has not reached its acceptance condition.
 - `deferred`: intentionally outside the current release objective.
 
+Candidate follow-up: requirement analysis can reference complete, hash-pinned source and prior-stage files when inline context is insufficient, and auth capture uses the selected workspace key. Tampered or unavailable snapshots fail closed. These changes do not by themselves close C1 or G1, establish a real business result, or change the formal package count.
+
 The focused regression sample for the remaining execution-quality partials is
 documented in [Real-system regression samples](real-system-regression.md) and
 implemented by `src/quality/realSystemRegression.test.ts`. It strengthens the

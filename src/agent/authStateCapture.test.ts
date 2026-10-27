@@ -29,6 +29,7 @@ describe("manual browser auth capture", () => {
       "https://ghr.example.test/index",
       { waitUntil: "domcontentloaded", timeout: 30_000 }
     );
+    expect(fixture.waitForManualLogin).toHaveBeenCalledWith(fixture.page);
     expect(fixture.context.storageState).toHaveBeenCalledOnce();
     expect(fixture.verifyAuth).toHaveBeenCalledWith(expect.objectContaining({
       targetUrl: fixture.system.baseUrl,
@@ -36,7 +37,8 @@ describe("manual browser auth capture", () => {
     }));
     expect(fixture.service.setAuthStorageStatePath).toHaveBeenCalledWith(
       fixture.authProfile.id,
-      expect.stringContaining(".brain-creator/auth/system_1/auth_1/storage-state.json")
+      expect.stringContaining(".brain-creator/auth/system_1/auth_1/storage-state.json"),
+      fixture.workDir
     );
     const stored = await readFile(join(fixture.workDir, ".brain-creator/auth/system_1/auth_1/storage-state.json"), "utf8");
     expect(stored).not.toContain("captured-session-secret");

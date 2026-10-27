@@ -1,5 +1,7 @@
 # Trust Convergence Delivery Register
 
+Candidate follow-up: large requirement analysis and target-workspace authentication capture have additional fixes under review. Formal acceptance remains **4/6** until the candidate is merged and passes post-merge checks; real business and autonomy results still require independently verified Trials. The detailed task-specific evidence remains in its isolated workspace.
+
 This register tracks the six-package business-closure plan. Implementation, real business completion, and autonomy are separate measurements. Completing a unit test does not count as a real business run.
 
 Current implementation base: origin/main at 62d7487dded6bb444eb9eb32ef6c4363fa3f3238 (PR #185, fast-forwarded from the initially selected ac03cd5 after confirming its changed files did not overlap this worktree's local changes). Read-only git ls-remote confirms origin/main remains 62d7487dded6bb444eb9eb32ef6c4363fa3f3238. Candidate PR branch codex/trust-closure-main; implementation commit b6e6d9ccb86646c60f67d1810bee71ee09da7532; acceptance-documentation CI was verified on documentation commit 90917c0dffbc34bb620c9e5ccbc1cdca0dadcc7b.
