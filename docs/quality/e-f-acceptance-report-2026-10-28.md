@@ -157,3 +157,27 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - Through Brain Creator's bounded `explore-system` entry, read-only exploration `exploration_jiuyja65` opened the Test5 role-matrix route with `interactionMode=off`, completed without warnings or Gaps, and captured PageModel `page_zedxmy2l` v2 with 27 locator points. No role configuration or business record was changed, and no export was performed.
 - The page evidence does not identify this logged-in account's role assignment or action-specific grants. Treat the user's statement that the account has the required permissions as authorization context, not as an independent grant verification.
 - Because System Brain has no confirmed baseline, the requested incremental exploration fell back to a one-page full exploration. The resulting snapshot `systemBrainSnapshot_wo4m5h81` remains `candidate`, and ChangeSet `systemBrainChangeSet_kqg3a5eq` remains `needs-review`; no scenario binding or workflow model was approved from this page. Current UI evidence still does not resolve the execution gates or change the 0/28 Trial result.
+
+## 2026-10-28 Latest E/F Acceptance Recheck
+
+### E — real business evaluation: blocked
+
+- The user-provided `hc招聘需求流程` URL and active published `Proc000019 v9` are accepted as the Test5 Group/GHR route Oracle. No further process URL or process-list clarification is required. The independent Playwright 404 is an automation-context capture limitation; it is not used as a binding.
+- Brain Creator reran the local route addendum as source `requirementSource_95yxkxqo`, SHA-256 `288aa69267711a9eaeb2a3a0a216381912a956fe9c02415e4031486327df02b1`, draft RequirementSet `requirementSet_oeesilyq` v1. It produced 37 draft TestIntents, 11 draft BusinessScenarios, and 3 draft TestDataProfiles. The 11 generated scenarios have no Scenario Assurance contracts and remain `draft`.
+- Coverage Critic/adjudicator verdict is `needs-review` (score 0.56); Brain Task `brainTask_15i54vgp` is `waiting-approval`. Findings include missing executable System Brain binding, unmapped grade branches, missing one-to-one mapping to the frozen 28 outcomes, and no independently verified demand/Offer/OA after-state. Formal RequirementSet `requirementSet_cc983dzk` v4 remains `draft`; the baseline has not been approved.
+- One clause-analysis attempt was rejected because two clauses used the unsupported `scope` kind; the corrected retry passed with valid clause kinds. The failed attempt remains in Brain Creator history.
+- Current `bc_status`: `revise_blocked_requirement`, 94 open project Gaps, TestData Provider `not-configured`, automatic postcondition verification `not-configured`. There are zero EvaluationTrials. CSV audit confirms 28/28 outcomes are `unmapped/not_executed`, with no scenario IDs or Trial IDs; independent real business evidence remains **0/28**. Autonomy, recovery, cleanup, and real business completion are **not measured**.
+- No Test5 business data was created, submitted, transferred, approved, closed, or cleaned up. Beisen remains an external dependency; OEHR-writing paths remain excluded from the local GHR Trial.
+
+### F — review and delivery: partial
+
+- `npm run verify:order-fixture` passed **6/6** isolated Playwright tests, including low/high amount paths, cross-role order reuse, finance rejection, closure, domain-neutrality, and process-restart reconciliation without replaying submit.
+- `npm run verify:order-brain-smoke` passed TC-ORD-001 and TC-ORD-002 against a temporary localhost order fixture. Both results are synthetic and contribute **0/28** Test5 outcomes. Its temporary workspace and report were removed by the smoke script after the run.
+- Exact candidate head `e75867764a202af28ab8bfaf0e70359766be01e4` passed CI #542 on Node 20 and 22, including tests, type check, build, docs build, package contents, repository hygiene, and installed-package verification. Documentation #252 passed. PR #187 remains Draft/open/unmerged against the user-selected `origin/main` baseline `eedc217d41b631815ca32d0142a3e4dfe26399d9`; no merge or npm publication occurred.
+- Mainline implementation acceptance remains **4/6**. E is blocked and F is partial. The successful order fixture and candidate CI do not replace the missing real Trial or post-merge acceptance.
+
+### Current next actions
+
+1. Resolve the draft's `needs-review` findings and map the fixed 28 outcomes one to one without removing skipped/blocked outcomes.
+2. Confirm executable System Brain bindings; configure TestData Provider and independent target postcondition verification.
+3. Approve the formal baseline only after it is reviewable and all approval gates pass, then perform the three real Test5 rounds with independent business-state evidence.

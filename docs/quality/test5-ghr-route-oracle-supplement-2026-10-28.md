@@ -10,7 +10,7 @@
 
 ## Test5 路由 Oracle
 
-用户确认，本轮 Test5 集团/GHR 的路由预期采用 Test5 页面当前配置的 `hc招聘需求流程`。若其与飞书主文档 revision 2045 或 `流程梳理` 子文档 revision 5 的图示不一致，本轮按 Test5 当前配置判定，同时保留差异；这项决定仅适用于 Test5 GHR，不改写通用需求。
+用户确认，本轮 Test5 集团/GHR 的路由 Oracle 采用页面当前配置的 `hc招聘需求流程`，对应已发布的 `Proc000019 v9`。飞书主文档 revision 2045 和 `流程梳理` 子文档 revision 5 中的图示仅作为候选需求分析输入，不作为 Test5 GHR 的预期路径。图示与 Test5 当前配置描述不同适用范围，不构成本地 GHR Trial 内两个相互冲突的预期；本补充仅适用于 Test5 GHR，不改写通用需求。
 
 现有系统观察记录 `knowledgeNode_lwkkjic2` 仅证明配置列表显示 `hc招聘需求流程`、ID `Proc000019`、状态“发布”、版本 v9；它没有证明节点条件或实际审批结果。宿主 Chrome 的只读页面观察 `knowledgeNode_d051ahq9` 记录了可见路线：
 
