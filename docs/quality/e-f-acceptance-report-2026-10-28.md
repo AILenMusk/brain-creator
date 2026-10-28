@@ -177,6 +177,13 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - Exact candidate head `e75867764a202af28ab8bfaf0e70359766be01e4` passed CI #542 on Node 20 and 22, including tests, type check, build, docs build, package contents, repository hygiene, and installed-package verification. Documentation #252 passed. PR #187 remains Draft/open/unmerged against the user-selected `origin/main` baseline `eedc217d41b631815ca32d0142a3e4dfe26399d9`; no merge or npm publication occurred.
 - Mainline implementation acceptance remains **4/6**. E is blocked and F is partial. The successful order fixture and candidate CI do not replace the missing real Trial or post-merge acceptance.
 
+### Additional current-candidate delivery checks (`aa5dd4a`)
+
+- `npm run verify:source-mcp-identity` passed from the exact source commit with package `2.1.1`, build ID `source:aa5dd4a865f78a5cd5efb233fa906d6ecc457de8`, `dirty=false`, a live child MCP PID, startup time, schema, host-agent provider, and the expected temporary workspace.
+- `npm run verify:source-workspace-isolation` passed, persisting its fixture system to an independent temporary sharded Store and leaving repository Store assets unchanged.
+- `npm run verify:package-install` passed in a fresh temporary business directory. It verified installed package/version and runtime identity, doctor CLI and MCP startup, recovery reconciliation without replaying a submitted action, terminal report links, and the hash-bound recovery artifact manifest. No package was published.
+- These checks plus CI #544 (Node 20/22, all steps successful) and Documentation #254 (success) are bound to candidate commit `aa5dd4a865f78a5cd5efb233fa906d6ecc457de8`. They remain candidate/local evidence; the PR is unmerged and no real Test5 Trial is evidenced.
+
 ### Current next actions
 
 1. Resolve the draft's `needs-review` findings and map the fixed 28 outcomes one to one without removing skipped/blocked outcomes.

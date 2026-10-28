@@ -2477,3 +2477,10 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - Re-ran `npm run verify:codex-native-entry` on the current candidate: requirement-first starter prompts, host-agent doctor guidance, `/bc help`, context-free `/bc status`, host-agent handoff, and isolated plugin installation from both source checkout and packed package passed.
 - Re-ran `npm run verify:host-agent-document-suite`: TC-001 and TC-002 passed in Playwright Chromium against the smoke's temporary localhost fixture. These are local/synthetic host-path results and count as zero Test5 business outcomes.
 - No Test5 page or record was accessed by these checks. Both scripts completed with exit code 0; no source code file was modified by the runs.
+
+## 2026-10-28 Source Identity and Package Recovery Smoke at `aa5dd4a`
+
+- `npm run verify:source-mcp-identity` passed with exact source commit `aa5dd4a865f78a5cd5efb233fa906d6ecc457de8`, package `2.1.1`, build ID `source:aa5dd4a865f78a5cd5efb233fa906d6ecc457de8`, `dirty=false`, current child MCP PID/start time, schema, `host-agent` provider, and an isolated temporary workspace.
+- `npm run verify:source-workspace-isolation` passed; the test system was persisted to its own temporary sharded Store, with source repository assets unchanged.
+- Fresh-directory `npm run verify:package-install` passed. The installed CLI, MCP, and doctor reported package/runtime identity; the smoke recovered sent actions without replay, produced a terminal report, and verified archived recovery evidence by hash. Nothing was published.
+- Exact-head CI #544 passed on Node 20 and 22, including tests, type check, build, docs, package contents, repository hygiene, and installed-package verification. Documentation #254 passed. These are candidate checks and do not count as mainline acceptance or Test5 business outcomes.
