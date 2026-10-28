@@ -2277,3 +2277,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - Refreshed `origin/main`; it remains `eedc217d41b631815ca32d0142a3e4dfe26399d9`. PR #188 is still open, draft, and mergeable, based on that SHA; its then-current head was `309d9bd6d34ebbdb975a9edbbb19215b4e9cec5e`. Remote CI run 566 and Documentation run 276 both completed successfully. GitHub returned no review submissions, inline threads, or combined-status contexts for that head.
 - On the candidate worktree containing the v6 draft record, `npm run docs:build` passed (with the existing large-chunk warning), `npm run verify:package-contents` passed with 178 entries / 1,734,119 bytes, and `npm run verify:package-install` passed in an isolated temporary directory using Brain Creator 2.1.1. These local checks do not imply merge or formal `N/6` acceptance.
 - The new v6 record and this ledger update are not yet part of the remote PR head at this point in the audit. No merge or npm publication occurred.
+
+## 2026-10-29 Exact-Head CI Acceptance
+
+- The v6 draft revision record and ledger update were pushed to PR #188 as commit `ac5dcd2e64c4afdb4fed32698f6a4857ed3c6909`, based on selected `origin/main=eedc217d41b631815ca32d0142a3e4dfe26399d9`. PR #188 remains open, draft, and unmerged.
+- For this exact commit, CI run #567 passed on Node 20 and Node 22. Both jobs passed the full test suite, TypeScript check, package build, documentation build, package contents, repository hygiene, and isolated package installation. Documentation run #277 also passed.
+- This verifies the candidate engineering changes and the v6 record; it does not approve the draft RequirementSet or count any Test5 business outcome. The accepted implementation count remains 4/6, real completion remains 0/28, and real business/autonomy/recovery/cleanup/baseline-comparison measures remain not measured. No baseline approval, Trial, Test5 business write, cleanup, or npm publication occurred.
