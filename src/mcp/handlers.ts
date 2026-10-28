@@ -1604,6 +1604,12 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       >[0]["businessScenarioDraftUpdates"]
     });
   }
+  if (action === "refresh-test-design-projection") {
+    return context.knowledgeService.refreshTestDesignProjection({
+      knowledgeProjectId: stringArg(input, "knowledgeProjectId"),
+      requirementSetId: stringArg(input, "requirementSetId")
+    });
+  }
   if (action === "generate-analysis" || action === "generate-test-design") {
     const requirementSetId = stringArg(input, "requirementSetId");
     const requirementSet = context.repository.requirementSets.find((item) => item.id === requirementSetId);
@@ -13053,6 +13059,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
       "generate-analysis",
       "generate-test-design",
       "revise-test-design-draft",
+      "refresh-test-design-projection",
       "assess-scenarios",
       "record-scenario-run",
       "evaluate-mutations",
@@ -13113,6 +13120,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
     | "generate-analysis"
     | "generate-test-design"
     | "revise-test-design-draft"
+    | "refresh-test-design-projection"
     | "assess-scenarios"
     | "record-scenario-run"
     | "evaluate-mutations"
