@@ -230,7 +230,7 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
       add(baseScenario({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
-        title: `${model.title}: rule ${index + 1}`,
+        title: ruleLabel ? `${model.title}: ${ruleLabel}` : `${model.title}: rule ${index + 1}`,
         objective: ruleLabel || model.title,
         family: "branch",
         actors: [],
