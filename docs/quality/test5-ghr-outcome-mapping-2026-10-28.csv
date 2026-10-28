@@ -1,0 +1,29 @@
+outcome_id,group,business_scenario_id,mapping_state,execution_state,trial_id,blocking_reason
+GHR-REQ-01,demand,,unmapped,not_executed,,Current RequirementSet has no outcome-specific reviewed scenario or ready data and postcondition plan.
+GHR-REQ-02,demand,,unmapped,not_executed,,Intern no-quota position and grade fixture is not independently validated.
+GHR-REQ-03a,demand,,unmapped,not_executed,,Replacement type and required-substitute validation lacks a confirmed synthetic fixture.
+GHR-REQ-03b,demand,,unmapped,not_executed,,Eligible synthetic substitute fixture is not available.
+GHR-REQ-04a,demand,,unmapped,not_executed,,Approver assignment and reject-to-requester action are not independently verified.
+GHR-REQ-04b,demand,,unmapped,not_executed,,Requester role and withdrawal action are not independently verified.
+GHR-REQ-05,demand,,unmapped,not_executed,,Target void action and terminal state are not independently verified.
+GHR-REQ-06a,demand,,unmapped,not_executed,,Safe linked synthetic accepted-Offer fixture and independent read-only Oracle are unavailable.
+GHR-REQ-06b,demand,,unmapped,not_executed,,Safe linked synthetic sent-Offer fixture and independent read-only Oracle are unavailable.
+GHR-REQ-06c,demand,,unmapped,not_executed,,Second-confirmation path and any OA side-effect boundary are not verified.
+GHR-REQ-06d,demand,,unmapped,not_executed,,Second-confirmation path and any OA side-effect boundary are not verified.
+GHR-REQ-06e,demand,,unmapped,not_executed,,Cancel-prompt behavior and before/after independent Oracle are not verified.
+GHR-REQ-06f,demand,,unmapped,not_executed,,Cancel-prompt behavior and before/after independent Oracle are not verified.
+GHR-REQ-06g,demand,,unmapped,not_executed,,Safe mixed sent/pending synthetic Offers and independent Oracle are unavailable.
+GHR-REQ-06h,demand,,unmapped,not_executed,,Safe mixed sent/pending synthetic Offers and independent Oracle are unavailable.
+GHR-OFFER-01,offer,,unmapped,not_executed,,Group/GHR Offer route and synthetic document/data plan are not verified.
+GHR-OFFER-02,offer,,unmapped,not_executed,,Intern Offer fields and synthetic data plan are not verified.
+GHR-OFFER-03a,offer-transition,,unmapped,not_executed,,Test5 transition control and synthetic Offer postcondition are not verified.
+GHR-OFFER-03c,offer-transition,,unmapped,not_executed,,Test5 transition control and synthetic Offer postcondition are not verified.
+GHR-OFFER-03d,offer-transition,,unmapped,not_executed,,Test5 transition control and synthetic Offer postcondition are not verified.
+GHR-OFFER-03f,offer-transition,,unmapped,not_executed,,Test5 transition control and synthetic Offer postcondition are not verified.
+GHR-OFFER-03k,offer-transition,,unmapped,not_executed,,Rejected-source synthetic fixture and quota-guard Oracle are unavailable.
+GHR-OFFER-03l,offer-transition,,unmapped,not_executed,,Rejected-source synthetic fixture and quota-guard Oracle are unavailable.
+GHR-COMP-01,compensation,,unmapped,not_executed,,Configured compensation field and export behavior lack a confirmed read-only System Brain binding.
+GHR-STAFF-01,staffing,,unmapped,not_executed,,Migration outcome is not verified; user-excluded branches remain unexecuted in the denominator.
+GHR-PAY-01,pay-item,,unmapped,not_executed,,Pay-item lookup depends on the separate OEHR system and remains externally blocked.
+GHR-QUERY-01,query,,unmapped,not_executed,,No Trial-owned unique demand and Offer codes exist for list/detail/history comparison.
+GHR-QUERY-02,query,,unmapped,not_executed,,No Trial-owned dataset exists for filtered export verification.

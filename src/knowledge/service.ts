@@ -380,13 +380,18 @@ export class KnowledgeService {
         testIntents: existingIntents,
         dataProfiles: this.repository.testDataProfiles.filter((item) => item.requirementSetId === requirementSetId)
       });
-      requirementSet.evaluationGate ??= buildRequirementEvaluationGate(
+      const refreshedEvaluationGate = buildRequirementEvaluationGate(
         analysis,
         reusedEvaluation,
         requirementGaps,
         existingCoverageProfile,
         criticalAttachments
       );
+      requirementSet.evaluationGate = preserveConfirmedRequirementEvalActions(
+        requirementSet.evaluationGate,
+        refreshedEvaluationGate
+      );
+      requirementSet.updatedAt = requirementSet.evaluationGate.generatedAt;
       this.repository.persist();
       const coveredClauseSourceRefs = [
         ...new Set(existingIntents.flatMap((item) => item.requirementRefs))
@@ -3588,6 +3593,54 @@ function buildRequirementEvaluationGate(
           : "passed",
     actions,
     generatedAt: createdAt
+  };
+}
+
+function preserveConfirmedRequirementEvalActions(
+  previous: RequirementEvaluationGate | undefined,
+  next: RequirementEvaluationGate
+): RequirementEvaluationGate {
+  if (!previous) return next;
+
+  const actionIdentity = (action: RequirementEvalAction) =>
+    JSON.stringify([
+      action.kind,
+      action.message,
+      [...new Set(action.sourceRefs)].sort()
+    ]);
+  const previouslyConfirmed = new Map(
+    previous.actions
+      .filter((action) => action.status === "confirmed")
+      .map((action) => [actionIdentity(action), action] as const)
+  );
+  const actions = next.actions.map((action) => {
+    const prior = previouslyConfirmed.get(actionIdentity(action));
+    if (!prior) return action;
+    return {
+      ...action,
+      status: "confirmed" as const,
+      confirmedAt: prior.confirmedAt,
+      confirmedBy: prior.confirmedBy,
+      confirmationNote: prior.confirmationNote,
+      resolutionNodeId: prior.resolutionNodeId
+    };
+  });
+  const blocked = actions.some((action) => action.status === "blocked");
+  const pending = actions.some((action) => action.status === "pending");
+  const fullyConfirmed = actions.length > 0 && !blocked && !pending;
+  const status = next.verdict === "blocked" || blocked
+    ? "blocked"
+    : pending
+      ? "needs-confirmation"
+      : fullyConfirmed
+        ? "confirmed"
+        : "passed";
+
+  return {
+    ...next,
+    actions,
+    status,
+    ...(fullyConfirmed && previous.confirmedAt ? { confirmedAt: previous.confirmedAt } : {})
   };
 }
 

@@ -882,6 +882,85 @@ describe("KnowledgeService", () => {
     expect(unchangedModule?.status).toBe("confirmed");
   });
 
+  it("refreshes a reused evaluation gate when the latest analysis removes a contradiction", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({ name: "Orders", key: "orders-eval-refresh", defaultLocale: "en-US" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage(
+        "orders-eval-refresh",
+        "The approval field is visible. The approval field is not visible."
+      )
+    });
+
+    const first = await service.generateTestDesign(ingested.requirementSet.id);
+    const oldContradictionAction = first.evaluationGate.actions.find((action) => action.kind === "contradiction");
+    expect(oldContradictionAction).toBeDefined();
+
+    const revisedAnalysis = {
+      ...first.analysis,
+      contradictions: []
+    };
+    const refreshed = await service.generateTestDesign(
+      ingested.requirementSet.id,
+      "builtin",
+      revisedAnalysis
+    );
+
+    expect(refreshed.reused).toBe(true);
+    expect(refreshed.evaluationGate.actions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "contradiction" })])
+    );
+    expect(refreshed.gaps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ sourceType: "requirement-conflict", status: "open" })])
+    );
+  });
+
+  it("preserves an unchanged confirmed Eval action when refreshing a reused evaluation gate", async () => {
+    const service = new KnowledgeService(new InMemoryBrainCreatorRepository(), await tempDir());
+    const project = await service.createProject({ name: "Orders", key: "orders-eval-confirm", defaultLocale: "en-US" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("orders-eval-confirm", "Orders above 1000 require approval.")
+    });
+    const first = await service.generateTestDesign(ingested.requirementSet.id);
+    const analysisWithQuestion = {
+      ...first.analysis,
+      openQuestions: ["Which approval record should be shown?"]
+    };
+    const pending = await service.generateTestDesign(
+      ingested.requirementSet.id,
+      "builtin",
+      analysisWithQuestion
+    );
+    const action = pending.evaluationGate.actions.find((item) => item.kind === "clarification");
+    expect(action?.status).toBe("pending");
+
+    const confirmed = await service.confirmEvaluationActions({
+      requirementSetId: ingested.requirementSet.id,
+      actionIds: [action!.id],
+      note: "Show the approval record associated with the selected order.",
+      confirm: true
+    });
+    const refreshed = await service.generateTestDesign(
+      ingested.requirementSet.id,
+      "builtin",
+      analysisWithQuestion
+    );
+
+    expect(refreshed.reused).toBe(true);
+    expect(refreshed.evaluationGate.status).toBe("confirmed");
+    expect(refreshed.evaluationGate.actions).toEqual([
+      expect.objectContaining({
+        kind: "clarification",
+        status: "confirmed",
+        confirmationNote: "Show the approval record associated with the selected order.",
+        resolutionNodeId: confirmed.evaluationGate.actions[0].resolutionNodeId
+      })
+    ]);
+  });
+
   it("blocks baseline approval while requirement clarification gaps remain open", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const service = new KnowledgeService(repository, await tempDir());
