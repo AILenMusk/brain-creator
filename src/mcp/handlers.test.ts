@@ -3352,6 +3352,107 @@ describe("handleBrainCreatorTool", () => {
     );
   });
 
+  it("scopes TestIntent review to the requested RequirementSet", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      dataFilePath: join(workDir, "assets.json"),
+      workDir
+    });
+    const project = await context.knowledgeService.createProject({
+      name: "Requirement-scoped intent review",
+      key: "requirement-scoped-intent-review",
+      defaultLocale: "en-US"
+    });
+    const ingest = async (title: string, contentHash: string) => {
+      const result = await context.knowledgeService.ingestRequirement({
+        projectId: project.id,
+        contentPackage: {
+          title,
+          content: `${title}: Users submit a request and receive a result.`,
+          blocks: [{ type: "paragraph", text: `${title}: Users submit a request and receive a result.` }],
+          attachments: [],
+          source: `${contentHash}.md`,
+          sourceType: "local-file",
+          contentHash,
+          warnings: []
+        }
+      });
+      const design = await context.knowledgeService.generateTestDesign(result.requirementSet.id);
+      return { requirementSetId: result.requirementSet.id, intentIds: design.testIntents.map((item) => item.id) };
+    };
+    const first = await ingest("First requirement", "first-requirement-hash");
+    const second = await ingest("Second requirement", "second-requirement-hash");
+    const foreignProject = await context.knowledgeService.createProject({
+      name: "Foreign intent review project",
+      key: "foreign-intent-review-project",
+      defaultLocale: "en-US"
+    });
+    const foreignRequirement = await context.knowledgeService.ingestRequirement({
+      projectId: foreignProject.id,
+      contentPackage: {
+        title: "Foreign requirement",
+        content: "Foreign requirement: Users submit a request and receive a result.",
+        blocks: [{ type: "paragraph", text: "Foreign requirement: Users submit a request and receive a result." }],
+        attachments: [],
+        source: "foreign-requirement.md",
+        sourceType: "local-file",
+        contentHash: "foreign-requirement-hash",
+        warnings: []
+      }
+    });
+    await context.knowledgeService.generateTestDesign(foreignRequirement.requirementSet.id);
+    context.repository.testIntents.push({
+      id: "intent_orphaned_review_case",
+      knowledgeProjectId: project.id,
+      requirementSetId: "requirement-set-removed-from-project",
+      title: "Historical orphaned intent",
+      module: "Historical",
+      priority: "P3",
+      objective: "Remain visible in the unfiltered project review.",
+      preconditions: [],
+      expectedResults: [],
+      requirementRefs: [],
+      knowledgeNodeRefs: [],
+      techniques: [],
+      status: "stale",
+      createdAt: "2026-10-29T00:00:00.000Z",
+      updatedAt: "2026-10-29T00:00:00.000Z"
+    });
+
+    const firstReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "test-intent",
+      knowledgeProjectId: project.id,
+      requirementSetId: first.requirementSetId,
+      limit: 100
+    }));
+    const secondReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "test-intent",
+      knowledgeProjectId: project.id,
+      requirementSetId: second.requirementSetId,
+      limit: 100
+    }));
+    const allReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "test-intent",
+      knowledgeProjectId: project.id,
+      limit: 100
+    }));
+    const foreignSetReview = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "test-intent",
+      knowledgeProjectId: project.id,
+      requirementSetId: foreignRequirement.requirementSet.id,
+      limit: 100
+    }));
+
+    expect(first.intentIds.length).toBeGreaterThan(0);
+    expect(second.intentIds.length).toBeGreaterThan(0);
+    expect(firstReview.totalItems).toBe(first.intentIds.length);
+    expect(firstReview.items.map((item: { id: string }) => item.id).sort()).toEqual(first.intentIds.sort());
+    expect(secondReview.totalItems).toBe(second.intentIds.length);
+    expect(secondReview.items.map((item: { id: string }) => item.id).sort()).toEqual(second.intentIds.sort());
+    expect(allReview.totalItems).toBe(first.intentIds.length + second.intentIds.length + 1);
+    expect(foreignSetReview.totalItems).toBe(0);
+  });
+
   it("scopes coverage review to the requested system", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({

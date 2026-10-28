@@ -1580,6 +1580,181 @@ export class KnowledgeService {
     return this.repository.testIntents.filter((item) => item.knowledgeProjectId === projectId);
   }
 
+  reviseTestDesignDraft(input: {
+    knowledgeProjectId: string;
+    requirementSetId: string;
+    expectedDraftHash?: string;
+    confirm: boolean;
+    confirmationNote?: string;
+    testIntentDraftUpdates: Array<Pick<
+      TestIntent,
+      "id" | "title" | "objective" | "preconditions" | "expectedResults"
+    >>;
+    businessScenarioDraftUpdates: Array<Pick<
+      BusinessScenario,
+      | "id"
+      | "title"
+      | "objective"
+      | "family"
+      | "actors"
+      | "preconditions"
+      | "testDataNeeds"
+      | "expectedBusinessOutcomes"
+      | "risk"
+    >>;
+  }) {
+    const requirementSet = this.getRequirementSet(input.requirementSetId);
+    if (requirementSet.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Requirement set does not belong to the selected knowledge project");
+    }
+    if (requirementSet.status !== "draft") {
+      throw new Error("Only a draft RequirementSet can receive draft test-design revisions");
+    }
+
+    const intents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const scenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (intents.length === 0 || scenarios.length === 0) {
+      throw new Error("Draft test design must contain TestIntents and BusinessScenarios");
+    }
+    if (intents.some((item) => item.status !== "draft") || scenarios.some((item) => item.status !== "draft")) {
+      throw new Error("Every TestIntent and BusinessScenario in the selected draft must remain draft");
+    }
+
+    const intentUpdates = validateExactDraftRevisionIds(
+      "TestIntent",
+      intents.map((item) => item.id),
+      input.testIntentDraftUpdates
+    );
+    const scenarioUpdates = validateExactDraftRevisionIds(
+      "BusinessScenario",
+      scenarios.map((item) => item.id),
+      input.businessScenarioDraftUpdates
+    );
+    for (const update of input.testIntentDraftUpdates) {
+      if (!update.title.trim() || !update.objective.trim() ||
+        update.preconditions.length === 0 || update.preconditions.some((value) => !value.trim()) ||
+        update.expectedResults.length === 0 || update.expectedResults.some((value) => !value.trim())) {
+        throw new Error(`TestIntent ${update.id} contains an empty required draft field`);
+      }
+    }
+    for (const update of input.businessScenarioDraftUpdates) {
+      if (!update.title.trim() || !update.objective.trim() || update.expectedBusinessOutcomes.length === 0 ||
+        [...update.actors, ...update.preconditions, ...update.testDataNeeds, ...update.expectedBusinessOutcomes]
+          .some((value) => !value.trim())) {
+        throw new Error(`BusinessScenario ${update.id} contains an empty required draft field`);
+      }
+    }
+    const knownIntentIds = new Set(intents.map((item) => item.id));
+    for (const scenario of scenarios) {
+      const scenarioIntentIds = scenario.testIntentIds ?? [];
+      if (new Set(scenarioIntentIds).size !== scenarioIntentIds.length) {
+        throw new Error(`BusinessScenario ${scenario.id} contains duplicate TestIntent links`);
+      }
+      if (scenarioIntentIds.some((intentId) => !knownIntentIds.has(intentId))) {
+        throw new Error(`BusinessScenario ${scenario.id} links to a TestIntent outside the selected RequirementSet`);
+      }
+    }
+    const intentMemberships = new Map<string, Set<string>>();
+    for (const scenario of scenarios) {
+      for (const intentId of scenario.testIntentIds ?? []) {
+        const memberships = intentMemberships.get(intentId) ?? new Set<string>();
+        memberships.add(scenario.id);
+        intentMemberships.set(intentId, memberships);
+      }
+    }
+    for (const intent of intents) {
+      const declaredIds = intent.scenarioIds ?? [];
+      const declared = new Set(declaredIds);
+      if (declared.size !== declaredIds.length) {
+        throw new Error(`TestIntent ${intent.id} contains duplicate BusinessScenario links`);
+      }
+      const linked = intentMemberships.get(intent.id) ?? new Set<string>();
+      if (declared.size !== linked.size || [...declared].some((scenarioId) => !linked.has(scenarioId))) {
+        throw new Error(`TestIntent ${intent.id} and BusinessScenario membership disagree`);
+      }
+    }
+
+    const currentDraftHash = hashTestDesignDraft(intents, scenarios);
+    if (input.expectedDraftHash && input.expectedDraftHash !== currentDraftHash) {
+      throw new Error("Draft test-design assets changed after preview; read them again and prepare a new revision");
+    }
+    const preview = {
+      status: "preview" as const,
+      requirementSetId: requirementSet.id,
+      knowledgeProjectId: requirementSet.knowledgeProjectId,
+      currentDraftHash,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      testIntentIds: intents.map((item) => item.id),
+      businessScenarioIds: scenarios.map((item) => item.id),
+      requestedTestIntentUpdates: intentUpdates.size,
+      requestedBusinessScenarioUpdates: scenarioUpdates.size,
+      requiresConfirmation: true,
+      nextAction: "Review the exact draft revisions, then repeat with confirm=true, expectedDraftHash, and the user's confirmation note. This action does not approve the RequirementSet or start execution."
+    };
+    if (!input.confirm) return preview;
+    if (!input.expectedDraftHash) throw new Error("expectedDraftHash from the latest preview is required to confirm a draft revision");
+    const confirmationNote = input.confirmationNote?.trim();
+    if (!confirmationNote) throw new Error("A non-empty confirmationNote is required to revise draft test-design assets");
+
+    const updatedAt = timestamp();
+    this.repository.transaction(() => {
+      for (const intent of intents) {
+        const update = intentUpdates.get(intent.id)!;
+        intent.title = update.title.trim();
+        intent.objective = update.objective.trim();
+        intent.preconditions = update.preconditions.map((value) => value.trim());
+        intent.expectedResults = update.expectedResults.map((value) => value.trim());
+        intent.updatedAt = updatedAt;
+      }
+      for (const scenario of scenarios) {
+        const update = scenarioUpdates.get(scenario.id)!;
+        scenario.title = update.title.trim();
+        scenario.objective = update.objective.trim();
+        scenario.family = update.family;
+        scenario.actors = update.actors.map((value) => value.trim());
+        scenario.preconditions = update.preconditions.map((value) => value.trim());
+        scenario.testDataNeeds = update.testDataNeeds.map((value) => value.trim());
+        scenario.expectedBusinessOutcomes = update.expectedBusinessOutcomes.map((value) => value.trim());
+        scenario.risk = update.risk;
+      }
+      requirementSet.updatedAt = updatedAt;
+      const sequence = Math.max(0, ...this.repository.brainEvents.map((event) => event.sequence)) + 1;
+      this.repository.brainEvents.push({
+        id: id("brainEvent"),
+        sequence,
+        brain: "testcase",
+        type: "draft-test-design-revised",
+        status: "passed",
+        message: `Updated ${intents.length} draft TestIntents and ${scenarios.length} draft BusinessScenarios through the controlled Facade. Confirmation note: ${confirmationNote}. The RequirementSet remains draft.`,
+        traceId: id("trace"),
+        refs: [requirementSet.id, ...intents.map((item) => item.id), ...scenarios.map((item) => item.id)],
+        createdAt: updatedAt
+      });
+    });
+
+    const updatedIntents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const updatedScenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return {
+      status: "revised" as const,
+      requirementSetId: requirementSet.id,
+      requirementSetStatus: requirementSet.status,
+      counts: { testIntents: updatedIntents.length, businessScenarios: updatedScenarios.length },
+      currentDraftHash,
+      updatedDraftHash: hashTestDesignDraft(updatedIntents, updatedScenarios),
+      testIntents: updatedIntents,
+      businessScenarios: updatedScenarios,
+      nextAction: "Review the persisted draft assets. Keep the RequirementSet draft until source fidelity, TestIntent and BusinessScenario quality, and the fixed outcome mapping are reviewed."
+    };
+  }
+
   listBusinessScenarios(input: {
     knowledgeProjectId: string;
     requirementSetId?: string;
@@ -3850,6 +4025,33 @@ function executableCaseCompileKey(
 
 function timestamp() {
   return new Date().toISOString();
+}
+
+function validateExactDraftRevisionIds<T extends { id: string }>(
+  assetType: "TestIntent" | "BusinessScenario",
+  existingIds: string[],
+  updates: T[]
+) {
+  const existing = new Set(existingIds);
+  const updateIds = updates.map((item) => item.id);
+  const updateIdSet = new Set(updateIds);
+  if (updateIdSet.size !== updateIds.length) {
+    throw new Error(`${assetType} draft revision contains duplicate IDs`);
+  }
+  const missingIds = [...existing].filter((itemId) => !updateIdSet.has(itemId));
+  const foreignIds = [...updateIdSet].filter((itemId) => !existing.has(itemId));
+  if (missingIds.length > 0 || foreignIds.length > 0) {
+    throw new Error(
+      `${assetType} draft revision must update every existing asset exactly once (missing=${missingIds.length}, foreign=${foreignIds.length})`
+    );
+  }
+  return new Map(updates.map((item) => [item.id, item]));
+}
+
+function hashTestDesignDraft(intents: TestIntent[], scenarios: BusinessScenario[]) {
+  return createHash("sha256")
+    .update(stableJson({ intents, scenarios }))
+    .digest("hex");
 }
 
 function normalizeRequirementAttachments(

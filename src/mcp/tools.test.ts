@@ -158,6 +158,30 @@ describe("BRAIN_CREATOR_TOOLS", () => {
       executionProvenance: "production"
     }).success).toBe(false);
 
+    expect(prepare?.inputSchema.safeParse({
+      action: "revise-test-design-draft",
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      testIntentDraftUpdates: [{
+        id: "intent-1",
+        title: "Intent",
+        objective: "Check the state",
+        preconditions: ["A synthetic order exists"],
+        expectedResults: ["The state is independently readable"]
+      }],
+      businessScenarioDraftUpdates: [{
+        id: "scenario-1",
+        title: "Scenario",
+        objective: "Review the order flow",
+        family: "main-flow",
+        actors: ["Authorized test actor"],
+        preconditions: ["The environment is ready"],
+        testDataNeeds: ["A synthetic order"],
+        expectedBusinessOutcomes: ["The order reaches its target state"],
+        risk: "high"
+      }]
+    }).success).toBe(true);
+
     expect(
       prepare?.inputSchema.safeParse({
         action: "compile-cases",

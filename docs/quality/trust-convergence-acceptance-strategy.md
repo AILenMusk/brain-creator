@@ -120,7 +120,7 @@ E 的工程实现验收和真实业务 Trial 结论分开登记。A–D、F 的�
 
 1. 需求快照及附件版本、场景名单和固定分母已冻结。
 2. 每个场景的前置条件、角色交接、目标状态、条件分支、业务实体和 Oracle 已审核。
-3. 当前 Test5 鉴权、路由和角色经过本轮验证；产品授权与用户授权分别记录。
+3. Test5 路线预期采用用户提供并确认当前生效的 `Proc000019 v9`；不再要求重复提供链接。路线相关 outcome 在实际 Trial 中读取同一业务实体的任务分配与审批记录，核对执行路径；若执行前发现已发布版本变化，先冻结新版本。鉴权仍须通过新上下文验证；产品授权与用户授权分别记录。
 4. 独立目标系统后置查询和 TestData Provider 可用，并绑定正确 systemId 和实体引用。
 5. 创建、提交、转交、审批、关闭与数据清理范围符合批准边界；清理前按约定提前通知。
 6. 每轮记录 Trial ID、需求/Oracle hash、代码/build 身份、实体引用、操作状态、证据 hash、人工介入及最终清理/保留。
@@ -128,7 +128,11 @@ E 的工程实现验收和真实业务 Trial 结论分开登记。A–D、F 的�
 
 Test5 的真实场景与 Beisen 场景都不得因为 blocked 或未执行而从冻结分母删除。Beisen 场景在第二真实系统和单独授权到位前保留 blocked。任何需求、Oracle、系统绑定或源码变化都开启新验证记录，不覆盖旧结果。
 
-当前 Trial 状态：Test5 本地集团/GHR 的 28 条 outcome 已由用户确认固定分母，Beisen 继续作为第二系统外部依赖。Brain Creator 当前 RequirementSet 仍为 draft（37 条 TestIntent / 11 个 BusinessScenario，Critic `needs-review`），因此尚未批准场景到 outcome/Oracle 映射。用户已确认以 Test5 页面当前生效的 `Proc000019 v9` 路线为准；不再把重复提供路线链接作为阻塞项。最新运行环境检查显示 Test5 AuthProfile 未验证，独立后置查询与 TestData Provider 均未配置；任何一个未就绪都不得进入真实写入。详细数据见 trust-convergence.md 的 2026-10-29 记录。
+当前 Trial 状态：Test5 本地集团/GHR 的 28 条 outcome 已由用户确认固定分母，Beisen 继续作为第二系统外部依赖。Brain Creator 当前 RequirementSet 仍为 draft（37 条 TestIntent / 11 个 BusinessScenario，Critic `needs-review`）；37/11 字段及 28 条 outcome 的候选映射已写回并由新 Facade 进程回读，但未通过 Oracle 审核或基线批准。RequirementSet 的 `sourceId` 仍是旧 local-file v4，与正式 Lark revision 2045 的来源记录分开，必须在真实基线建立前解决。用户已确认以 Test5 页面当前生效的 `Proc000019 v9` 路线为准；不再把重复提供路线链接作为阻塞项。最新 Facade 检查显示 AuthProfile `auth_onb5ja03` 为 `failed`、没有保存的 storageState，且 checkpoint `checkpoint_rnssheoj` 等待用户完成登录；新隔离页已跳转至 SSO CAPTCHA。独立后置查询和 TestData Provider 均未配置；任一门禁未就绪都不得进入真实写入。详细数据见 trust-convergence.md 的 2026-10-29 记录。
+
+用户要求先修订 37 条意图和 11 个场景。候选修订底稿见 [`test5-ghr-intent-scenario-revision-2026-10-29-v5.md`](./test5-ghr-intent-scenario-revision-2026-10-29-v5.md)。它保留 28+4+4+1 的分类，并纠正原子意图标题、场景前置条件/角色/数据需要和重复摘要预期。本轮在 `eedc217` 隔离分支新增 `bc_prepare action=revise-test-design-draft`：只允许对完整 draft 资产集更新指定字段，要求最新草稿哈希和确认备注，并保留 ID、来源/模型引用、成员关系及 `draft` 状态；不批准基线或启动执行。类型检查、全量测试（141 files / 1,199 tests）、构建、文档构建、包内容（177 entries / 1,724,206 bytes）、包安装 smoke 与 Skill 镜像哈希检查均通过。静态候选结构检查为 37 个唯一意图、11 个唯一场景、28 个 outcome 和 1 个分母外回调。
+
+候选字段现已通过 `bc_prepare action=revise-test-design-draft` 写回 Store，并由新 Facade 进程回读确认：`requirementSet_n61e346r` 仍为 draft，37/37 draft intents、11/11 draft scenarios，ID、成员关系和候选修订字段均一致。原集合 `sourceId` 仍指向旧 local-file v4（hash `c93bc0c6e793dbf74e8cd0dacfca516dd6527193db2af6a3e0e570e67520c8d0`），与当前正式 Lark source `requirementSource_8dk46kq4` 分开；这次原地草稿修订未改变来源链，因此仍不得作为 Trial 基线。TestDataProfile 数量与有效引用、用户确认的 28 outcome 固定分母、Critic/Eval、基线状态及 `N/6` 口径均保持不变。
 
 ## 9. 最终验收报告格式
 
@@ -142,7 +146,7 @@ Test5 的真实场景与 Beisen 场景都不得因为 blocked 或未执行而从
 ## 10. 本轮执行顺序
 
 1. 选定基线 `eedc217d41b631815ca32d0142a3e4dfe26399d9` 已完成 A–D/F 全量与定向工程验收；保留精确版本、命令、运行身份及合成标记。
-2. 继续修改并复核 37 条 TestIntent / 11 个 BusinessScenario 草稿，之后逐条映射到固定 28 个本地 GHR outcomes；保留 blocked 与未执行分支，Critic/Eval 通过前不批准基线。
+2. **37/11 草稿修订及 28 条 outcome 候选映射均已写回并跨进程回读。** 固定分母中的 blocked 与未执行分支保持保留；当前 37/11 集合仍指向旧 local-file v4，与正式 Lark 来源分离，须完成来源/Oracle 对齐并通过 Critic/Eval 后才可批准基线。TestDataProfile 数量与有效引用仍待核实。
 3. 以用户已确认的 Test5 当前发布路线作为审批路径来源；不要再以重复提供链接为阻塞。对用户明确跳过的职级分支和排除的 HSSC 支线按既定范围记录。
 4. 先恢复并验证当前 Test5 鉴权，配置独立目标后置查询和 TestData Provider；验证实体唯一查询、创建后校验、实体引用消费及清理/保留策略。
 5. 所有 Trial 准入门通过后，在已授权范围内运行三轮独立 Trial；每轮绑定新的运行身份和证据，恢复时先查后置状态，不重复业务写入。清理前提前通知。
