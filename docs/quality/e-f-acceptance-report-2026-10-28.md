@@ -1,11 +1,11 @@
 # E/F Acceptance Report — 2026-10-28
 
-Evidence refreshed through 2026-10-28 04:28 UTC. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
+Evidence refreshed through exact-head CI and the follow-up read-only Test5 explorations on 2026-10-28. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
 
 ## Acceptance verdict
 
 - **E — real business evaluation: blocked.** The fixed Test5 Group/GHR denominator is 28 outcomes. No EvaluationTrial exists and no outcome has independent business-state evidence: evidenced completion is **0/28**. No Test5 business write or cleanup was performed.
-- **F — review and delivery: partial.** The current source and product state were re-read through Brain Creator Facade. A stale EvaluationGate reuse defect was fixed in the candidate code; local software checks pass as listed below. Exact-head GitHub workflows for this follow-on candidate are pending.
+- **F — review and delivery: partial.** A stale EvaluationGate reuse defect was fixed in the candidate code. Local checks, exact-head CI, the documentation workflow, and source MCP identity all pass. F remains partial because E has no measured Trial data, PR #187 is still Draft/unmerged, and post-merge acceptance has not run.
 - **Implementation acceptance: 4/6 on the selected mainline snapshot.** PR #187 remains Draft, open, and unmerged. This follow-on candidate does not change the accepted-package count before exact-head checks and merge/post-merge acceptance.
 - Synthetic order/browser fixtures are reported as synthetic and do not count as Test5 outcomes. No npm package was published.
 
@@ -18,11 +18,11 @@ Evidence refreshed through 2026-10-28 04:28 UTC. This report replaces the earlie
 
 ## Brain Creator-based evidence
 
-- The refreshed source MCP identity is package `2.1.1`, commit `c5bfaa0f0d843ab5eb6f98ecae75fe0f139cec8d`, build ID `b5cda1239eef50f29a4a7c9da628f6fdfd4f6d900381c654c559022fc9c5e4b7`, schema 21, provider `codex`, isolated workspace `trust-closure-main`. The process was dirty because the follow-on service fix was under review.
+- Source MCP identity smoke on exact candidate head `937f8e6a8efb048e2412e819db25dcaece9e0c86` passed with build ID `source:937f8e6a8efb048e2412e819db25dcaece9e0c86` and `dirty=false`. The smoke used its isolated temporary workspace; the running Store/auth data were not changed.
 - The latest EvaluationGate preview is **blocked**, with clause coverage 241/241 and no uncovered source refs, 8 confirmed actions, 5 pending actions, and one blocked action. The eight Facade confirmations record the user's account-permission attestation, skipped branches, local route/diagram boundary, external-system boundary, and Offer-close priority. The grant statement remains an attestation, and the blocked action is the unconfirmed route-image evidence. Clause coverage does not establish the 28 outcome mappings or execution readiness.
 - Current RequirementSet scenario review contains 299 scenario candidates (280 draft, 19 stale). The system-filtered portfolio contains 180 (3 draft, 177 stale); none contains a frozen `GHR-*` outcome identifier. Only three scenarios are linked to this RequirementSet and Test5 system together; all three Scenario Assurance results are **blocked** for missing System Brain binding and limited Oracle. The 28-row mapping audit leaves `business_scenario_id` blank rather than assigning a guessed link.
 - Stage Eval has 10 current records (8 pass, 2 blocked) and 31 stale records. These are requirement-analysis stage evaluations, not real business outcomes.
-- System Brain has five candidate PageModels and zero confirmed PageModels; it has zero workflow/state-transition records. The host-visible route observation `knowledgeNode_d051ahq9` is retained, but saved-AuthProfile PageModel `page_80xz8aqy` renders the application's 404 page. SSO route Gap `gap_n2p55z68` remains open.
+- After the successful fresh-context login check, two bounded, read-only Facade explorations captured the home page (`page_y19a8mp3`, 11 locators) and the recruitment-demand list (`page_y1iiopoo`, 24 locators), with no exploration warnings or Gaps. These remain observed candidate PageModels; they are not confirmed bindings or approved business Oracles. A follow-up semantic-binding review returned 0 confirmed, 25 candidate, and 9 conflicted bindings. The System Brain summary remained at five candidate pages, zero confirmed pages, and zero workflow/state-transition records. Existing designer PageModel `page_80xz8aqy` still renders the application's 404 page, and SSO route Gap `gap_n2p55z68` remains open.
 - TestData Provider and automatic postcondition verification are `not-configured`. The latest Gate says the 28 outcomes still need one-to-one scenario, role, data, structured Oracle, and independent postcondition mapping. EvaluationTrial review returns zero trials. Project status shows 79 open Gaps and next action `revise_blocked_requirement`.
 - The saved Test5 AuthProfile `auth_onb5ja03` was re-captured through Brain Creator's dedicated browser flow after the previous stored state redirected to SSO. Fresh-context verification succeeded at `2026-10-28T04:17:48.663Z` on the Test5 base page. This proves current login-state validity only; it does not independently prove role assignments, operation grants, route-page capture, or business results. The user has stated that the account has the required permissions.
 
@@ -45,13 +45,13 @@ Evidence refreshed through 2026-10-28 04:28 UTC. This report replaces the earlie
 - Added regression coverage for removal of a stale contradiction and preservation of an unchanged confirmed action.
 - Local checks passed: `npm test` (141 files / 1,210 tests), `npx tsc --noEmit`, `npm run build`, `npm run docs:build`, `npm run verify:repository-hygiene`, `npm run verify:package-contents` (177 entries), `npm run verify:package-install`, `npm run verify:order-fixture` (6/6 synthetic browser cases), `npm run verify:order-brain-smoke`, and `npm run verify:host-agent-document-suite` (TC-001/TC-002 in Playwright Chromium).
 - The checks above validate local software and synthetic fixtures. They do not validate Test5, Beisen, a real Trial, cross-system migration, or long-running production Runner behavior.
-- PR #187 targets the currently observed remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. PR #187 remains Draft/open/unmerged. Candidate exact-head checks are a separate remote gate; no post-merge acceptance has occurred.
+- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #527 passed on Node 20 and 22; Documentation run #237 passed. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred.
 
 ## Remaining acceptance blockers
 
 1. Keep the RequirementSet draft while the route diagram remains unconfirmed under the user's chosen evidence boundary.
 2. Build/review mappings from each frozen outcome to a current scenario, actor route, synthetic data lifecycle, structured Oracle, and independent target postcondition. Do not infer mapping from generic scenario text.
-3. Confirm a usable Test5 System Brain binding for the actual route and business actions; the saved route PageModel currently returns 404.
+3. Confirm a usable Test5 System Brain binding for the actual route and business actions; the two newly captured pages are still candidates, and the designer PageModel still returns 404.
 4. Configure and validate TestData Provider and automatic postcondition verification before starting a real Trial.
 5. Reconfirm actor-level role/operation access through target evidence. The user's authorization is recorded, while independently readable grant evidence is absent.
 6. Keep Beisen and OEHR side effects outside the local Trial until separately scoped and authorized; do not perform cleanup without advance notice.
