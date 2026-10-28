@@ -33,7 +33,7 @@
 
 这次浏览器直读比 Brain Creator 中的 PageModel `page_yso7q41u` v4、ProbeResult `probe_aify5s9r` 更完整：后者没有 locator 或截图，System Brain 的 snapshot `systemBrainSnapshot_dwoles4t` 仍为 candidate，ChangeSet `systemBrainChangeSet_gpemiiu3` 为 `needs-review`，结构化 workflow/state-transition 模型仍为 0。此前独立 Playwright 上下文访问同地址仍跳转到应用 404。上述差异均予保留。
 
-本次观察只证明登录会话中设计画布当前可见的条件与节点。画面存在“暂存”和“发布”操作，因此它本身不能证明该画布内容已发布、与列表显示的 `Proc000019` v9 相同，或是线上审批实际使用的版本；也不能证明任何分支已命中、页面绑定已确认或审批已发生。流程列表与设计页版本的对应关系、实际运行结果仍须单独核验。页面上的 `requirementJobLevelId` 尚未映射到 Test5 职级选项；用户已要求跳过相关职级分支，相关 outcome 继续留在分母并记未执行。
+页面截图和可访问性树直接证明登录会话中设计画布当前可见的条件与节点。虽然画面有“暂存”和“发布”按钮，用户于 2026-10-28 明确确认：此链接就是 Test5 当前已发布、实际用于审批的版本，并对应列表标识 `Proc000019` v9。因此，本轮将该链接作为 Test5 专用路由 Oracle；版本对应关系的依据是用户确认，不冒充独立系统校验。页面本身仍不能证明任何分支已命中或审批已发生，真实执行及业务后置状态仍须独立验证。页面上的 `requirementJobLevelId` 尚未映射到 Test5 职级选项；用户已要求跳过相关职级分支，相关 outcome 继续留在分母并记未执行。
 
 ## 用户确认的分支处置
 
