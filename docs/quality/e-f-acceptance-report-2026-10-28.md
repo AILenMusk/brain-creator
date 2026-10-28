@@ -51,7 +51,7 @@ The latest passing candidate checks before this report-only update were PR #187 
 - Added regression coverage for removal of a stale contradiction and preservation of an unchanged confirmed action.
 - Local checks passed: `npm test` (141 files / 1,210 tests), `npx tsc --noEmit`, `npm run build`, `npm run docs:build`, `npm run verify:repository-hygiene`, `npm run verify:package-contents` (177 entries), `npm run verify:package-install`, `npm run verify:order-fixture` (6/6 synthetic browser cases), `npm run verify:order-brain-smoke`, and `npm run verify:host-agent-document-suite` (TC-001/TC-002 in Playwright Chromium).
 - The checks above validate local software and synthetic fixtures. They do not validate Test5, Beisen, a real Trial, cross-system migration, or long-running production Runner behavior.
-- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #532 passed on Node 20 and 22; Documentation run #242 passed at `840085f`. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred. The present documentation update requires its own exact-head checks.
+- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #532 passed on Node 20 and 22; Documentation run #242 passed at `840085f` before this report-only evidence update. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred. Current head check results are maintained on PR #187.
 
 ## Remaining acceptance blockers
 
