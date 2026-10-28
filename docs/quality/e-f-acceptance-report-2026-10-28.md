@@ -260,3 +260,8 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - The 37 original TestIntent disposition review and the v6 draft revision (18 active intents / 11 scenarios) are complete and persisted. This fulfills the user's direction to revise that draft before outcome mapping; the 28-row CSV remains unchanged.
 - A single login attempt from the Test5 entry URL reached the expected Test5 SSO origin and returned `账号密码错误`. No retry or guessed credential variant was used. The AuthProfile remains unverified while the user confirms whether the supplied password included a space or whether credentials changed.
 - E remains blocked: no Trial, no Test5 business write, no cleanup, and no independently verified business outcome (**0/28**). F's local synthetic/package checks remain passed as listed above, but real baseline comparison and human business annotations remain unmeasured.
+
+## 2026-10-28 Exact-head CI completion
+
+- PR head `80d2b9c219eb7c953745af6cda051d48a88d1a63` passed CI #550 on Node 20 and Node 22 and Documentation #260. Jobs passed tests, typecheck, build, docs, package contents, repository hygiene, and fresh package installation.
+- PR #187 remains Draft/open/unmerged. This verifies the candidate code/docs at the exact head; it does not merge the six delivery packages into the selected mainline. Formal mainline acceptance remains **4/6**. E remains blocked and real metrics remain **not measured**.

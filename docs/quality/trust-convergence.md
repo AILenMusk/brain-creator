@@ -2536,3 +2536,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - Opened the approved Test5 entry URL and followed its redirect to the expected Test5 SSO origin. One login attempt using the user-provided credentials returned the SSO message `账号密码错误`.
 - No credential variants were guessed or retried. The AuthProfile remains unverified and E's live Trial is blocked pending confirmation of the credential formatting or a current credential through the user's secure sign-in path.
 - No Test5 business action, baseline approval, Trial creation, or cleanup occurred. The current 18-intent / 11-scenario revision remains a draft; real business evidence remains **0/28**.
+
+## 2026-10-28 Exact-head CI completion
+
+- Exact PR head `80d2b9c219eb7c953745af6cda051d48a88d1a63` completed CI #550 successfully on Node 20 and Node 22 and Documentation #260 successfully. The CI jobs passed tests, typecheck, build, documentation, package-content, repository-hygiene, and installed-package checks.
+- PR #187 remains Draft/open/unmerged against `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`; mainline acceptance remains **4/6**. The successful candidate checks do not change E's **0/28** real outcome count or F's unmeasured real-baseline metrics.
