@@ -270,3 +270,8 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 
 - PR head `24e638fb18e1ca1aaa458b7f95993cc3a33b54ba` passed CI #551 on Node 20 and Node 22 and Documentation #261. CI completed tests, typecheck, build, documentation, package contents, repository hygiene, and installed-package checks successfully.
 - This does not change the acceptance boundary: PR #187 remains Draft/unmerged, mainline remains **4/6**, and E's real outcomes remain **0/28**. The authentication blocker and unmeasured real baseline metrics remain open.
+
+## 2026-10-28 Current report-head CI
+
+- PR head `9535a100d9171aa691e4fdc4058320bc674212d9` passed CI #552 on Node 20 and Node 22 and Documentation #262. Both CI jobs passed tests, typecheck, build, docs, package contents, repository hygiene, and installed-package verification.
+- PR #187 remains Draft/open/unmerged. E remains blocked and real Test5 metrics remain **not measured**; candidate CI is not a real business outcome.
