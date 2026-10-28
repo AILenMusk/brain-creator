@@ -70,6 +70,8 @@ A read-only refresh against the current Test5 Store had previously run for an ex
 
 `npx vitest run src/knowledge/systemBrain.test.ts` passed 16 tests. The full `npm test -- --reporter=dot` run passed 141 files / 1,208 tests. `npx tsc --noEmit`, `npm run build`, `npm run docs:build`, `npm run verify:repository-hygiene`, `npm run verify:package-contents` (177 entries), and `npm run verify:package-install` all passed. These are candidate-code checks using synthetic fixtures. They do not constitute a Test5 Trial, a real business outcome, or an advancement of implementation acceptance on `main`; PR #187 remains Draft and unmerged, and E remains **0/28**.
 
+The fixed candidate source MCP then reran `bc_prepare action=refresh-system-brain` against the isolated Test5 knowledge workspace. It identified commit `1758de1a7b85810153fa8ac197ec0dd069b7bf98`, schema 21, and workspace `trust-closure-main`; the process returned five pages without stalling. A fresh `bc_review target=system-brain` still showed seven snapshots and the same latest ID `systemBrainSnapshot_hbazbkql`, so the unchanged content did not create a new snapshot. The caller worktree was temporarily marked dirty by the temporary verification harness, which was removed after the call. This confirms the refresh path completes with the batching fix, but does not fix the saved-AuthProfile 404, establish a new system baseline, resolve scenario bindings/Oracles, or create a Trial.
+
 ## Metrics
 
 | Measure | Current result |
