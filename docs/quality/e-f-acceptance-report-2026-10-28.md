@@ -1,6 +1,6 @@
 # E/F Acceptance Report — 2026-10-28
 
-Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc145182a0b80` had passing PR #187 CI #534 and Documentation #244. This update records a direct read-only inspection of the exact Test5 process designer URL supplied by the user; these documentation changes need fresh local documentation/hygiene verification before the PR is updated. It replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
+Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc145182a0b80` had passing PR #187 CI #534 and Documentation #244. This update records a direct read-only inspection of the exact Test5 process designer URL supplied by the user and their confirmation that it is the currently active version. Local documentation build, repository hygiene, and diff checks passed after the update; the remote exact-head CI and Documentation runs are tracked on PR #187. It replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
 
 ## Acceptance verdict
 
