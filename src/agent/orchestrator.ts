@@ -41,7 +41,6 @@ export type CommandResult = {
   stderr: string;
   structuredReporter?: StructuredReporterResult;
   reporterPath?: string;
-  reporterOutputPath?: string;
   actorRoleEvidencePath?: string;
 };
 
@@ -431,23 +430,33 @@ export async function runChain(input: RunChainInput) {
       await mkdir(dirname(reporterOutputPath), { recursive: true });
       await rm(reporterOutputPath, { force: true });
     }
-    const rawResult = await runner("npx", args, {
-      cwd: input.workDir,
-      ...(actorRoleEvidencePath || reporterOutputPath
-        ? {
-            env: {
-              ...process.env,
-              ...(actorRoleEvidencePath ? { BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } : {}),
-              ...(reporterOutputPath ? { PLAYWRIGHT_JSON_OUTPUT_FILE: reporterOutputPath } : {})
+    let rawResult: CommandResult;
+    try {
+      rawResult = await runner("npx", args, {
+        cwd: input.workDir,
+        ...(actorRoleEvidencePath || reporterOutputPath
+          ? {
+              env: {
+                ...process.env,
+                ...(actorRoleEvidencePath ? { BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } : {}),
+                ...(reporterOutputPath ? { PLAYWRIGHT_JSON_OUTPUT_FILE: reporterOutputPath } : {})
+              }
             }
-          }
-        : {})
-    });
+          : {})
+      });
+    } catch (error) {
+      if (reporterOutputPath) await rm(reporterOutputPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
     const result = {
       ...rawResult,
       stdout: redactSensitiveText(rawResult.stdout, protectedSecrets),
       stderr: redactSensitiveText(rawResult.stderr, protectedSecrets)
     };
+    const reporterFromFile = reporterOutputPath
+      ? await parseReporterFile(reporterOutputPath)
+      : undefined;
+    if (reporterOutputPath) await rm(reporterOutputPath, { force: true });
     if (actorRoleEvidencePath && input.actorJourney) {
       const roleCheck = await verifyActorRoleEvidence(actorRoleEvidencePath, input.actorJourney);
       if (!roleCheck.valid) {
@@ -463,7 +472,7 @@ export async function runChain(input: RunChainInput) {
       return { ...result, ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {}) };
     }
     const reporter = reporterOutputPath
-      ? await parseReporterFile(reporterOutputPath)
+      ? reporterFromFile
       : parseReporterOutput(result.stdout);
     if (!reporter) {
       return {
@@ -473,7 +482,6 @@ export async function runChain(input: RunChainInput) {
           result.stderr,
           "Structured Playwright Reporter output was missing; execution is not auditable."
         ].filter(Boolean).join("\n"),
-        ...(reporterOutputPath ? { reporterOutputPath } : {}),
         ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {})
       };
     }
@@ -486,7 +494,6 @@ export async function runChain(input: RunChainInput) {
       exitCode: normalizeReporterExitCode(result.exitCode, reporter),
       structuredReporter: safeReporter,
       reporterPath,
-      ...(reporterOutputPath ? { reporterOutputPath } : {}),
       ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {})
     };
   };
