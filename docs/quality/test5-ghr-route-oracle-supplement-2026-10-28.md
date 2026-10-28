@@ -19,6 +19,12 @@
 3. 页面可见职级 `<2-1`、实习生与默认条件，并包含三级部门负责人和嵌套的 `<=2-3` 路径（默认条件包含二级部门负责人）。原始职级 ID 没有映射为可选职级名称。
 4. 后续进入 HRBP 经理；可见实习生/默认分支，再进入高职级可见的 HRBP 负责人和 CHO；`职级 > 3-3` 分支指向 CEO，并有默认分支。
 
+### 最新页面核验与证据边界
+
+用户提供了 Test5 `hc招聘需求流程` 设计页路径 `/dwApp/process/designer/db88e8d8-7c40-11f1-9dfa-fefcfe44737d?title=hc%E6%8B%9B%E8%81%98%E9%9C%80%E6%B1%82%E6%B5%81%E7%A8%8B`。2026-10-28 在用户现有 Chrome 登录会话中只读打开该地址，页面显示 `流程设计 - 招聘需求 - hc招聘需求流程` 及流程画布。没有点击“暂存”或“发布”。现有详细转录仍以 `knowledgeNode_d051ahq9` 为依据；其来源为该 Chrome 标签页的可访问性树，置信度 0.8。
+
+Brain Creator 将这次页面采集记录为 PageModel `page_yso7q41u` v4、ProbeResult `probe_aify5s9r`。该采集找到 **0 个定位点**且没有截图；System Brain 为 7 个页面模型，当前快照 `systemBrainSnapshot_dwoles4t` 仍是 candidate，ChangeSet `systemBrainChangeSet_gpemiiu3` 为 `needs-review`，结构化 workflow/state-transition 模型仍为 0。此前独立 Playwright 上下文访问同地址仍跳转到应用 404。当前页面可见性和已有转录都不证明分支实际命中、页面绑定或审批结果。
+
 以上是已登录宿主 Chrome 可访问性树的只读观察，不是逐条审批执行结果。尤其是嵌套职级、默认分支和原始职级 ID 不足以推导出未显示的路径。
 
 页面上的 `requirementJobLevelId` 值尚未映射到 Test5 职级选项。系统观察只作为路由解释的证据来源，不作为已执行结果或独立业务后置状态证据。
