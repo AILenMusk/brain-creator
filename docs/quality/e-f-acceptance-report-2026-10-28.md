@@ -6,7 +6,7 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 
 - **E — real business evaluation: blocked.** The fixed Test5 Group/GHR denominator is 28 outcomes. No EvaluationTrial exists and no outcome has independent business-state evidence: evidenced completion is **0/28**. No Test5 business write or cleanup was performed.
 - **F — review and delivery: partial.** A stale EvaluationGate reuse defect was fixed in the candidate code. Local checks, exact-head CI, the documentation workflow, and source MCP identity all pass. F remains partial because E has no measured Trial data, PR #187 is still Draft/unmerged, and post-merge acceptance has not run.
-- **Implementation acceptance: 4/6 on the selected mainline snapshot.** PR #187 remains Draft, open, and unmerged. This follow-on candidate does not change the accepted-package count before exact-head checks and merge/post-merge acceptance.
+- **Implementation acceptance: 4/6 on the user-selected current `origin/main` baseline `eedc217d41b631815ca32d0142a3e4dfe26399d9`.** The earlier `ac03cd5` reference is superseded by the user's explicit selection of the live remote main. PR #187 remains Draft, open, and unmerged; candidate checks do not increase the count before merge and post-merge acceptance.
 - Synthetic order/browser fixtures are reported as synthetic and do not count as Test5 outcomes. No npm package was published.
 
 ## Frozen Test5 scope and source
@@ -100,3 +100,23 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - The visible canvas includes `暂存` and `发布` buttons. Neither was clicked. The designer page alone does not prove that the displayed content is published, corresponds to the list's `Proc000019` v9, or is the route used by a live approval. No route branch was exercised, and no business record was read or written.
 - The separate process-list tab timed out during an attempted read-only cross-check, without changing application state. The user then explicitly confirmed that this exact designer link is the currently published and active approval version corresponding to `Proc000019` v9. This closes the user-approved route-version question; the version binding remains attributed to the user, not an independent list/API verification.
 - This direct browser evidence is recorded in the candidate docs only. No Brain Creator Store mutation or Test5 business write occurred. The formal RequirementSet remains draft/blocked, the 28 outcomes remain unmapped and not executed, and E remains blocked at 0/28 independently evidenced outcomes.
+
+## 2026-10-28 Store 清理后的 E/F 续验
+
+- 用户确认清理后，`.worktrees/trust-closure-main/.brain-creator/store/.write.lock` 已不存在。以该目录为 `BRAIN_CREATOR_WORKSPACE` 运行的 `brain-creator doctor` 报告 schema 21 的 sharded store、manifest 和 index 健康；本轮 Facade 调用已成功写入新的本地需求源和草稿。
+- 最新运行身份输出来自候选构建的 CLI/本地 Facade 调用：package `2.1.1`，build commit `46683ae34b91d5ba5fe1875826cbae7211b1a9af`，build ID `b5cda1239eef50f29a4a7c9da628f6fdfd4f6d900381c654c559022fc9c5e4b7`，schema 21，`dirty=true`（本工作树含本轮文档更新）。当前 PR head 的 `npm run build` 已通过。`doctor` 进程是 CLI；通过 `dist/mcp/handlers.js` 创建的 MCP context 运行在本地 Node 进程中。这些结果不证明 Codex 宿主当前加载的 MCP 进程版本；本会话没有注册 Brain Creator 专用 MCP 工具，因此宿主版本仍未独立核验。
+- 本地路由补充源 `requirementSource_gbptsqkg` 已更新到 revision 5，SHA-256 `dc858f1fd74b55b02d3da9d089f2873d9ad0e8817e7aeb600bc216d33265c50b`。Brain Creator 新建 `requirementSet_byw6d77e` v5，状态 `draft`，EvaluationGate `blocked`，条款覆盖 14/14；宿主分析产出 14 条 draft TestIntent、11 个 draft BusinessScenario、0 个 Scenario Assurance 合同，18 项 pending、1 项 blocked。该补充用于路线与关闭规则审核，尚未完成 28 个 outcome 的一对一映射。
+- 正式 Feishu RequirementSet `requirementSet_cc983dzk` v4 仍为 `draft/blocked`：241/241 条款可追溯，8 项已确认、5 项 pending、1 项 blocked。路线图片继续保持结构化草稿，不提升为已确认的需求 Oracle。
+- EvaluationTrial 仍为 0；固定分母仍为 28，独立业务后置状态证据为 0/28。TestData Provider 和自动后置条件验证器均未配置；没有创建招聘需求或 Offer，没有清理测试数据。自主度、恢复率和清理率仍为“未测量”。
+- 实现验收为 **4/6**，基线采用用户确认的当前 `origin/main` `eedc217`；早先 `ac03cd5` 口径已被该确认取代。PR #187 仍 open、Draft、unmerged，head `46683ae34b91d5ba5fe1875826cbae7211b1a9af`；E blocked，F partial。
+- 本地复核：PR 源码 HEAD `46683ae34b91d5ba5fe1875826cbae7211b1a9af` 上 `npm run build` 通过；本轮报告编辑后 `npm run docs:build` 通过，保留既有 VitePress 500 kB chunk warning；`git diff --check` 通过。当前构建身份 `dirty=true` 是因为验收文档尚未提交，不是代码来源不明。GitHub CI #537 与 Documentation #247 验证的是未修改的远端 HEAD。
+
+## 2026-10-28 最新续验
+
+- 当前远程 `origin/main` 为 `eedc217d41b631815ca32d0142a3e4dfe26399d9`，用户已确认采用该基线（取代先前计划中的 `ac03cd5`）；PR #187 的 base 与之相同。未重置或合并分支。
+- GitHub API 当前确认 PR #187 仍 open/Draft/unmerged，head 为 `46683ae34b91d5ba5fe1875826cbae7211b1a9af`。精确 head 的 CI #537 在 Node 20/22 成功，步骤包括测试、类型检查、包构建、文档构建、包内容、仓库卫生和安装包验证；Documentation #247 成功构建，部署步骤跳过。PR 描述仍含清锁前的旧快照，尚未更新。
+- 本地 `npm run verify:codex-native-entry`、`npm run verify:host-agent-document-suite` 与 `npm run verify:package-install` 均通过。文档套件在临时 localhost 招聘控制台上用 Playwright Chromium 执行 TC-001/TC-002；其余 smoke 验证 host-agent 链、隔离插件安装和新临时业务目录的包安装。它们是本机/合成验证，不计入 Test5 的 28 个业务结果。
+- 最新 `doctor` 在 `2026-10-28T07:42:03Z` 报告 ready：schema 21 sharded Store、manifest/index、Codex bridge、Chrome 均通过。仍有 legacy `tests/generated` artifact ownership、Feishu direct connector 未配置（host fallback 可用）、Claude bridge timeout 未设置三项 warning。
+- Fresh `bc_configure target=auth operation=verify` 失败：保存的 AuthProfile 在新浏览器上下文跳回登录页。配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指向已安装 Chrome 后，Brain Creator 专用采集窗口成功打开并等待登录；尚未保存或验证新的状态。第一次使用 Playwright bundled Chromium 的尝试在 Windows 子进程启动时失败（`spawn UNKNOWN`），没有完成采集。
+- Brain Creator 当前正式 RequirementSet 仍为 `draft/blocked`，EvaluationTrial 为 0，固定分母 28 全部 `not_executed`，独立业务结果 `0/28`。TestData Provider 和自动后置条件验证器未配置；项目有 88 个开放 Gap。自主度、恢复率、清理率和业务完成率保持“未测量”。
+- 未进行 Test5 业务写入或数据清理；没有启动真实 Trial，也未发布 npm。实现验收仍为 **4/6**，E blocked，F partial。
