@@ -2522,3 +2522,11 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - Brain Creator Requirement Brain golden evaluation passed 7/7 fixed samples and the process-model sample. L3 scored 6/7 available synthetic samples with 100% on each scored dimension; real-trial samples and metrics remain 0/0 not measured, historical-bug replay is unmeasured, and the L3 release gate is blocked.
 - The current route URL and Proc000019 v9 were user-confirmed and recorded in the local supplement; no more workflow URL is required. The independent Playwright 404 remains a capture limitation, not an unresolved route choice.
 - Commit `48fd7ebc29612f33d0e81919763db24b0016e093` passed exact-head CI #546 on Node 20 and 22 plus Documentation #256. A post-commit source MCP identity smoke returned this commit with `dirty=false`. PR #187 remains Draft/open/unmerged; mainline remains 4/6, E remains 0/28, and F remains partial. No real Test5 write, cleanup, Trial, merge, or package publication occurred.
+
+## 2026-10-28 Read-only Facade gate recheck at 13:00 UTC
+
+- Runtime identity: Brain Creator 2.1.1, code commit `48fd7ebc29612f33d0e81919763db24b0016e093`, `dirty=false`, schema 21, Store workspace `.worktrees/trust-closure-main`. The PR head is a later documentation-only amendment.
+- Formal RequirementSet `requirementSet_cc983dzk` v4 remains draft/blocked with 241/241 clauses traceable, 8 confirmed actions, 5 pending actions, and one blocked structured-process-evidence action for `bc-trust-approval_route-20261026.png`. Source Fidelity reports 14 attachments analyzed and one warning.
+- Local route supplement `requirementSet_nixk1cms` v6 remains draft/blocked with 31/31 clause coverage, 14 pending actions, and one blocked missing-process-coverage action. Scenario Assurance: 11 blocked, 11 missing bindings, 11 limited Oracles.
+- Project status: `revise_blocked_requirement`, 162 open project-level Gaps, and one pending Brain Task at `waiting-approval`. The Gaps are project-wide, not a count of failures in the current 11 scenarios. TestData Provider, automatic postcondition verifier, and EvaluationTrials remain unconfigured/zero.
+- This recheck used read-only `bc_status` and `bc_review`. It does not approve a baseline, map a fixed outcome, or create Test5 business data.
