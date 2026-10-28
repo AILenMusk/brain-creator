@@ -2374,3 +2374,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - The frozen denominator stays 28, mapping remains 0/28, EvaluationTrial count stays 0, open project Gaps remain 79, and TestData Provider/postcondition verifier remain unconfigured. No business write, cleanup, baseline approval, or Trial occurred. The next route-dependent step requires the current working Test5 configuration page/link to be re-established and reviewed; do not promote the draft-only attachment or bypass the gate.
 - A bounded safe interaction probe of the recruitment-demand list (`exploration_1pod5zn1`, one interaction maximum) completed with no transitions, warnings, or Gaps; it exposed no process-configuration navigation route and submitted no forms.
 - Re-assessed the three formal-set scenarios linked to Test5: all three remain blocked (missing System Brain binding, limited Oracle); both demand scenarios have blocked data readiness, while the draft integration scenario only has a ready lookup plan. The system-filtered portfolio remains 3 drafts / 177 stale, with no one-to-one links to the frozen 28 outcomes.
+
+## 2026-10-28 Test5 Process Identifier Follow-up
+
+- The user supplied process identifier `Proc000019`; Brain Creator reverified the saved AuthProfile at `2026-10-28T05:47:43.270Z` on the Test5 base page.
+- Read-only exploration of the previously observed designer route pattern using that identifier completed as `exploration_gbs74l6m` at `2026-10-28T05:48:16.241Z`. PageModel `page_ag781kc2` reports `访问的资源不存在: hc招聘需求流程`; it generated no Gap or warning and performed no business interaction. The identifier alone does not reveal a working configuration page URL, so route verification remains pending.
+- Candidate PR #187 at `d0fd39a236c9b9d5dcfd6532244e3633717e7f9e` passed CI #531 (Node 20/22) and Documentation #241. No merge, baseline approval, Trial, business write, cleanup, or npm publication occurred.

@@ -1,6 +1,6 @@
 # E/F Acceptance Report — 2026-10-28
 
-Evidence refreshed through PR #187 exact-head CI (#530/#240), fresh-context Test5 AuthProfile and read-only route verification, and the 2026-10-28 draft-analysis rerun. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
+Evidence refreshed through PR #187 exact-head CI (#531/#241) at `d0fd39a`, fresh-context Test5 AuthProfile and read-only route verification, and the 2026-10-28 draft-analysis rerun. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
 
 ## Acceptance verdict
 
@@ -50,7 +50,7 @@ Evidence refreshed through PR #187 exact-head CI (#530/#240), fresh-context Test
 - Added regression coverage for removal of a stale contradiction and preservation of an unchanged confirmed action.
 - Local checks passed: `npm test` (141 files / 1,210 tests), `npx tsc --noEmit`, `npm run build`, `npm run docs:build`, `npm run verify:repository-hygiene`, `npm run verify:package-contents` (177 entries), `npm run verify:package-install`, `npm run verify:order-fixture` (6/6 synthetic browser cases), `npm run verify:order-brain-smoke`, and `npm run verify:host-agent-document-suite` (TC-001/TC-002 in Playwright Chromium).
 - The checks above validate local software and synthetic fixtures. They do not validate Test5, Beisen, a real Trial, cross-system migration, or long-running production Runner behavior.
-- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #530 passed on Node 20 and 22; Documentation run #240 passed. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred.
+- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #531 passed on Node 20 and 22; Documentation run #241 passed at `d0fd39a`. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred.
 
 ## Remaining acceptance blockers
 
@@ -85,3 +85,9 @@ Evidence refreshed through PR #187 exact-head CI (#530/#240), fresh-context Test
 - The fixed 28-outcome CSV remains unmapped and `not_executed`; there are still zero EvaluationTrials and zero independently evidenced business outcomes. No Test5 business write or cleanup occurred. System Brain binding, TestData Provider, and independent postcondition verification remain unavailable; autonomy, recovery, and cleanup remain not measured.
 - A bounded safe-interaction exploration of the same demand-list route completed as `exploration_1pod5zn1` with a one-interaction limit, but returned no transitions, warnings, or Gaps; it did not reveal a route to process configuration and performed no form submission or business write.
 - Re-assessed the three scenarios linked to both the formal RequirementSet and Test5. All three remain blocked with missing System Brain binding and limited Oracle; the two demand scenarios have blocked data readiness, while the broad integration draft has a ready lookup plan only. The 180-item system-filtered portfolio contains 3 drafts and 177 stale items; none maps one-to-one to the frozen 28 outcomes.
+
+## 2026-10-28 Process ID Follow-up
+
+- The user supplied Test5 process identifier `Proc000019`. AuthProfile `auth_onb5ja03` was reverified at `2026-10-28T05:47:43.270Z` on the Test5 base page.
+- A read-only exploration using the previously observed designer route pattern with the supplied identifier completed as `exploration_gbs74l6m` at `2026-10-28T05:48:16.241Z`; PageModel `page_ag781kc2` captured `访问的资源不存在: hc招聘需求流程`. No warning, Gap, or business interaction occurred. The process identifier alone does not yield an accessible configuration page; the current designer route remains unverified.
+- PR #187 head `d0fd39a236c9b9d5dcfd6532244e3633717e7f9e` passed CI #531 on Node 20/22 and Documentation #241. These checks include tests, type checking, package build, documentation build, package contents, repository hygiene, and clean package installation.
