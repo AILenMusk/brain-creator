@@ -8,7 +8,7 @@ import type {
   ProjectionManifest,
   SourceSnapshot
 } from "../brain/types.js";
-import type { RequirementSource } from "../domain/types.js";
+import type { RequirementSource, TestIntent } from "../domain/types.js";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type { IntegrityAuthenticator } from "../shared/crypto.js";
 import { id } from "../shared/id.js";
@@ -26,6 +26,7 @@ export type StartEvaluationTrialInput = {
   runtimeVersions: Record<string, string>;
   runtimeBuildIdentity?: string;
   businessScenarioIds?: string[];
+  businessOutcomeIds?: string[];
   approvalReceiptId?: string;
 };
 
@@ -58,6 +59,12 @@ export class EvaluationIntegrityService {
       throw new Error("Evaluation trial source requirement set is invalid");
     }
     const scenarioIds = unique(input.businessScenarioIds ?? []);
+    const requestedOutcomeIds = input.businessOutcomeIds === undefined
+      ? undefined
+      : input.businessOutcomeIds.map((value) => required(value, "Business outcome ID"));
+    if (requestedOutcomeIds && requestedOutcomeIds.length !== new Set(requestedOutcomeIds).size) {
+      throw new Error("Trial business-outcome scope cannot contain duplicate outcome IDs");
+    }
     if (scenarioIds.length > 0 && !input.systemId) {
       throw new Error("A scoped evaluation trial requires an explicit business system");
     }
@@ -65,6 +72,41 @@ export class EvaluationIntegrityService {
       const scenario = this.repository.businessScenarios.find((item) => item.id === scenarioId);
       if (!scenario || scenario.knowledgeProjectId !== project.id || scenario.requirementSetId !== requirementSetId) {
         throw new Error("Evaluation trial scenario is outside the source requirement set");
+      }
+    }
+    const mappedTestIntents = this.repository.testIntents.filter(
+      (item) => item.knowledgeProjectId === project.id && item.requirementSetId === requirementSetId && item.businessOutcomeId !== undefined
+    );
+    if (mappedTestIntents.some((item) => !item.businessOutcomeId!.trim() || item.businessOutcomeId !== item.businessOutcomeId!.trim())) {
+      throw new Error("RequirementSet contains an empty or non-normalized TestIntent businessOutcomeId");
+    }
+    const expectedOutcomeIds = mappedTestIntents.map((item) => item.businessOutcomeId!).sort();
+    if (new Set(expectedOutcomeIds).size !== expectedOutcomeIds.length) {
+      throw new Error("RequirementSet contains duplicate TestIntent businessOutcomeId mappings");
+    }
+    if (requestedOutcomeIds && stableStringify([...requestedOutcomeIds].sort()) !== stableStringify(expectedOutcomeIds)) {
+      throw new Error("Trial must freeze the complete approved business-outcome roster");
+    }
+    const businessOutcomeIds = expectedOutcomeIds;
+    if (businessOutcomeIds.length > 0) {
+      if (!requirementSetId || !scenarioIds.length) {
+        throw new Error("An outcome-scoped evaluation trial requires a source RequirementSet and frozen business scenario scope");
+      }
+      for (const intent of mappedTestIntents) {
+        const owners = this.repository.businessScenarios.filter(
+          (scenario) => scenario.knowledgeProjectId === project.id &&
+            scenario.requirementSetId === requirementSetId &&
+            scenario.testIntentIds?.includes(intent.id)
+        );
+        if (owners.length !== 1) {
+          throw new Error(`Business outcome ${intent.businessOutcomeId} must map to exactly one BusinessScenario`);
+        }
+        if (!scenarioIds.includes(owners[0]!.id)) {
+          throw new Error(`Business outcome ${intent.businessOutcomeId} is outside the frozen Trial scenario scope`);
+        }
+        if (intent.scenarioIds && (intent.scenarioIds.length !== 1 || intent.scenarioIds[0] !== owners[0]!.id)) {
+          throw new Error(`Business outcome ${intent.businessOutcomeId} has inconsistent TestIntent and BusinessScenario membership`);
+        }
       }
     }
     const scenarioReadinessReasons = this.scenarioReadinessReasons({
@@ -83,6 +125,9 @@ export class EvaluationIntegrityService {
     }
     if (approvalReceipt && requirementSetId) {
       new RequirementGateService(this.repository).verifyApprovalReceipt(requirementSetId, approvalReceipt.id);
+    }
+    if (businessOutcomeIds.length > 0 && (!approvalReceipt || requirementSet?.status !== "approved")) {
+      throw new Error("Outcome-scoped evaluation trials require an approved RequirementSet and its approval receipt");
     }
     const peers = this.repository.evaluationTrials.filter(
       (item) => item.comparisonGroupId === input.comparisonGroupId
@@ -105,8 +150,9 @@ export class EvaluationIntegrityService {
     const systemBrainSnapshot = scenarioIds.length > 0 && input.systemId
       ? this.latestConfirmedSystemBrainSnapshot(project.id, input.systemId)
       : undefined;
-    const executionScope = scenarioIds.length > 0 || approvalReceipt ? {
+    const executionScope = scenarioIds.length > 0 || approvalReceipt || businessOutcomeIds.length > 0 ? {
       businessScenarioIds: [...scenarioIds].sort(),
+      ...(businessOutcomeIds.length > 0 ? { businessOutcomeIds } : {}),
       baselineHash: requirementSetId ? new RequirementGateService(this.repository).baselineFingerprint(requirementSetId) : undefined,
       ...(systemBrainSnapshot ? {
         systemBrainSnapshotId: systemBrainSnapshot.id,
@@ -308,8 +354,17 @@ export class EvaluationIntegrityService {
       } else if (frozenScenarioIds && scenarioIds.some((scenarioId) => !frozenScenarioIds.includes(scenarioId))) {
         reasons.push(`Executable case ${caseId} is outside the frozen business scenario scope`);
       }
+      const executableIntent = this.repository.testIntents.find(
+        (item) => item.id === executableCase.testIntentId &&
+          item.knowledgeProjectId === trial.knowledgeProjectId &&
+          item.requirementSetId === executableCase.requirementSetId
+      );
+      if (executableIntent?.businessOutcomeId &&
+          !trial.executionScope?.businessOutcomeIds?.includes(executableIntent.businessOutcomeId)) {
+        reasons.push(`Executable case ${caseId} is outside the frozen business-outcome scope`);
+      }
     }
-    const driftReasons = reasons.filter((reason) => /source|requirement set changed|runtime build identity/i.test(reason));
+    const driftReasons = reasons.filter((reason) => /source|requirement set changed|requirement baseline|execution scope|runtime build identity/i.test(reason));
     if (driftReasons.length > 0 && trial.status === "active") {
       this.repository.transaction(() => this.invalidate(trial, driftReasons));
     }
@@ -365,7 +420,39 @@ export class EvaluationIntegrityService {
         if (set.status !== "approved" || receipt.assetHash !== scope.approvalScopeHash) reasons.push("Frozen approval changed");
       } catch { reasons.push("Frozen approval is no longer valid"); }
     }
+    reasons.push(...this.businessOutcomeScopeReasons(trial, scope));
     return reasons;
+  }
+
+  private businessOutcomeScopeReasons(trial: EvaluationTrial, scope: NonNullable<EvaluationTrial["executionScope"]>) {
+    const mappedIntents = this.repository.testIntents.filter(
+      (item) => item.knowledgeProjectId === trial.knowledgeProjectId &&
+        item.requirementSetId === trial.requirementSetId && item.businessOutcomeId !== undefined
+    );
+    const expectedIds = mappedIntents.map((item) => item.businessOutcomeId!).sort();
+    const selectedIds = scope.businessOutcomeIds ?? [];
+    const reasons: string[] = [];
+    if (new Set(expectedIds).size !== expectedIds.length) {
+      reasons.push("RequirementSet contains duplicate TestIntent businessOutcomeId mappings");
+    }
+    if (stableStringify([...new Set(selectedIds)].sort()) !== stableStringify(expectedIds) ||
+        selectedIds.length !== new Set(selectedIds).size) {
+      reasons.push("Frozen Trial business-outcome scope does not match the complete RequirementSet outcome roster");
+    }
+    for (const intent of mappedIntents) {
+      const owners = this.repository.businessScenarios.filter(
+        (scenario) => scenario.knowledgeProjectId === trial.knowledgeProjectId &&
+          scenario.requirementSetId === trial.requirementSetId &&
+          scenario.testIntentIds?.includes(intent.id)
+      );
+      if (owners.length !== 1 || !scope.businessScenarioIds.includes(owners[0]!.id)) {
+        reasons.push(`Business outcome ${intent.businessOutcomeId} does not map to exactly one frozen Trial scenario`);
+      }
+      if (intent.scenarioIds && (owners.length !== 1 || intent.scenarioIds.length !== 1 || intent.scenarioIds[0] !== owners[0]?.id)) {
+        reasons.push(`Business outcome ${intent.businessOutcomeId} has inconsistent TestIntent and BusinessScenario membership`);
+      }
+    }
+    return [...new Set(reasons)];
   }
 
   private scenarioReadinessReasons(input: {
@@ -824,7 +911,6 @@ function projectionManifestPayload(manifest: ProjectionManifest) {
     createdAt: manifest.createdAt
   });
 }
-
 function interventionPayload(intervention: InterventionRecord) {
   return stableStringify({
     id: intervention.id,
@@ -880,6 +966,7 @@ function stableStringify(value: unknown): string {
       .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
       .join(",")}}`;
   }
+
   return JSON.stringify(value);
 }
 

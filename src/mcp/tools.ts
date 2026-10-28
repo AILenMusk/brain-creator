@@ -202,6 +202,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       evaluationStorePath: z.string().optional(),
       codeRevision: z.string().optional(),
       businessScenarioIds: z.array(z.string()).default([]),
+      businessOutcomeIds: z.array(z.string().min(1).max(200)).optional(),
       runtimeVersions: z.record(z.string(), z.string()).default({}),
       previousProjectionManifestId: z.string().optional(),
       checkpointOperation: z.string().optional(),
@@ -368,6 +369,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
       expectedDraftHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
       testIntentDraftUpdates: z.array(z.object({
         id: z.string().min(1),
+        businessOutcomeId: z.string().trim().min(1).max(200).nullable(),
         title: z.string().min(1).max(500),
         objective: z.string().min(1).max(4000),
         preconditions: z.array(z.string().min(1).max(1000)).min(1).max(30),

@@ -1586,10 +1586,10 @@ export class KnowledgeService {
     expectedDraftHash?: string;
     confirm: boolean;
     confirmationNote?: string;
-    testIntentDraftUpdates: Array<Pick<
+    testIntentDraftUpdates: Array<Omit<Pick<
       TestIntent,
-      "id" | "title" | "objective" | "preconditions" | "expectedResults"
-    >>;
+      "id" | "businessOutcomeId" | "title" | "objective" | "preconditions" | "expectedResults"
+    >, "businessOutcomeId"> & { businessOutcomeId: string | null }>;
     businessScenarioDraftUpdates: Array<Pick<
       BusinessScenario,
       | "id"
@@ -1635,11 +1635,24 @@ export class KnowledgeService {
       input.businessScenarioDraftUpdates
     );
     for (const update of input.testIntentDraftUpdates) {
+      if (update.businessOutcomeId !== null && !update.businessOutcomeId.trim()) {
+        throw new Error(`TestIntent ${update.id} has an empty businessOutcomeId`);
+      }
       if (!update.title.trim() || !update.objective.trim() ||
         update.preconditions.length === 0 || update.preconditions.some((value) => !value.trim()) ||
         update.expectedResults.length === 0 || update.expectedResults.some((value) => !value.trim())) {
         throw new Error(`TestIntent ${update.id} contains an empty required draft field`);
       }
+    }
+    const outcomeIdOwners = new Map<string, string>();
+    for (const update of input.testIntentDraftUpdates) {
+      const outcomeId = update.businessOutcomeId?.trim();
+      if (!outcomeId) continue;
+      const priorOwner = outcomeIdOwners.get(outcomeId);
+      if (priorOwner) {
+        throw new Error(`Business outcome ${outcomeId} is assigned to multiple TestIntents (${priorOwner}, ${update.id})`);
+      }
+      outcomeIdOwners.set(outcomeId, update.id);
     }
     for (const update of input.businessScenarioDraftUpdates) {
       if (!update.title.trim() || !update.objective.trim() || update.expectedBusinessOutcomes.length === 0 ||
@@ -1704,6 +1717,8 @@ export class KnowledgeService {
     this.repository.transaction(() => {
       for (const intent of intents) {
         const update = intentUpdates.get(intent.id)!;
+        if (update.businessOutcomeId === null) delete intent.businessOutcomeId;
+        else intent.businessOutcomeId = update.businessOutcomeId.trim();
         intent.title = update.title.trim();
         intent.objective = update.objective.trim();
         intent.preconditions = update.preconditions.map((value) => value.trim());

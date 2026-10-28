@@ -164,6 +164,7 @@ describe("BRAIN_CREATOR_TOOLS", () => {
       requirementSetId: "requirement-1",
       testIntentDraftUpdates: [{
         id: "intent-1",
+        businessOutcomeId: "OUTCOME-01",
         title: "Intent",
         objective: "Check the state",
         preconditions: ["A synthetic order exists"],
@@ -180,6 +181,12 @@ describe("BRAIN_CREATOR_TOOLS", () => {
         expectedBusinessOutcomes: ["The order reaches its target state"],
         risk: "high"
       }]
+    }).success).toBe(true);
+
+    expect(prepare?.inputSchema.safeParse({
+      action: "start-evaluation-trial",
+      businessScenarioIds: ["scenario-1"],
+      businessOutcomeIds: ["GHR-REQ-01", "GHR-REQ-02"]
     }).success).toBe(true);
 
     expect(
