@@ -2541,3 +2541,8 @@ Trial review now revalidates linked evidence files against their stored hashes a
 
 - Exact PR head `80d2b9c219eb7c953745af6cda051d48a88d1a63` completed CI #550 successfully on Node 20 and Node 22 and Documentation #260 successfully. The CI jobs passed tests, typecheck, build, documentation, package-content, repository-hygiene, and installed-package checks.
 - PR #187 remains Draft/open/unmerged against `origin/main` `eedc217d41b631815ca32d0142a3e4dfe26399d9`; mainline acceptance remains **4/6**. The successful candidate checks do not change E's **0/28** real outcome count or F's unmeasured real-baseline metrics.
+
+## 2026-10-28 Latest exact-head verification
+
+- PR head `24e638fb18e1ca1aaa458b7f95993cc3a33b54ba` passed CI #551 on Node 20 and Node 22 and Documentation #261. Both CI jobs completed tests, typecheck, package build, docs build, package contents, repository hygiene, and installed-package verification successfully.
+- The PR remains Draft and unmerged. This is candidate verification only; the accepted mainline remains **4/6**, and real Test5 outcomes remain **0/28**.
