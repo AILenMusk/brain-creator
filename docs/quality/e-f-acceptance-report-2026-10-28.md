@@ -1,6 +1,6 @@
 # E/F Acceptance Report — 2026-10-28
 
-Evidence refreshed through PR #187 exact-head CI (#528/#238), fresh-context Test5 AuthProfile verification, and the 2026-10-28 draft-analysis rerun. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
+Evidence refreshed through PR #187 exact-head CI (#530/#240), fresh-context Test5 AuthProfile and read-only route verification, and the 2026-10-28 draft-analysis rerun. This report replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
 
 ## Acceptance verdict
 
@@ -50,7 +50,7 @@ Evidence refreshed through PR #187 exact-head CI (#528/#238), fresh-context Test
 - Added regression coverage for removal of a stale contradiction and preservation of an unchanged confirmed action.
 - Local checks passed: `npm test` (141 files / 1,210 tests), `npx tsc --noEmit`, `npm run build`, `npm run docs:build`, `npm run verify:repository-hygiene`, `npm run verify:package-contents` (177 entries), `npm run verify:package-install`, `npm run verify:order-fixture` (6/6 synthetic browser cases), `npm run verify:order-brain-smoke`, and `npm run verify:host-agent-document-suite` (TC-001/TC-002 in Playwright Chromium).
 - The checks above validate local software and synthetic fixtures. They do not validate Test5, Beisen, a real Trial, cross-system migration, or long-running production Runner behavior.
-- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #528 passed on Node 20 and 22; Documentation run #238 passed. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred.
+- PR #187 targets remote `main` at `eedc217d41b631815ca32d0142a3e4dfe26399d9`; this is newer than the `ac03cd5` snapshot named when the plan was first created. Exact-head CI run #530 passed on Node 20 and 22; Documentation run #240 passed. PR #187 remains Draft/open/unmerged, and no post-merge acceptance has occurred.
 
 ## Remaining acceptance blockers
 
@@ -73,3 +73,15 @@ Evidence refreshed through PR #187 exact-head CI (#528/#238), fresh-context Test
 - The formal RequirementSet remains version 4, `draft`, with 241/241 source-clause traceability but a blocked gate: 8 confirmed actions, 5 pending actions, and one blocked action for the unconfirmed process-route attachment. The user explicitly kept the route image at draft-only status, so it remains unpromoted.
 - The 28-row mapping CSV still has blank scenario IDs and all outcomes `not_executed`; independent business evidence remains **0/28**. There are still 0 EvaluationTrials, 79 open project Gaps, no TestData Provider, and no automatic postcondition verifier. Autonomy, recovery, cleanup, and business outcome rates remain **not measured**.
 - No Test5 business writes or cleanup occurred. Beisen and OEHR-writing paths remain outside this local Trial. The live Trial remains blocked until the primary requirement gate, per-outcome scenario/Oracle/data mapping, system binding, TestData Provider, and independent postcondition checks are ready.
+
+## 2026-10-28 Latest Login and Route Evidence
+
+- The current Facade process identifies as package `2.1.1`, code commit `4cd68dcaff63d557e75df501a4297d1912a538e9`, build ID `b5cda1239eef50f29a4a7c9da628f6fdfd4f6d900381c654c559022fc9c5e4b7`, `dirty=false`, schema 21, running against `.worktrees/trust-closure-main`.
+- After the user's dedicated-window login, `bc_configure target=auth operation=verify` succeeded at `2026-10-28T05:32:59.497Z`; the saved AuthProfile landed on the Test5 base page titled `HRONE`. This is authentication evidence only.
+- Read-only exploration `exploration_w5jukyp2` reached the recruitment-demand list at `2026-10-28T05:35:16.577Z`, produced PageModel `page_hfd0kquf` version 4 with 24 locators and no warnings, including visible recruitment-demand, query, and transfer-demand controls. The page identity remains `candidate` and the latest System Brain ChangeSet remains `needs-review`; no workflow or state-transition evidence was produced.
+- A read-only exploration of the previously recorded `hc招聘需求流程` designer link completed as `exploration_kya5brkr` at `2026-10-28T05:37:22.442Z`, but the page displayed `访问的资源不存在: hc招聘需求流程`. It does not independently validate the route configuration. No page interaction or business write was performed.
+- The separate local route addendum `requirementSet_hxo5cwdp` v4 was regenerated successfully after recording the user's explicit decisions. Its seven Eval actions are now `confirmed`, including the Test5 route selection and scope/denominator/cleanup controls; the RequirementSet remains `draft`, the gate verdict remains `needs-user`, and coverage remains 33/39 (six source clauses are operational scope controls, not business outcomes).
+- The formal source RequirementSet `requirementSet_cc983dzk` v4 remains `draft` and its gate remains `blocked`: 241/241 clauses traceable, five pending actions, and one blocked unconfirmed process-route attachment. The route diagram stays draft-only under the user's evidence boundary.
+- The fixed 28-outcome CSV remains unmapped and `not_executed`; there are still zero EvaluationTrials and zero independently evidenced business outcomes. No Test5 business write or cleanup occurred. System Brain binding, TestData Provider, and independent postcondition verification remain unavailable; autonomy, recovery, and cleanup remain not measured.
+- A bounded safe-interaction exploration of the same demand-list route completed as `exploration_1pod5zn1` with a one-interaction limit, but returned no transitions, warnings, or Gaps; it did not reveal a route to process configuration and performed no form submission or business write.
+- Re-assessed the three scenarios linked to both the formal RequirementSet and Test5. All three remain blocked with missing System Brain binding and limited Oracle; the two demand scenarios have blocked data readiness, while the broad integration draft has a ready lookup plan only. The 180-item system-filtered portfolio contains 3 drafts and 177 stale items; none maps one-to-one to the frozen 28 outcomes.
