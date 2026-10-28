@@ -27,6 +27,8 @@ The latest project Gap review returns 64 high-severity Gaps: 60 open and 4 resol
 
 The Test5 system is system_nny1q7wk. Fresh Facade status still reports AuthProfile `auth_onb5ja03` as failed and `nextAction=reauthenticate_auth`. Its last stored verification at 2026-10-27T16:03:37.443Z redirected to the SSO login page. A dedicated `captureAuthState` attempt waited at the manual SSO CAPTCHA step and ended after its 600-second `waitForManualLogin` timeout. It did not verify a login or produce fresh auth state; the prior failed profile remains the only stored auth result. TestData Provider and automatic postcondition verification are both not-configured; the Test5 data graph has zero entities and zero dependencies. The fresh `evaluation-trial` review returns zero trials.
 
+A later Brain Creator CLI `auth capture` attempt initially could not start bundled Playwright Chromium (`spawn UNKNOWN`); using the installed system Chrome executable started the isolated capture. After the user reported a login complete in a regular Chrome session, continuing the isolated capture caused Brain Creator's fresh-context check to return `Stored browser authentication redirected to a login page`. The capture exited without committing the temporary state, so AuthProfile remains failed. This demonstrates that the regular Chrome login was not captured by the isolated AuthProfile flow. A new isolated capture is now open and waiting for the user to sign in there; no CAPTCHA or credential input was automated.
+
 Brain Creator’s current system-scoped projection contains 180 BusinessScenarios: 179 stale and 1 draft. None maps to a frozen GHR outcome ID. Fresh Scenario Assurance review blocks all 180 for missing system binding and limited Oracle; the 16 scenarios associated with current RequirementSet v3 are also all blocked for those reasons. These draft/stale projections do not make any of the 28 outcomes executable or passed.
 
 ## F engineering evidence
@@ -63,7 +65,7 @@ The user's latest route clarification remains reflected in the accepted Eval act
 
 ## Remaining acceptance gates
 
-1. Complete the manual SSO CAPTCHA step in the dedicated Test5 login capture and verify the resulting auth profile in a fresh browser context through Brain Creator. The timed-out capture did not establish whether the supplied password was accepted.
+1. Complete sign-in in the currently open isolated Test5 `auth capture` window, then let Brain Creator verify it in a fresh browser context. The previous isolated capture did not commit state because its fresh-context check redirected to the login page; the bundled Chromium launcher also failed, so the current capture uses the installed Chrome executable.
 2. Read the current Test5 route and role evidence in that session; reconcile the HSSC/A07 branches while keeping the 流程管理员 exclusion out of scope.
 3. Map each of the 28 frozen outcome IDs to a reviewed BusinessScenario, requirement source, role/path, data plan, structured Oracle, and independent postcondition query. The current 180 scenario records do not satisfy this mapping.
 4. Configure and validate the TestData Provider and independent read-only postcondition verification before any Trial.
