@@ -2530,3 +2530,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 - Local route supplement `requirementSet_nixk1cms` v6 remains draft/blocked with 31/31 clause coverage, 14 pending actions, and one blocked missing-process-coverage action. Scenario Assurance: 11 blocked, 11 missing bindings, 11 limited Oracles.
 - Project status: `revise_blocked_requirement`, 162 open project-level Gaps, and one pending Brain Task at `waiting-approval`. The Gaps are project-wide, not a count of failures in the current 11 scenarios. TestData Provider, automatic postcondition verifier, and EvaluationTrials remain unconfigured/zero.
 - This recheck used read-only `bc_status` and `bc_review`. It does not approve a baseline, map a fixed outcome, or create Test5 business data.
+
+## 2026-10-28 Test5 authentication retry
+
+- Opened the approved Test5 entry URL and followed its redirect to the expected Test5 SSO origin. One login attempt using the user-provided credentials returned the SSO message `账号密码错误`.
+- No credential variants were guessed or retried. The AuthProfile remains unverified and E's live Trial is blocked pending confirmation of the credential formatting or a current credential through the user's secure sign-in path.
+- No Test5 business action, baseline approval, Trial creation, or cleanup occurred. The current 18-intent / 11-scenario revision remains a draft; real business evidence remains **0/28**.

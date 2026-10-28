@@ -254,3 +254,9 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - The separate local Test5 route supplement `requirementSet_nixk1cms` v6 also remains `draft` / gate `blocked`: 31/31 clause coverage, 14 pending actions, and one blocked missing-process-coverage action. Its 11 Scenario Assurance results are all blocked: 11 missing bindings and 11 limited Oracles.
 - `bc_status` reports next action `revise_blocked_requirement`, 162 open project-level Gaps, and a pending Brain Task at `waiting-approval`. These 162 Gaps are project-wide, not 162 failures in the current 11 scenarios. TestData Provider and automatic postcondition verification remain `not-configured`; EvaluationTrial count remains **0**.
 - The Facade checks above were read-only. No baseline was approved and no Test5 data was written or cleaned up.
+
+## 2026-10-28 Test5 authentication retry
+
+- The 37 original TestIntent disposition review and the v6 draft revision (18 active intents / 11 scenarios) are complete and persisted. This fulfills the user's direction to revise that draft before outcome mapping; the 28-row CSV remains unchanged.
+- A single login attempt from the Test5 entry URL reached the expected Test5 SSO origin and returned `账号密码错误`. No retry or guessed credential variant was used. The AuthProfile remains unverified while the user confirms whether the supplied password included a space or whether credentials changed.
+- E remains blocked: no Trial, no Test5 business write, no cleanup, and no independently verified business outcome (**0/28**). F's local synthetic/package checks remain passed as listed above, but real baseline comparison and human business annotations remain unmeasured.
