@@ -74,7 +74,20 @@ export function trialFixture(authenticator?: IntegrityAuthenticator, includeBusi
     }).id;
   }
   const service = new EvaluationIntegrityService(repository, authenticator);
-  const input = { comparisonGroupId: "g", knowledgeProjectId: "p", systemId: "s", requirementSourceId: "source", provider: "builtin" as const, workspacePath: ".", storePath: "./isolated", codeRevision: "commit", runtimeVersions: {}, runtimeBuildIdentity: "test-build", businessScenarioIds: ["scenario1", "scenario2", "scenario3"] };
+  const input = {
+    comparisonGroupId: "g",
+    knowledgeProjectId: "p",
+    systemId: "s",
+    requirementSourceId: "source",
+    provider: "builtin" as const,
+    workspacePath: ".",
+    storePath: "./isolated",
+    codeRevision: "commit",
+    runtimeVersions: {},
+    runtimeBuildIdentity: "test-build",
+    businessScenarioIds: ["scenario1", "scenario2", "scenario3"],
+    ...(includeBusinessOutcomes ? { businessOutcomeIds: ["OUTCOME-01", "OUTCOME-02"] } : {})
+  };
   const start = () => service.startTrial({ ...input, ...(approvalReceiptId ? { approvalReceiptId } : {}) }).trial;
   return { repository, service, input, start, approvalReceiptId };
 }
@@ -256,6 +269,11 @@ describe("frozen evaluation execution scope", () => {
     })).toThrow("empty or non-normalized");
 
     expect(() => f.service.startTrial({ ...f.input })).toThrow("approved RequirementSet and its approval receipt");
+    expect(() => f.service.startTrial({
+      ...f.input,
+      approvalReceiptId: f.approvalReceiptId,
+      businessOutcomeIds: undefined
+    })).toThrow("explicit approved business-outcome roster");
     expect(() => f.service.startTrial({
       ...f.input,
       approvalReceiptId: f.approvalReceiptId,
