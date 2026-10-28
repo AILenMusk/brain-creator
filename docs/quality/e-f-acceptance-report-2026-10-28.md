@@ -120,3 +120,18 @@ Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc
 - Fresh `bc_configure target=auth operation=verify` 失败：保存的 AuthProfile 在新浏览器上下文跳回登录页。配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指向已安装 Chrome 后，Brain Creator 专用采集窗口成功打开并等待登录；尚未保存或验证新的状态。第一次使用 Playwright bundled Chromium 的尝试在 Windows 子进程启动时失败（`spawn UNKNOWN`），没有完成采集。
 - Brain Creator 当前正式 RequirementSet 仍为 `draft/blocked`，EvaluationTrial 为 0，固定分母 28 全部 `not_executed`，独立业务结果 `0/28`。TestData Provider 和自动后置条件验证器未配置；项目有 88 个开放 Gap。自主度、恢复率、清理率和业务完成率保持“未测量”。
 - 未进行 Test5 业务写入或数据清理；没有启动真实 Trial，也未发布 npm。实现验收仍为 **4/6**，E blocked，F partial。
+
+## 2026-10-28 登录恢复后的 E/F 复核（08:28 UTC）
+
+- 用户在 Brain Creator 专用窗口完成登录。AuthProfile `auth_onb5ja03` 的采集流程确认其在独立新浏览器上下文通过 Test5 首页验证；该结论只证明鉴权和首页可访问。
+- 清锁后的 Store 再次通过 `brain-creator doctor --json`：schema 21 分片 Store、manifest/index、Codex bridge 与 Chrome 可用。仍有 legacy `tests/generated` artifact ownership、Feishu 直连未配置（host fallback 可用）和 Claude bridge timeout 未设置三项 warning。
+- 用新 AuthProfile 有界只读访问招聘需求列表 `/recruitmentPlatform/demands` 成功：exploration `exploration_jibrj5on` 完成、无 warning/Gap，PageModel `page_ddg9cch9` v6 有 51 个 locator points，识别到“招聘需求、状态、查询、新增”等页面控件。没有打开记录或触发业务动作；它只证明列表页可访问和可查询。
+- 对用户确认的流程设计 URL 直接进行独立上下文只读访问，结果仍为应用内“访问的资源不存在: hc招聘需求流程”。PageModel `page_09tr8278` v5 的 8 个 locator 属于该错误页，不可用于流程绑定。首页 safe 探索在点击“首页”标签时遇到 `Execution context was destroyed`，生成 Gap `gap_b17ja6ok`；没有观察到业务写请求或状态转换。该失败作为探索/恢复缺陷保留，不能记为产品 Bug，也不能当作场景失败。
+- 最新 `bc_status`：项目 `nextAction=revise_blocked_requirement`，开放 Gap 为 89；Brain Task `brainTask_s8pf94bq` 仍是 `waiting-approval`。正式 RequirementSet `requirementSet_cc983dzk` v4 仍为 `draft/blocked`（241/241 条款可追溯、8 confirmed、5 pending、1 blocked）。此前对正式集关联的 3 个场景复核均因缺少 System Brain binding、Oracle 仅 limited 而 blocked；新页面尚未刷新/确认成 System Brain 基线。运行能力仍报告 TestData Provider 与自动后置条件验证均 `not-configured`。
+- 固定 28 个 outcome 仍全部未映射、`not_executed`；EvaluationTrial 为 0，独立业务后置状态证据为 **0/28**。没有创建、提交、转交、审批、关闭或清理 Test5 业务数据；自主度、恢复率、清理率与真实业务完成率仍为“未测量”。
+- 精确候选 head `58ef963499a57dff943164527c5794215777d71b` 的 CI #538 首次 Node 20 尝试在双 iframe 探索断言失败（预期 2、收到 1）；对同一失败 job 重跑后 Node 20 全部步骤通过，Node 22 全部步骤通过，Documentation #248 通过。本机定向用例连续通过 5/5。保留首次失败为间歇性风险记录，不因重跑而删除。
+- 当前 `origin/main` 与用户选定基线仍为 `eedc217d41b631815ca32d0142a3e4dfe26399d9`。PR #187 仍 Draft/open/unmerged；候选 CI 通过不会增加主线实现验收数。实现完成度仍 **4/6**；E blocked、F partial；未合并、未发布 npm。
+
+### 待用户澄清
+
+用户此前提供并确认生效的 `hc招聘需求流程` 设计页，在其现有 Chrome 会话中可见；同一 AuthProfile 的新 Playwright 上下文直接打开却进入应用内资源不存在页。请从 Test5 页面内的流程配置列表重新打开该流程，并提供打开后的完整地址；如果该账号在应用内也只能看到资源不存在，请告知。确认前不将错误页绑定为审批流程，也不启动需依赖该流程的 Trial。
