@@ -2257,3 +2257,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 ## 2026-10-29 Source-Audit Documentation and Package Recheck
 
 - After recording the source-anchor findings, `npm run docs:build` passed, `npm run verify:package-contents` passed (177 entries), and `npm run verify:package-install` installed Brain Creator 2.1.1 and passed in a fresh temporary directory. These checks validate this dirty candidate worktree's docs/package only; they do not change the selected-main **4/6** acceptance count or add real Trial evidence. Real Test5 completion remains **0/28**, and business/autonomy measures remain **not measured**.
+
+## 2026-10-29 Explicit Trial Outcome Roster Gate
+
+- PR review found that a RequirementSet with some mapped TestIntent outcomes could start a Trial without passing an expected outcome roster; that made it possible to freeze a partial denominator if an upstream mapping omitted an intended outcome. `startTrial` now requires the caller to provide the approved roster whenever the set contains mapped outcomes, then compares it against the complete unique mapped roster. Legacy trials without mapped outcomes remain compatible. The omission path has a regression test.
+- Verification after the code change: `src/evaluation/evaluationTrials.test.ts` passed 71/71; the full suite passed 141 files / 1,204 tests; `npx tsc --noEmit` and `npm run build` passed. Commit `2e3b1c5` is on the Draft PR #188 branch; it is not merged and does not increase formal `N/6`.
+- Outcome mapping is still absent from the Test5 Store; real completion remains 0/28 and real business/autonomy measures remain not measured. No Trial or Test5 business action occurred.
