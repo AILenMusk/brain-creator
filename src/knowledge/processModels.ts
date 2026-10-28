@@ -102,50 +102,57 @@ export function buildProcessTestIntents(input: {
   const intents = input.baseIntents.map((intent) => ({ ...intent }));
 
   for (const model of input.workflowModels) {
-    for (const transition of model.transitions) {
-      const intent = intents.find((candidate) => candidate.requirementRefs.includes(transition.sourceRefs[0]));
-      if (!intent) continue;
-      intent.scenarioType = "positive";
-      intent.processModelRefs = [model.id];
-      intent.coverageDimensions = unique([...(intent.coverageDimensions ?? []), "workflow"]);
-      intent.techniques = unique([...(intent.techniques ?? []), transition.condition ? "decision-table" : "scenario"]);
-    }
-    const actors = unique(model.actors.filter(Boolean));
-    if (actors.length > 1) {
-      intents.push({
-        id: id("intent"),
+    const paths = enumeratePaths(
+      model.steps,
+      model.transitions,
+      model.startStepIds,
+      model.endStepIds
+    );
+    for (const path of paths) {
+      const intent = pathTestIntent({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.analysis.requirementSetId,
-        title: `${input.analysis.module}: cross-role actor journey`,
         module: input.analysis.module,
-        priority: "P0",
-        objective: `Complete the workflow across roles: ${actors.join(" -> ")}`,
-        preconditions: ["The requirement baseline is approved", "Each actor has an available test identity"],
-        expectedResults: ["Every workflow transition completes under the expected actor"],
-        requirementRefs: unique(model.transitions.flatMap((transition) => transition.sourceRefs)),
-        knowledgeNodeRefs: [`workflow:${model.title}`],
-        techniques: ["scenario", "state-transition"],
-        coverageDimensions: ["workflow", "state"],
-        scenarioType: "positive",
-        processModelRefs: [model.id],
-        actorJourney: actors,
-        status: "draft",
-        createdAt: now,
-        updatedAt: now
+        modelId: model.id,
+        modelTitle: model.title,
+        modelKind: "workflow",
+        path,
+        now
       });
+      if (intent) intents.push(intent);
     }
   }
 
+  const workflowSourceRefs = new Set(
+    input.workflowModels.flatMap((model) => model.transitions.flatMap((transition) => transition.sourceRefs))
+  );
   for (const model of input.stateMachineModels) {
+    const eligibleTransitions = model.transitions.filter(
+      (transition) => !workflowSourceRefs.has(transition.sourceRefs[0] ?? "")
+    );
+    const paths = enumeratePaths(
+      model.states,
+      eligibleTransitions,
+      model.states.filter((state) => state.initial).map((state) => state.id),
+      model.states.filter((state) => state.terminal).map((state) => state.id)
+    );
+    for (const path of paths) {
+      const intent = pathTestIntent({
+        knowledgeProjectId: input.knowledgeProjectId,
+        requirementSetId: input.analysis.requirementSetId,
+        module: input.analysis.module,
+        modelId: model.id,
+        modelTitle: model.title,
+        modelKind: "state-machine",
+        path,
+        now
+      });
+      if (intent) intents.push(intent);
+    }
+
     for (const transition of model.transitions) {
       const sourceRef = transition.sourceRefs[0];
-      const positive = intents.find((candidate) => candidate.requirementRefs.includes(sourceRef));
-      if (positive) {
-        positive.scenarioType = "positive";
-        positive.processModelRefs = [model.id];
-        positive.coverageDimensions = unique([...(positive.coverageDimensions ?? []), "state", "workflow"]);
-        positive.techniques = unique([...(positive.techniques ?? []), "state-transition"]);
-      }
+      if (workflowSourceRefs.has(sourceRef)) continue;
       const from = model.states.find((state) => state.id === transition.from)?.label ?? transition.from;
       const to = model.states.find((state) => state.id === transition.to)?.label ?? transition.to;
       intents.push(negativeIntent(input, model.id, sourceRef, `${from} -> ${to}: missing prerequisite`,
@@ -175,6 +182,144 @@ export function buildProcessTestIntents(input: {
   return intents;
 }
 
+type PathNode = {
+  id: string;
+  label: string;
+  actor?: string;
+  preconditions?: string[];
+};
+
+type PathTransition = {
+  id: string;
+  from: string;
+  to: string;
+  condition?: string;
+  trigger?: string;
+  actor?: string;
+  preconditions?: string[];
+  sourceRefs: string[];
+};
+
+type EnumeratedPath = {
+  nodes: PathNode[];
+  transitions: PathTransition[];
+  complete: boolean;
+};
+
+function enumeratePaths<Node extends PathNode, Transition extends PathTransition>(
+  nodes: Node[],
+  transitions: Transition[],
+  startNodeIds: string[],
+  endNodeIds: string[]
+): EnumeratedPath[] {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, Transition[]>();
+  for (const transition of transitions) {
+    outgoing.set(transition.from, [...(outgoing.get(transition.from) ?? []), transition]);
+  }
+  const terminalIds = new Set(endNodeIds);
+  const paths: EnumeratedPath[] = [];
+  const maxPaths = 256;
+  const append = (nodeIds: string[], pathTransitions: Transition[], complete: boolean) => {
+    if (pathTransitions.length === 0) return;
+    paths.push({
+      nodes: nodeIds.flatMap((nodeId) => nodesById.has(nodeId) ? [nodesById.get(nodeId)!] : []),
+      transitions: pathTransitions,
+      complete
+    });
+    if (paths.length > maxPaths) throw new Error(`Process model exceeds the ${maxPaths}-path intent limit`);
+  };
+  const visit = (nodeIds: string[], pathTransitions: Transition[], visited: Set<string>) => {
+    const current = nodeIds.at(-1);
+    if (!current) return;
+    if (terminalIds.has(current)) {
+      append(nodeIds, pathTransitions, true);
+      return;
+    }
+    const candidates = (outgoing.get(current) ?? []).filter((transition) => !visited.has(transition.to));
+    if (candidates.length === 0) {
+      append(nodeIds, pathTransitions, false);
+      return;
+    }
+    for (const transition of candidates) {
+      visit(
+        [...nodeIds, transition.to],
+        [...pathTransitions, transition],
+        new Set([...visited, transition.to])
+      );
+    }
+  };
+  for (const startNodeId of startNodeIds) visit([startNodeId], [], new Set([startNodeId]));
+  return paths;
+}
+
+function pathTestIntent(input: {
+  knowledgeProjectId: string;
+  requirementSetId: string;
+  module: string;
+  modelId: string;
+  modelTitle: string;
+  modelKind: "workflow" | "state-machine";
+  path: EnumeratedPath;
+  now: string;
+}): TestIntent | undefined {
+  const { path } = input;
+  const requirementRefs = unique(path.transitions.flatMap((transition) => transition.sourceRefs));
+  if (requirementRefs.length === 0) return undefined;
+  const labelsById = new Map(path.nodes.map((node) => [node.id, node.label]));
+  const pathConditions = unique(path.transitions.flatMap((transition) => transition.condition ? [transition.condition] : []));
+  const actorsInOrder = path.transitions.flatMap((transition) => transition.actor ? [transition.actor] : []);
+  const startLabel = path.nodes[0]?.label ?? path.transitions[0]?.from ?? input.modelTitle;
+  const endLabel = path.nodes.at(-1)?.label ?? path.transitions.at(-1)?.to ?? input.modelTitle;
+  const conditionsLabel = pathConditions.join(" AND ");
+  const pathLabel = conditionsLabel || `${startLabel} → ${endLabel}`;
+  const expectedResults = path.transitions.map((transition) => {
+    const from = labelsById.get(transition.from) ?? transition.from;
+    const to = labelsById.get(transition.to) ?? transition.to;
+    const trigger = transition.trigger ?? transition.condition;
+    const actor = transition.actor ? `${transition.actor} performs ` : "";
+    return trigger
+      ? `${actor}${trigger}: ${from} → ${to}`
+      : `${actor}complete transition ${from} → ${to}`;
+  });
+  if (path.complete) expectedResults.push(`The modeled path reaches ${endLabel}`);
+
+  return {
+    id: id("intent"),
+    knowledgeProjectId: input.knowledgeProjectId,
+    requirementSetId: input.requirementSetId,
+    title: `${input.module}: ${pathLabel}`,
+    module: input.module,
+    priority: "P1",
+    objective: pathConditions.length > 0
+      ? `Complete only the modeled path when ${conditionsLabel}`
+      : `Complete the modeled path from ${startLabel} to ${endLabel}`,
+    preconditions: unique([
+      ...pathConditions,
+      ...(input.modelKind === "state-machine" && startLabel ? [startLabel] : []),
+      ...path.nodes.flatMap((node) => node.preconditions ?? []),
+      ...path.transitions.flatMap((transition) => transition.preconditions ?? [])
+    ]),
+    ...(pathConditions.length > 0 ? { applicabilityConditions: pathConditions } : {}),
+    expectedResults,
+    requirementRefs,
+    knowledgeNodeRefs: [`${input.modelKind}:${input.modelTitle}`],
+    techniques: unique([
+      "scenario",
+      ...(input.modelKind === "state-machine" ? ["state-transition" as const] : []),
+      ...(pathConditions.length > 0 ? ["decision-table" as const] : [])
+    ]),
+    coverageDimensions: input.modelKind === "state-machine" ? ["workflow", "state"] : ["workflow"],
+    ...(path.complete ? { scenarioType: "positive" as const } : {}),
+    processModelRefs: [input.modelId],
+    selectedTransitionRefs: path.transitions.map((transition) => transition.id),
+    ...(new Set(actorsInOrder).size > 1 ? { actorJourney: actorsInOrder } : {}),
+    status: "draft",
+    createdAt: input.now,
+    updatedAt: input.now
+  };
+}
+
 export function buildRequirementCoverageProfile(input: {
   knowledgeProjectId: string;
   requirementSetId: string;
@@ -192,8 +337,13 @@ export function buildRequirementCoverageProfile(input: {
           .map((clause) => clause.sourceRef)
       );
       const matching = input.intents.filter((intent) => intent.coverageDimensions?.includes(dimension));
+      const modeledRefs = dimension === "workflow"
+        ? input.workflowModels.filter((model) => model.status === "confirmed").flatMap((model) => model.transitions.flatMap((transition) => transition.sourceRefs))
+        : dimension === "state"
+          ? input.stateMachineModels.filter((model) => model.status === "confirmed").flatMap((model) => model.transitions.flatMap((transition) => transition.sourceRefs))
+          : [];
       const coveredRefs = requirementRefs.filter((sourceRef) =>
-        matching.some((intent) => intent.requirementRefs.includes(sourceRef))
+        matching.some((intent) => intent.requirementRefs.includes(sourceRef)) || modeledRefs.includes(sourceRef)
       );
       return [dimension, {
         requirementRefs,
@@ -230,7 +380,7 @@ export function buildRequirementCoverageProfile(input: {
     );
   }
   const processRequired = input.workflowModels.length + input.stateMachineModels.length > 0;
-  if (processRequired && dimensions.workflow.intentCount + dimensions.state.intentCount === 0) {
+  if (processRequired && dimensions.workflow.coveredRefs.length + dimensions.state.coveredRefs.length === 0) {
     reasons.push("Requirement test design is field-heavy and has no process coverage");
   }
 
@@ -342,6 +492,7 @@ function processClause(
     origin: "derived",
     confidence: 1,
     status: "confirmed",
+    testDesignEligible: false,
     policyId: REQUIREMENT_ANALYSIS_POLICY.id,
     policyVersion: REQUIREMENT_ANALYSIS_POLICY.version,
     nodeTypes: [...nodeTypes]

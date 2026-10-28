@@ -53,6 +53,88 @@ describe("built-in knowledge policies", () => {
     expect(evaluatePolicyOutput(analysis).verdict).toBe("pass");
   });
 
+  it("does not treat an out-of-scope branch as boundary-value test data", () => {
+    const sourceRef = "source_scope#line-1";
+    const analysis = normalizeHostSkillAnalysis(
+      {
+        module: "Approval scope",
+        nodes: [
+          {
+            type: "rule",
+            title: "Excluded administrator branch",
+            content: "The HSSC administrator branch is out of scope for this run.",
+            sourceRefs: [sourceRef]
+          }
+        ],
+        clauses: [
+          {
+            text: "HSSC 系统管理员支线不在本轮范围外；对应 outcome 保留在固定分母并记未执行。",
+            sourceRef,
+            sourceRefs: [sourceRef],
+            kind: "rule"
+          }
+        ],
+        openQuestions: []
+      },
+      "requirement_scope"
+    );
+
+    const design = designTests({ knowledgeProjectId: "project_1", analysis });
+
+    expect(analysis.clauses[0]?.nodeTypes).toEqual(["rule"]);
+    expect(design.dataProfiles).toHaveLength(0);
+  });
+
+  it("treats an overseas equality condition as an equivalence class, not a boundary", () => {
+    const sourceRef = "source_route#line-1";
+    const analysis = normalizeHostSkillAnalysis(
+      {
+        module: "Routing",
+        nodes: [
+          { type: "workflow", title: "Next approver route", content: "The next approver is selected by a route condition.", sourceRefs: [sourceRef] },
+          { type: "rule", title: "Overseas route", content: "overseaEstablishment == 1 selects the HRBP route.", sourceRefs: [sourceRef] }
+        ],
+        clauses: [
+          { text: "海外路由：前置条件为 overseaEstablishment == 1；当前下一审批节点分配给 HRBP。", sourceRef, sourceRefs: [sourceRef], kind: "workflow" }
+        ],
+        openQuestions: []
+      },
+      "requirement_route"
+    );
+
+    const design = designTests({ knowledgeProjectId: "project_1", analysis });
+
+    expect(analysis.clauses[0]?.nodeTypes).toContain("field");
+    expect(design.testIntents[0]?.techniques).toContain("equivalence-partitioning");
+    expect(design.testIntents[0]?.techniques).not.toContain("boundary-value");
+    expect(design.dataProfiles[0]?.field).toBe("overseaEstablishment");
+    expect(design.dataProfiles[0]?.constraints).not.toContain("cover:boundary-value");
+    expect(design.dataProfiles[0]?.constraints).toContain("source-condition:overseaEstablishment==1");
+  });
+
+  it("keeps blocked path conditions on their intent without creating a misleading data profile", () => {
+    const sourceRef = "source_route#line-1";
+    const analysis = normalizeHostSkillAnalysis({
+      module: "GHR route",
+      nodes: [{ type: "field", title: "Internship condition", content: 'personnelType == "2"', sourceRefs: [sourceRef] }],
+      clauses: [{
+        text: 'personnelType == "2" stays blocked until its next actor is confirmed.',
+        sourceRef,
+        sourceRefs: [sourceRef],
+        kind: "condition",
+        appliesWhen: ['personnelType == "2"'],
+        testDesignEligible: true,
+        dataPreparationEligible: false
+      }],
+      openQuestions: []
+    }, "requirement_route");
+
+    const design = designTests({ knowledgeProjectId: "project_1", analysis });
+
+    expect(design.testIntents[0]?.applicabilityConditions).toEqual(['personnelType == "2"']);
+    expect(design.dataProfiles).toHaveLength(0);
+  });
+
   it("normalizes HTML requirement fragments before generating intents", () => {
     const analysis = analyzeRequirement({
       requirementSetId: "requirement_html",
@@ -84,7 +166,7 @@ describe("built-in knowledge policies", () => {
         confidence: 1,
         status: "draft",
         policyId: "brain-creator.requirement-analysis",
-        policyVersion: "2.2.1"
+        policyVersion: "2.2.2"
       })
     ]));
     expect(analysis.nodes).toEqual(
@@ -119,6 +201,26 @@ describe("built-in knowledge policies", () => {
       uncoveredClauseSourceRefs: [],
       intentCount: 4
     });
+  });
+
+  it("preserves all source references attached to a multi-source clause", () => {
+    const primaryRef = "source_route#line-1";
+    const confirmationRef = "source_route#line-2";
+    const analysis = normalizeHostSkillAnalysis({
+      module: "Demand close",
+      nodes: [{ type: "state", title: "Closed state", content: "A successful close yields Closed.", sourceRefs: [primaryRef, confirmationRef] }],
+      clauses: [{
+        text: "After confirmation, independently verify the demand state is Closed.",
+        sourceRef: primaryRef,
+        sourceRefs: [primaryRef, confirmationRef],
+        kind: "state"
+      }],
+      openQuestions: []
+    }, "requirement_close");
+
+    const design = designTests({ knowledgeProjectId: "project_1", analysis });
+
+    expect(design.testIntents[0]?.requirementRefs).toEqual([primaryRef, confirmationRef]);
   });
 
   it("reports coverage, missing branches, and required actions in policy evaluation", () => {

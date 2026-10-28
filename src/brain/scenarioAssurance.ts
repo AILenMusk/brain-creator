@@ -90,6 +90,9 @@ export type EvaluationProviderRegistryOptions = {
 export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScenario[] {
   const scenarios: BusinessScenario[] = [];
   const coveredIntentIds = new Set<string>();
+  const workflowTransitionSourceRefs = new Set(
+    input.workflows.flatMap((model) => model.transitions.flatMap((transition) => transition.sourceRefs))
+  );
   const add = (draft: ScenarioDraft) => {
     const scenario: BusinessScenario = {
       ...draft,
@@ -108,74 +111,56 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
   };
 
   for (const model of input.workflows) {
-    const related = relatedIntents(input.testIntents, model.sourceRefs, model.id)
-      .filter((intent) => intent.scenarioType !== "negative");
-    const outcomes = unique(
-      related.flatMap((intent) => intent.expectedResults)
-    );
-    add(baseScenario({
-      knowledgeProjectId: input.knowledgeProjectId,
-      requirementSetId: input.requirementSetId,
-      title: model.title,
-      objective: `Complete the workflow: ${model.title}`,
-      family: "main-flow",
-      actors: model.actors,
-      preconditions: model.steps.flatMap((step) => step.preconditions ?? []),
-      workflowRefs: [model.id],
-      stateTransitionRefs: [],
-      decisionRuleRefs: [],
-      expectedBusinessOutcomes: outcomes.length > 0 ? outcomes : endStepLabels(model),
-      sourceRefs: [...model.sourceRefs, ...related.flatMap((intent) => intent.requirementRefs)],
-      testIntentIds: related.map((intent) => intent.id),
-      risk: riskForIntents(related)
-    }));
-    for (const transition of model.transitions) {
-      if (!transition.condition && !transition.trigger) continue;
-      const from = model.steps.find((step) => step.id === transition.from)?.label ?? transition.from;
-      const to = model.steps.find((step) => step.id === transition.to)?.label ?? transition.to;
-      const transitionIntents = relatedIntents(input.testIntents, transition.sourceRefs, model.id)
-        .filter((intent) => intent.scenarioType !== "negative");
+    for (const path of enumerateWorkflowPaths(model)) {
+      const pathConditions = unique(path.transitions.flatMap((transition) => [transition.condition, transition.trigger].filter(isNonEmptyString)));
+      const pathSourceRefs = unique(path.transitions.flatMap((transition) => transition.sourceRefs));
+      const related = relatedIntents(input.testIntents, pathSourceRefs, model.id)
+        .filter((intent) => intent.scenarioType !== "negative")
+        .filter((intent) => (intent.applicabilityConditions ?? []).every((condition) => pathConditions.includes(condition)));
+      const conditionsLabel = pathConditions.join(" → ");
+      const pathLabel = conditionsLabel || path.steps.map((step) => step.label).join(" → ");
+      const expectedPathOutcomes = path.transitions.map((transition) => {
+        const destination = path.steps.find((step) => step.id === transition.to)?.label ?? transition.to;
+        const condition = transition.condition ?? transition.trigger;
+        return condition ? `${condition} → ${destination}` : `达到 ${destination}`;
+      });
+      const expectedOutcomes = unique([
+        ...related.flatMap((intent) => intent.expectedResults),
+        ...expectedPathOutcomes,
+        ...(path.steps.length ? [path.steps.at(-1)!.label] : [])
+      ]);
       add(baseScenario({
+        id: stableId("scenario", { workflowId: model.id, transitionIds: path.transitions.map((transition) => transition.id) }),
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
-        title: `${from} -> ${to}: conditional path`,
-        objective: transition.condition ?? transition.trigger ?? `Complete ${from} -> ${to}`,
-        family: "branch",
-        actors: unique([transition.actor ?? "", ...model.actors]),
-        preconditions: unique([...(transition.preconditions ?? []), ...model.steps.find((step) => step.id === transition.from)?.preconditions ?? []]),
+        title: `${model.title}: ${pathLabel}`,
+        objective: conditionsLabel
+          ? `Complete only this workflow path when ${conditionsLabel}`
+          : `Complete the modeled workflow path: ${pathLabel}`,
+        family: pathConditions.length > 0 ? "branch" : "main-flow",
+        actors: unique([
+          ...path.steps.map((step) => step.actor ?? ""),
+          ...path.transitions.map((transition) => transition.actor ?? "")
+        ].filter(Boolean)),
+        preconditions: unique([
+          ...pathConditions,
+          ...path.steps.flatMap((step) => step.preconditions ?? []),
+          ...path.transitions.flatMap((transition) => transition.preconditions ?? [])
+        ]),
         workflowRefs: [model.id],
         stateTransitionRefs: [],
         decisionRuleRefs: [],
-        expectedBusinessOutcomes: transitionIntents.flatMap((intent) => intent.expectedResults).length > 0
-          ? unique(transitionIntents.flatMap((intent) => intent.expectedResults))
-          : [`The workflow reaches ${to}`],
-        sourceRefs: [...transition.sourceRefs, ...model.sourceRefs],
-        testIntentIds: transitionIntents.map((intent) => intent.id),
-        risk: riskForIntents(transitionIntents)
-      }));
-    }
-    if (unique(model.actors).filter(Boolean).length > 1) {
-      add(baseScenario({
-        knowledgeProjectId: input.knowledgeProjectId,
-        requirementSetId: input.requirementSetId,
-        title: `${model.title}: cross-role journey`,
-        objective: `Complete ${model.title} across actors`,
-        family: "cross-role",
-        actors: unique(model.actors),
-        preconditions: ["Each actor has an available test identity"],
-        workflowRefs: [model.id],
-        stateTransitionRefs: [],
-        decisionRuleRefs: [],
-        expectedBusinessOutcomes: [`Every workflow transition completes under the expected actor`],
-        sourceRefs: model.sourceRefs,
+        expectedBusinessOutcomes: expectedOutcomes,
+        sourceRefs: unique([...pathSourceRefs, ...related.flatMap((intent) => intent.requirementRefs)]),
         testIntentIds: related.map((intent) => intent.id),
-        risk: "high"
+        risk: path.complete ? riskForIntents(related) : "critical"
       }));
     }
   }
 
   for (const model of input.stateMachines) {
     for (const transition of model.transitions) {
+      if (transition.sourceRefs.some((ref) => workflowTransitionSourceRefs.has(ref))) continue;
       const from = model.states.find((state) => state.id === transition.from)?.label ?? transition.from;
       const to = model.states.find((state) => state.id === transition.to)?.label ?? transition.to;
       const related = relatedIntents(input.testIntents, transition.sourceRefs, model.id)
@@ -197,10 +182,15 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
         risk: riskForIntents(related)
       }));
     }
-    const negative = input.testIntents.filter(
-      (intent) => intent.scenarioType === "negative" && intent.processModelRefs?.includes(model.id)
+    const eligibleTransitions = model.transitions.filter(
+      (transition) => !transition.sourceRefs.some((ref) => workflowTransitionSourceRefs.has(ref))
     );
-    for (const intent of negative.length > 0 ? negative : model.transitions.map((transition) => ({
+    const negative = input.testIntents.filter(
+      (intent) => intent.scenarioType === "negative" &&
+        intent.processModelRefs?.includes(model.id) &&
+        !intent.requirementRefs.some((ref) => workflowTransitionSourceRefs.has(ref))
+    );
+    for (const intent of negative.length > 0 ? negative : eligibleTransitions.map((transition) => ({
       id: `${transition.id}:implicit-negative`,
       title: "Invalid state transition",
       objective: `Reject an invalid transition from ${transition.from} to ${transition.to}`,
@@ -209,7 +199,7 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
       preconditions: [],
       priority: "P1" as const
     }))) {
-      const transition = model.transitions.find((item) => item.sourceRefs.some((ref) => intent.requirementRefs.includes(ref)));
+      const transition = eligibleTransitions.find((item) => item.sourceRefs.some((ref) => intent.requirementRefs.includes(ref)));
       add(baseScenario({
         knowledgeProjectId: input.knowledgeProjectId,
         requirementSetId: input.requirementSetId,
@@ -231,6 +221,7 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
 
   for (const model of input.decisionTables) {
     for (const [index, rule] of model.rules.entries()) {
+      if (rule.sourceRefs.length > 0 && rule.sourceRefs.every((ref) => workflowTransitionSourceRefs.has(ref))) continue;
       const ruleLabel = Object.entries(rule.conditionValues)
         .map(([condition, value]) => `${condition}=${value}`)
         .join(", ");
@@ -287,6 +278,53 @@ export function buildBusinessScenarios(input: ScenarioBuildInput): BusinessScena
           .map((profile) => profile.id)
       : []
   }));
+}
+
+type WorkflowPath = {
+  steps: WorkflowModel["steps"];
+  transitions: WorkflowModel["transitions"];
+  complete: boolean;
+};
+
+function enumerateWorkflowPaths(model: WorkflowModel): WorkflowPath[] {
+  const stepsById = new Map(model.steps.map((step) => [step.id, step]));
+  const outgoing = new Map<string, WorkflowModel["transitions"]>();
+  for (const transition of model.transitions) {
+    outgoing.set(transition.from, [...(outgoing.get(transition.from) ?? []), transition]);
+  }
+  const endStepIds = new Set(model.endStepIds);
+  const paths: WorkflowPath[] = [];
+  const maxPaths = 256;
+
+  const visit = (
+    stepIds: string[],
+    transitions: WorkflowModel["transitions"],
+    visited: Set<string>
+  ) => {
+    const current = stepIds.at(-1);
+    if (!current) return;
+    if (endStepIds.has(current)) {
+      paths.push({ steps: stepIds.flatMap((stepId) => stepsById.has(stepId) ? [stepsById.get(stepId)!] : []), transitions, complete: true });
+      if (paths.length > maxPaths) throw new Error(`Workflow ${model.id} exceeds the ${maxPaths}-path scenario limit`);
+      return;
+    }
+    const candidates = (outgoing.get(current) ?? []).filter((transition) => !visited.has(transition.to));
+    if (candidates.length === 0) {
+      paths.push({ steps: stepIds.flatMap((stepId) => stepsById.has(stepId) ? [stepsById.get(stepId)!] : []), transitions, complete: false });
+      if (paths.length > maxPaths) throw new Error(`Workflow ${model.id} exceeds the ${maxPaths}-path scenario limit`);
+      return;
+    }
+    for (const transition of candidates) {
+      visit(
+        [...stepIds, transition.to],
+        [...transitions, transition],
+        new Set([...visited, transition.to])
+      );
+    }
+  };
+
+  for (const startStepId of model.startStepIds) visit([startStepId], [], new Set([startStepId]));
+  return paths;
 }
 
 export function buildScenarioAssurance(input: ScenarioAssuranceInput): ScenarioAssuranceContract {
@@ -512,7 +550,7 @@ export class EvaluationProviderRegistry {
   }
 }
 
-function baseScenario(input: Omit<ScenarioDraft, "id" | "status" | "testDataNeeds">): ScenarioDraft {
+function baseScenario(input: Omit<ScenarioDraft, "status" | "testDataNeeds">): ScenarioDraft {
   return {
     ...input,
     testDataNeeds: [],
@@ -552,6 +590,10 @@ function stableId(prefix: string, value: unknown) {
 
 function unique<T>(values: T[]) {
   return [...new Set(values)];
+}
+
+function isNonEmptyString(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function descriptor(

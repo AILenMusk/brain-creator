@@ -143,7 +143,10 @@ describe("Requirement Brain golden samples", () => {
     expect(result.coverageProfile.status).toBe("complete");
     expect(result.coverageProfile.dimensions.workflow.missingRefs).toEqual([]);
     expect(result.coverageProfile.dimensions.state.missingRefs).toEqual([]);
-    expect(result.testIntents.filter((intent) => intent.scenarioType === "positive").length).toBeGreaterThanOrEqual(4);
+    const positivePaths = result.testIntents.filter((intent) => intent.scenarioType === "positive");
+    expect(positivePaths).toHaveLength(2);
+    expect(positivePaths.every((intent) => intent.selectedTransitionRefs?.length === 2)).toBe(true);
+    expect(positivePaths.some((intent) => intent.actorJourney?.join(",") === "requester,manager")).toBe(true);
     expect(result.testIntents.filter((intent) => intent.scenarioType === "negative").length).toBeGreaterThanOrEqual(5);
     expect(result.testIntents).toEqual(
       expect.arrayContaining([

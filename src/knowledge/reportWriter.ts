@@ -316,11 +316,14 @@ function findInlineEvidenceRefs(input: RequirementAnalysisReportInput) {
 
 function scenarioType(intent: TestIntent) {
   const title = intent.title.toLowerCase();
+  const description = [intent.title, intent.objective, ...intent.expectedResults].join(" ").toLowerCase();
+  if (/not executed|未执行/.test(description)) return "未执行分支";
   if ((intent.actorJourney?.length ?? 0) > 1) return "跨角色业务流程";
-  if (/missing prerequisite|role mismatch|invalid transition|非法|前置|角色不匹配/i.test(title)) return "异常或非法状态";
-  if (intent.coverageDimensions?.includes("state")) return "状态转换";
-  if (intent.coverageDimensions?.includes("workflow")) return "业务流程";
+  if (/missing prerequisite|prerequisite (?:is )?(?:missing|not met)|role mismatch|invalid transition|forbidden|blocked|rejected|denied|非法|前置条件(?:缺失|不满足)|角色不匹配|阻止|禁止|不得|拒绝|不允许/i.test(description)) return "异常或非法状态";
   if (intent.techniques.includes("decision-table")) return "条件分支";
+  if (/mapping|mapped|映射/.test(title)) return "状态与数据映射";
+  if (intent.techniques.includes("state-transition") || intent.coverageDimensions?.includes("state")) return "状态转换";
+  if (intent.coverageDimensions?.includes("workflow")) return "业务流程";
   if (intent.coverageDimensions?.includes("field")) return "字段与数据规则";
   return intent.scenarioType === "negative" ? "异常场景" : "功能场景";
 }
@@ -336,7 +339,7 @@ function riskLabel(value: BusinessScenario["risk"]) {
   return { low: "低", medium: "中", high: "高", critical: "严重" }[value];
 }
 
-function dataReadinessLabel(value: string) { return { ready: "数据已就绪", creatable: "可创建", blocked: "数据阻塞" }[value] ?? value; }
+function dataReadinessLabel(value: string) { return { ready: "数据方案可用", creatable: "准备后可用", blocked: "数据阻塞" }[value] ?? value; }
 function contractVerdictLabel(value: string) { return { pass: "通过", "needs-review": "需要复核", blocked: "已阻塞" }[value] ?? value; }
 function bindingLabel(value: string) { return { unique: "唯一绑定", ambiguous: "存在歧义", missing: "未绑定" }[value] ?? value; }
 function oracleLabel(value: string) { return { strong: "强断言", limited: "有限断言", none: "无断言" }[value] ?? value; }

@@ -10,12 +10,12 @@ import type {
 
 export const REQUIREMENT_ANALYSIS_POLICY = {
   id: "brain-creator.requirement-analysis",
-  version: "2.2.1"
+  version: "2.2.2"
 } as const;
 
 export const TEST_DESIGN_POLICY = {
   id: "brain-creator.test-design",
-  version: "2.2.0"
+  version: "2.2.8"
 } as const;
 
 export type RequirementClauseKind =
@@ -44,6 +44,12 @@ export type RequirementClause = {
   origin: "explicit" | "derived";
   confidence: number;
   status: "draft" | "confirmed" | "conflicted";
+  /** Preserve analysis context without turning it into an executable test intent. */
+  testDesignEligible?: boolean;
+  /** Exact workflow conditions that scope this clause to one path. */
+  appliesWhen?: string[];
+  /** Prevent skipped or blocked paths from looking data-ready before they are reviewed. */
+  dataPreparationEligible?: boolean;
   policyId: string;
   policyVersion: string;
   nodeTypes: KnowledgeNodeType[];
@@ -177,7 +183,8 @@ export function designTests(input: {
 }) {
   const now = new Date().toISOString();
   const allTechniques = new Set<TestDesignTechnique>();
-  const testIntents = input.analysis.clauses.map((clause): TestIntent => {
+  const designClauses = input.analysis.clauses.filter((clause) => clause.testDesignEligible !== false);
+  const testIntents = designClauses.map((clause): TestIntent => {
     const techniques = techniquesForClause(clause);
     techniques.forEach((technique) => allTechniques.add(technique));
     const relatedNodes = input.analysis.nodes.filter(
@@ -193,8 +200,9 @@ export function designTests(input: {
       priority: priorityForClause(clause),
       objective: clause.text,
       preconditions: ["The requirement baseline is approved", "The target environment is available"],
+      ...(clause.appliesWhen?.length ? { applicabilityConditions: [...clause.appliesWhen] } : {}),
       expectedResults: [clause.text],
-      requirementRefs: [clause.sourceRef],
+      requirementRefs: [...new Set(clause.sourceRefs.length > 0 ? clause.sourceRefs : [clause.sourceRef])],
       knowledgeNodeRefs: relatedNodes.map((node) => `${node.type}:${node.title}`),
       techniques,
       coverageDimensions: coverageDimensionsForClause(clause),
@@ -204,13 +212,15 @@ export function designTests(input: {
     };
   });
 
-  const dataProfiles = input.analysis.clauses.flatMap((clause): TestDataProfile[] => {
+  const dataProfiles = designClauses.flatMap((clause): TestDataProfile[] => {
     const techniques = techniquesForClause(clause);
-    const needsData =
+    const comparison = parseFieldComparison(clause.text);
+    const needsData = clause.dataPreparationEligible !== false && (
       clause.nodeTypes.includes("field") ||
       clause.nodeTypes.includes("data-constraint") ||
       techniques.includes("boundary-value") ||
-      techniques.includes("equivalence-partitioning");
+      techniques.includes("equivalence-partitioning")
+    );
     if (!needsData) return [];
     return [{
       id: id("data"),
@@ -219,14 +229,17 @@ export function designTests(input: {
       name: `${clause.module} clause ${clause.index} data`,
       field: semanticFieldName(clause.text, clause.index),
       strategy: "generated",
-      constraints: techniques.map((technique) => `cover:${technique}`),
+      constraints: [
+        ...techniques.map((technique) => `cover:${technique}`),
+        ...(comparison ? [`source-condition:${comparison.field}${comparison.operator}${comparison.value}`] : [])
+      ],
       seed: `${input.analysis.requirementSetId}:${clause.index}`,
       sourceRefs: [clause.sourceRef],
       createdAt: now
     }];
   });
   const coveredClauseSourceRefs = testIntents.flatMap((intent) => intent.requirementRefs);
-  const uncoveredClauseSourceRefs = input.analysis.clauses
+  const uncoveredClauseSourceRefs = designClauses
     .map((clause) => clause.sourceRef)
     .filter((sourceRef) => !coveredClauseSourceRefs.includes(sourceRef));
 
@@ -238,7 +251,7 @@ export function designTests(input: {
     testIntents,
     dataProfiles,
     coverage: {
-      totalClauses: input.analysis.clauses.length,
+      totalClauses: designClauses.length,
       coveredClauseSourceRefs,
       uncoveredClauseSourceRefs,
       intentCount: testIntents.length
@@ -478,6 +491,8 @@ function markdownTableCells(value: string) {
 
 function classifyClause(text: string): KnowledgeNodeType[] {
   const types = new Set<KnowledgeNodeType>();
+  const comparison = parseFieldComparison(text);
+  if (comparison) types.add("field");
   if (matches(text, /create|new|fill|submit|approve|approval|reject|navigate|select|click|save|\u65b0\u5efa|\u521b\u5efa|\u586b\u5199|\u63d0\u4ea4|\u5ba1\u6279|\u9a73\u56de|\u8fdb\u5165|\u9009\u62e9|\u70b9\u51fb|\u4fdd\u5b58|\u5207\u6362|\u914d\u7f6e|\u6821\u9a8c/i)) {
     types.add("workflow");
   }
@@ -499,7 +514,11 @@ function classifyClause(text: string): KnowledgeNodeType[] {
   if (matches(text, /api|webhook|integration|sync|third party|\u540c\u6b65|\u63a5\u53e3|\u7b2c\u4e09\u65b9/i)) {
     types.add("integration");
   }
-  if (matches(text, /\d|length|max(?:imum)?|min(?:imum)?|required|empty|unique|enum|multi-select|default value|\u957f\u5ea6|\u6700\u5927|\u6700\u5c0f|\u5fc5\u586b|\u7a7a\u503c|\u4e3a\u7a7a|\u9ed8\u8ba4\u503c|\u552f\u4e00|\u679a\u4e3e|\u591a\u9009|\u8303\u56f4/i)) {
+  const explicitNumericConstraint = hasExplicitNumericConstraint(text);
+  if (
+    explicitNumericConstraint ||
+    matches(text, /length|max(?:imum)?|min(?:imum)?|required|empty|unique|enum|multi-select|default value|\u957f\u5ea6|\u6700\u5927|\u6700\u5c0f|\u5fc5\u586b|\u7a7a\u503c|\u4e3a\u7a7a|\u9ed8\u8ba4\u503c|\u552f\u4e00|\u679a\u4e3e|\u591a\u9009/i)
+  ) {
     types.add("data-constraint");
   }
   if (matches(text, /order|record|request|contract|invoice|form|account|offer|\u8ba2\u5355|\u8bb0\u5f55|\u9700\u6c42|\u5408\u540c|\u53d1\u7968|\u8868\u5355|\u8d26\u53f7/i)) {
@@ -510,8 +529,12 @@ function classifyClause(text: string): KnowledgeNodeType[] {
 
 function techniquesForClause(clause: RequirementClause) {
   const techniques = new Set<TestDesignTechnique>(["scenario", "error-guessing"]);
-  if (clause.nodeTypes.includes("data-constraint") || matches(clause.text, /above|below|between|\u8d85\u8fc7|\u4f4e\u4e8e|\u8303\u56f4|\u957f\u5ea6|\u91d1\u989d/i)) {
+  if (clause.nodeTypes.includes("data-constraint") || hasExplicitNumericConstraint(clause.text)) {
     techniques.add("boundary-value");
+  }
+  const comparison = parseFieldComparison(clause.text);
+  if (comparison && ["=", "==", "!=", "!==", "==="].includes(comparison.operator)) {
+    techniques.add("equivalence-partitioning");
   }
   if (clause.nodeTypes.includes("state")) techniques.add("state-transition");
   if (clause.nodeTypes.includes("rule") && matches(clause.text, /\bif\b|\bwhen\b|\u9009\u62e9.+\u540e|\u5f53.+\u65f6|\u6761\u4ef6|\u5426\u5219/i)) {
@@ -578,9 +601,12 @@ function normalizeHostClauses(
       }
       const text = normalizeRequirementText(clause.text);
       const sourceRef = clause.sourceRef;
-      const nodeTypes = nodes
-        .filter((node) => node.sourceRefs.includes(sourceRef) && node.type !== "module" && node.type !== "requirement")
-        .map((node) => node.type);
+      const nodeTypes = [...new Set([
+        ...nodes
+          .filter((node) => node.sourceRefs.includes(sourceRef) && node.type !== "module" && node.type !== "requirement")
+          .map((node) => node.type),
+        ...(parseFieldComparison(text) ? ["field" as const] : [])
+      ])];
       return {
         id: typeof clause.id === "string" ? clause.id : `${requirementSetId}:clause-${index + 1}`,
         index: index + 1,
@@ -592,6 +618,9 @@ function normalizeHostClauses(
         origin: clause.origin === "derived" ? "derived" : "explicit",
         confidence: typeof clause.confidence === "number" ? clampConfidence(clause.confidence) : 1,
         status: clause.status === "conflicted" ? "conflicted" : clause.status === "confirmed" ? "confirmed" : "draft",
+        ...(typeof clause.testDesignEligible === "boolean" ? { testDesignEligible: clause.testDesignEligible } : {}),
+        ...(Array.isArray(clause.appliesWhen) ? { appliesWhen: stringList(clause.appliesWhen) } : {}),
+        ...(typeof clause.dataPreparationEligible === "boolean" ? { dataPreparationEligible: clause.dataPreparationEligible } : {}),
         policyId: typeof clause.policyId === "string" ? clause.policyId : REQUIREMENT_ANALYSIS_POLICY.id,
         policyVersion: typeof clause.policyVersion === "string" ? clause.policyVersion : "host-skill",
         nodeTypes
@@ -681,8 +710,23 @@ function shortText(value: string) {
 }
 
 function semanticFieldName(text: string, index: number) {
+  const comparedField = parseFieldComparison(text)?.field;
+  if (comparedField) return comparedField;
   const match = /\b([a-z][a-z0-9 -]{1,30})(?: field| input| amount| type)\b/i.exec(text);
   return match?.[1]?.trim().replace(/\s+/g, "-").toLowerCase() ?? `clause-${index}-input`;
+}
+
+function parseFieldComparison(text: string) {
+  const match = /([\p{L}_][\p{L}\p{N}_.-]{0,39})\s*(===|!==|==|!=|<=|>=|=|<|>)\s*(?:"([^"]*)"|'([^']*)'|([\p{L}\p{N}_.:-]+))/u.exec(text);
+  if (!match) return undefined;
+  return { field: match[1]!, operator: match[2]!, value: match[3] ?? match[4] ?? match[5] ?? "" };
+}
+
+function hasExplicitNumericConstraint(text: string) {
+  return matches(
+    text,
+    /\b(?:above|below|between|over|under|more than|less than|at least|at most|exceeds?|no more than)\b\s*[^.;,\n]{0,16}\d|(?:超过|低于|高于|大于|小于|至少|至多|最多|不超过|不少于)\s*[^.;,\n]{0,16}\d|(?:范围|区间)[^.;,\n]{0,12}\d|\d[^.;,\n]{0,12}(?:范围|区间)|(?:<=|>=|<|>)\s*\d/i
+  );
 }
 
 function matches(content: string, pattern: RegExp) {

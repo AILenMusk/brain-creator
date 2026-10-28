@@ -52,3 +52,25 @@
 - 任一关联 Offer 为 `已接受offer` 或 `已发offer` 时，阻止直接关闭。其他关联 Offer 状态按用户确认的二次确认规则处理。
 - 用户确认的 `已接收` → Test5 页面 `已接受offer` 映射和以上关闭优先级仅冻结为候选 Oracle；目标系统中的提示、动作、需求状态、Offer 状态和 OA 后置状态仍须逐项独立验证。
 - 当前授权仍限于创建、提交、转交、审批和关闭，使用当前登录账号；任何测试数据清理均须提前通知并遵循确认后的策略。
+
+## 2026-10-28 修订：37 条意图与 11 个场景
+
+本次按用户要求先修订原 37 条 TestIntent 与 11 个 BusinessScenario，不开始 28 个 outcome 映射。37 条原始意图逐条处置见 `test5-ghr-intent-revision-review-2026-10-28.md`：范围和 Oracle 说明改作共享上下文；相邻流程边组合成完整可证实的路径前缀；互斥条件拆分；未映射分支保留为 blocked 或 not-executed。旧版 RequirementSet 保留历史，不原地覆盖。
+
+以下 11 个是当前 draft 的场景结构。所有 route 场景都以已提交需求为起点，逐节点核对实际审批任务；流程画布可见性只作为配置 Oracle，不代替实际命中证据。
+
+1. **GHR-ROUTE-01 海外 + 二/三级部门：** `overseaEstablishment == 1`，经 HRBP、HRBP_TA 后，`orgLevel` 命中页面标记的 2/3 级，预期下一节点为需求部门负责人。
+2. **GHR-ROUTE-02 海外 + 部门默认：** `overseaEstablishment == 1`，经 HRBP、HRBP_TA 后，`orgLevel` 走默认条件，预期下一节点为四级部门负责人。
+3. **GHR-ROUTE-03 国内 + 二/三级部门：** 国内默认分支进入 HRBP_TA 后，`orgLevel` 命中页面标记的 2/3 级，预期下一节点为需求部门负责人。
+4. **GHR-ROUTE-04 国内 + 部门默认：** 国内默认分支进入 HRBP_TA 后，`orgLevel` 走默认条件，预期下一节点为四级部门负责人。
+5. **GHR-CLOSE-01 无关联 Offer：** 只有需求操作列实际提供关闭动作时才执行；关闭成功后独立读取需求状态应为 `已关闭`。不推断 Offer/OA 状态变化。
+6. **GHR-CLOSE-02 关联 Offer 为已接受或已发：** 两种数据变体均应阻止直接关闭；混合状态中只要有任一 `已接受offer` 或 `已发offer`，阻止规则优先。两种变体须分别有实际证据，不能由一个样本代替。
+7. **GHR-CLOSE-03 其他关联 Offer 状态：** 若关联 Offer 不含 `已接受offer`/`已发offer`，预期二次确认；确认后仅在操作成功且独立读取到需求状态 `已关闭` 时记成功。Offer/OA 状态分别核验，不作推断。
+8. **GHR-ROUTE-05 未映射职级分支：** 页面中的职级 ID 尚未映射到 Test5 可选职级；依赖这些条件的结果保持未执行，并继续计入 28 个 outcome 分母。
+9. **GHR-ROUTE-07 实习生分支：** `personnelType == "2"` 与未映射职级分开；当前配置转录未确定其下一审批人/终态，保持 blocked，不并入其他路径。
+10. **GHR-ROUTE-06 HSSC 系统管理员分支：** 用户已排除此支线的执行，但相关 outcome 继续保留在 28 项分母并记未执行；流程管理员支线不纳入本轮验收。
+11. **GHR-CALLBACK-01 回调状态映射：** 候选映射为来源回调 `已接收` 对应 Test5 列表 `已接受offer`；需要绑定同一业务实体并独立读取状态后才能判定。此编号刻意与固定 28 outcome 中的 Offer 审批路线 `GHR-OFFER-01` 区分。
+
+4 个 route 场景只覆盖当前配置能明确区分且不依赖未知职级的前缀，分别跨越地区入口、HRBP（如适用）、HRBP_TA 和部门负责人分支。部门负责人之后的职级/人员类型路径未据画布可见性推断为已命中。实习生与职级分支分别记录。关闭候选 Oracle 已按用户确认的优先级整理：任一已接受/已发 Offer 阻止直接关闭；其他关联 Offer 状态要求二次确认；无关联 Offer 在页面提供关闭动作时可直接关闭，成功需求态为 `已关闭`。
+
+该设计仍为 draft：Brain Creator canonical source revision 6 / RequirementSet `requirementSet_nixk1cms` v6 经 Test Design Policy 2.2.8 生成 18 个意图和 11 个场景，Critic 为 `needs-review` (0.62)，Scenario Assurance 为 11 blocked / 0 pass。路径级意图保存完整转移序列、适用条件和角色交接；这仍是设计证据，不代表路径实测。所有场景都缺少确认的 System Brain 绑定、结构化 Oracle 和场景数据档案；blocked/not-executed 条款不会生成可执行数据准备。固定 28 outcome 分母不变，当前映射 0、独立业务证据 0/28；未执行与 blocked 均保留。不批准基线、不启动 Trial、不进行 Test5 业务写入或数据清理。

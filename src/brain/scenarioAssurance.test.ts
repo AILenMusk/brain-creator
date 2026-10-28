@@ -141,7 +141,7 @@ function snapshot(): SystemBrainSnapshot {
 }
 
 describe("scenario assurance", () => {
-  it("builds domain-neutral scenarios for workflows, state transitions, branches, and actor journeys", () => {
+  it("builds domain-neutral path scenarios without adding a generic actor journey", () => {
     const scenarios = buildBusinessScenarios({
       knowledgeProjectId: "project-1",
       requirementSetId: "requirement-1",
@@ -151,10 +151,10 @@ describe("scenario assurance", () => {
       testIntents: [intent("intent-1", ["req:workflow", "req:approve"])]
     });
 
-    expect(scenarios.some((item) => item.family === "main-flow")).toBe(true);
+    expect(scenarios.some((item) => item.workflowRefs.includes("workflow-order"))).toBe(true);
     expect(scenarios.some((item) => item.family === "branch")).toBe(true);
     expect(scenarios.some((item) => item.family === "state-transition")).toBe(true);
-    expect(scenarios.some((item) => item.family === "cross-role")).toBe(true);
+    expect(scenarios.some((item) => item.family === "cross-role")).toBe(false);
     expect(scenarios.some((item) => item.family === "invalid-transition")).toBe(true);
     expect(scenarios.every((item) => item.sourceRefs.length > 0)).toBe(true);
     expect(scenarios.every((item) => !item.title.includes("HR"))).toBe(true);
@@ -197,12 +197,53 @@ describe("scenario assurance", () => {
       decisionTables: [],
       testIntents: [matching, wrongTransition, negative]
     });
-    const mainFlow = scenarios.find((scenario) => scenario.family === "main-flow");
-    const conditionalPath = scenarios.find((scenario) => scenario.family === "branch");
+    const workflowPath = scenarios.find((scenario) => scenario.workflowRefs.includes("workflow-order"));
 
-    expect(mainFlow?.testIntentIds).toEqual(["intent-matching", "intent-wrong-transition"]);
-    expect(mainFlow?.expectedBusinessOutcomes).not.toContain("Unauthorized actor is rejected");
-    expect(conditionalPath?.testIntentIds).toEqual(["intent-matching"]);
+    expect(workflowPath?.testIntentIds).toEqual(["intent-matching"]);
+    expect(workflowPath?.expectedBusinessOutcomes).not.toContain("Unauthorized actor is rejected");
+  });
+
+  it("enumerates complete mutually-exclusive paths and scopes intents by their applicability conditions", () => {
+    const model = workflow();
+    model.steps = [
+      { id: "start", label: "Start", actor: "requester", sourceRefs: ["req:route"] },
+      { id: "overseas", label: "Overseas route", actor: "HRBP", sourceRefs: ["req:route"] },
+      { id: "domestic", label: "Domestic default", actor: "HRBP_TA", sourceRefs: ["req:route"] },
+      { id: "org23", label: "Department lead", actor: "Department lead", sourceRefs: ["req:route"] },
+      { id: "orgDefault", label: "Fourth-level lead", actor: "Fourth-level lead", sourceRefs: ["req:route"] }
+    ];
+    model.transitions = [
+      { id: "oversea", from: "start", to: "overseas", condition: "overseaEstablishment == 1", sourceRefs: ["req:route"] },
+      { id: "domestic", from: "start", to: "domestic", condition: "domestic default", sourceRefs: ["req:route"] },
+      { id: "oversea-org23", from: "overseas", to: "org23", condition: "orgLevel is 2 or 3", sourceRefs: ["req:route"] },
+      { id: "oversea-org-default", from: "overseas", to: "orgDefault", condition: "orgLevel default", sourceRefs: ["req:route"] },
+      { id: "domestic-org23", from: "domestic", to: "org23", condition: "orgLevel is 2 or 3", sourceRefs: ["req:route"] },
+      { id: "domestic-org-default", from: "domestic", to: "orgDefault", condition: "orgLevel default", sourceRefs: ["req:route"] }
+    ];
+    model.startStepIds = ["start"];
+    model.endStepIds = ["org23", "orgDefault"];
+    const intents = [
+      { ...intent("overseas-intent", ["req:route"]), applicabilityConditions: ["overseaEstablishment == 1"] },
+      { ...intent("domestic-intent", ["req:route"]), applicabilityConditions: ["domestic default"] },
+      { ...intent("org23-intent", ["req:route"]), applicabilityConditions: ["orgLevel is 2 or 3"] },
+      { ...intent("org-default-intent", ["req:route"]), applicabilityConditions: ["orgLevel default"] }
+    ];
+
+    const scenarios = buildBusinessScenarios({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      workflows: [model],
+      stateMachines: [],
+      decisionTables: [],
+      testIntents: intents
+    });
+
+    expect(scenarios).toHaveLength(4);
+    expect(scenarios.every((scenario) => scenario.workflowRefs.includes(model.id))).toBe(true);
+    expect(scenarios.find((scenario) => scenario.preconditions.includes("overseaEstablishment == 1") && scenario.preconditions.includes("orgLevel default"))?.testIntentIds)
+      .toEqual(["overseas-intent", "org-default-intent"]);
+    expect(scenarios.find((scenario) => scenario.preconditions.includes("domestic default") && scenario.preconditions.includes("orgLevel is 2 or 3"))?.testIntentIds)
+      .toEqual(["domestic-intent", "org23-intent"]);
   });
 
   it("keeps free-text outcomes limited until a structured oracle contract exists", () => {
@@ -226,7 +267,7 @@ describe("scenario assurance", () => {
       decisionTables: [],
       testIntents: [intent("intent-1", ["req:workflow", "req:approve"])],
       dataProfiles: [dataProfile]
-    }).find((item) => item.family === "main-flow")!;
+    }).find((item) => item.workflowRefs.includes("workflow-order"))!;
     const binding: SemanticBinding = {
       id: "binding-1",
       requirementSetId: "requirement-1",
@@ -278,7 +319,7 @@ describe("scenario assurance", () => {
       stateMachines: [],
       decisionTables: [],
       testIntents: [intent("intent-no-data", ["req:workflow"])]
-    }).find((item) => item.family === "main-flow")!;
+    }).find((item) => item.workflowRefs.includes("workflow-order"))!;
     const binding: SemanticBinding = {
       id: "binding-1",
       requirementSetId: "requirement-1",

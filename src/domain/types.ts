@@ -1013,6 +1013,8 @@ export type TestIntent = {
   priority: "P0" | "P1" | "P2" | "P3";
   objective: string;
   preconditions: string[];
+  /** Exact conditions that scope this intent to one modeled workflow path. */
+  applicabilityConditions?: string[];
   expectedResults: string[];
   requirementRefs: string[];
   knowledgeNodeRefs: string[];

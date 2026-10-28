@@ -1914,6 +1914,49 @@ describe("KnowledgeService", () => {
       })
     ]);
   });
+  it("excludes stale business scenarios from default scenario assessment", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({
+      name: "Scenario assessment scope",
+      key: "scenario-assessment-scope",
+      defaultLocale: "en-US"
+    });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage(
+        "scenario-assessment-scope",
+        "A buyer creates an order and can submit it."
+      )
+    });
+    const design = await service.generateTestDesign(ingested.requirementSet.id);
+    const activeScenario = design.businessScenarios[0];
+    expect(activeScenario).toBeDefined();
+    repository.businessScenarios.push({
+      ...activeScenario!,
+      id: "scenario-historical-stale",
+      title: "Historical scenario from an earlier draft",
+      status: "stale",
+      dataPlan: undefined,
+      dataPlans: []
+    });
+
+    const result = service.assessBusinessScenarios({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    });
+
+    expect(result.summary.total).toBe(1);
+    expect(result.contracts.map((contract) => contract.scenarioId)).toEqual([activeScenario!.id]);
+
+    const historicalReview = service.assessBusinessScenarios({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id,
+      scenarioIds: ["scenario-historical-stale"]
+    });
+    expect(historicalReview.summary.total).toBe(1);
+    expect(historicalReview.contracts[0]?.scenarioId).toBe("scenario-historical-stale");
+  });
 });
 
 function requirementPackage(contentHash: string, content: string): RequirementContentPackage {

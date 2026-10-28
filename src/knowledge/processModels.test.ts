@@ -35,14 +35,17 @@ describe("requirement process models", () => {
 
     expect(models.stateMachineModels).toHaveLength(1);
     expect(models.stateMachineModels[0].transitions).toHaveLength(2);
-    expect(intents.filter((intent) => intent.scenarioType === "positive" && intent.coverageDimensions?.includes("state"))).toHaveLength(2);
+    const positivePath = intents.find((intent) => intent.scenarioType === "positive" && intent.coverageDimensions?.includes("state"));
+    expect(positivePath?.selectedTransitionRefs).toHaveLength(2);
+    expect(positivePath?.applicabilityConditions).toBeUndefined();
+    expect(positivePath?.actorJourney).toEqual(["requester", "manager"]);
     expect(intents.some((intent) => intent.title.includes("missing prerequisite"))).toBe(true);
     expect(intents.some((intent) => intent.title.includes("role mismatch"))).toBe(true);
     expect(intents.some((intent) => intent.title.includes("invalid transition"))).toBe(true);
     expect(intents.every((intent) => intent.requirementRefs.length > 0)).toBe(true);
   });
 
-  it("creates a cross-role actor journey for a confirmed workflow and ignores draft evidence", () => {
+  it("creates a path-specific journey intent and ignores draft state-machine evidence", () => {
     const analysis = analyzeRequirement({
       requirementSetId: "req-1",
       title: "Order workflow",
@@ -66,14 +69,58 @@ describe("requirement process models", () => {
 
     expect(models.workflowModels).toHaveLength(1);
     expect(models.stateMachineModels).toEqual([]);
-    expect(intents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          actorJourney: ["requester", "manager"],
-          coverageDimensions: expect.arrayContaining(["workflow"])
-        })
-      ])
-    );
+    expect(intents).toHaveLength(2);
+    expect(intents.find((intent) => !intent.processModelRefs)?.actorJourney).toBeUndefined();
+    expect(intents.find((intent) => intent.processModelRefs)?.selectedTransitionRefs).toHaveLength(2);
+    expect(intents.find((intent) => intent.processModelRefs)?.actorJourney).toEqual(["requester", "manager"]);
+  });
+
+  it("keeps mutually exclusive route conditions on separate complete-path intents", () => {
+    const analysis = analyzeRequirement({
+      requirementSetId: "req-branching-workflow",
+      title: "Order approval workflow",
+      content: "An order follows its confirmed workflow.",
+      sourceRef: "source-branching-workflow"
+    });
+    const attachment = workflowAnalysis("confirmed");
+    attachment.nodes = [
+      { id: "start", type: "step", label: "Start order" },
+      { id: "low", type: "step", label: "Low-value review" },
+      { id: "high", type: "step", label: "High-value review" },
+      { id: "done", type: "step", label: "Order approved" }
+    ];
+    attachment.edges = [
+      { from: "start", to: "low", condition: "amount <= 1000", actor: "requester" },
+      { from: "low", to: "done", actor: "manager" },
+      { from: "start", to: "high", condition: "amount > 1000", actor: "requester" },
+      { from: "high", to: "done", actor: "finance" }
+    ];
+    const models = buildProcessModels({
+      knowledgeProjectId: "project-branching-workflow",
+      requirementSetId: analysis.requirementSetId,
+      analyses: [attachment]
+    });
+    const augmented = augmentAnalysisWithProcessModels(analysis, models);
+    const base = designTests({ knowledgeProjectId: "project-branching-workflow", analysis: augmented });
+    const intents = buildProcessTestIntents({
+      knowledgeProjectId: "project-branching-workflow",
+      analysis: augmented,
+      workflowModels: models.workflowModels,
+      stateMachineModels: models.stateMachineModels,
+      baseIntents: base.testIntents
+    });
+    const paths = intents.filter((intent) => intent.processModelRefs?.includes(models.workflowModels[0]!.id));
+
+    expect(paths).toHaveLength(2);
+    expect(paths.map((intent) => intent.applicabilityConditions)).toEqual([
+      ["amount <= 1000"],
+      ["amount > 1000"]
+    ]);
+    expect(paths.every((intent) => intent.selectedTransitionRefs?.length === 2)).toBe(true);
+    expect(paths.map((intent) => intent.actorJourney)).toEqual([
+      ["requester", "manager"],
+      ["requester", "finance"]
+    ]);
   });
 
   it("reports process coverage separately from field coverage", () => {
@@ -108,7 +155,8 @@ describe("requirement process models", () => {
     });
 
     expect(profile.dimensions.workflow.missingRefs).toEqual([]);
-    expect(profile.dimensions.workflow.intentCount).toBeGreaterThan(0);
+    expect(profile.dimensions.workflow.coveredRefs).toHaveLength(3);
+    expect(intents.filter((intent) => intent.processModelRefs?.includes(models.workflowModels[0]!.id))).toHaveLength(1);
     expect(profile.workflowModelIds).toEqual([models.workflowModels[0].id]);
     expect(profile.status).toBe("complete");
   });

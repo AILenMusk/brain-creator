@@ -39,6 +39,7 @@ import {
   designTests,
   evaluatePolicyOutput,
   REQUIREMENT_ANALYSIS_POLICY,
+  TEST_DESIGN_POLICY,
   type RequirementAnalysis
 } from "./policies.js";
 import {
@@ -1660,7 +1661,7 @@ export class KnowledgeService {
       (scenario) =>
         scenario.knowledgeProjectId === input.knowledgeProjectId &&
         scenario.requirementSetId === input.requirementSetId &&
-        (!selectedIds || selectedIds.has(scenario.id))
+        (selectedIds ? selectedIds.has(scenario.id) : scenario.status !== "stale")
     );
     if (scenarios.length === 0) throw new Error("No business scenarios found for assessment");
     const systemSnapshot = input.systemId && this.systemBrainSnapshots
@@ -3654,6 +3655,7 @@ function requirementDesignInputHash(
     .update(JSON.stringify({
       contentHash: requirementSet.contentHash,
       policyVersion,
+      testDesignPolicyVersion: TEST_DESIGN_POLICY.version,
       attachments: analyses
         .map((analysis) => ({
           id: analysis.id,

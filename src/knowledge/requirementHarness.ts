@@ -55,6 +55,9 @@ export type ClauseAnalystOutput = {
     confidence: number;
     status: "draft" | "confirmed" | "conflicted";
     nodeTypes: KnowledgeNodeType[];
+    testDesignEligible?: boolean;
+    appliesWhen?: string[];
+    dataPreparationEligible?: boolean;
   }>;
   openQuestions: string[];
 };
@@ -1061,7 +1064,10 @@ function stageOutputTemplate(stage: RequirementHarnessStage) {
         origin: "explicit|derived",
         confidence: 1,
         status: "draft|confirmed|conflicted",
-        nodeTypes: ["module|actor|object|field|rule|workflow|state|permission|integration|data-constraint|term|requirement"]
+        nodeTypes: ["module|actor|object|field|rule|workflow|state|permission|integration|data-constraint|term|requirement"],
+        testDesignEligible: true,
+        appliesWhen: ["exact condition"],
+        dataPreparationEligible: false
       }],
       openQuestions: ["string"]
     },
@@ -1150,6 +1156,15 @@ function validateStageOutput(stage: RequirementHarnessStage, value: unknown, all
       if (!isOneOf(clause.kind, CLAUSE_KINDS)) errors.push(`clauses[${index}].kind is invalid`);
       if (!isOneOf(clause.origin, ["explicit", "derived"])) errors.push(`clauses[${index}].origin is invalid`);
       if (!isOneOf(clause.status, ["draft", "confirmed", "conflicted"])) errors.push(`clauses[${index}].status is invalid`);
+      if (clause.testDesignEligible !== undefined && typeof clause.testDesignEligible !== "boolean") {
+        errors.push(`clauses[${index}].testDesignEligible must be a boolean`);
+      }
+      if (clause.dataPreparationEligible !== undefined && typeof clause.dataPreparationEligible !== "boolean") {
+        errors.push(`clauses[${index}].dataPreparationEligible must be a boolean`);
+      }
+      if (clause.appliesWhen !== undefined && !hasStrings(clause.appliesWhen)) {
+        errors.push(`clauses[${index}].appliesWhen must contain non-empty strings`);
+      }
       if (array(clause.nodeTypes).some((type) => !isOneOf(type, KNOWLEDGE_NODE_TYPES))) {
         errors.push(`clauses[${index}].nodeTypes contains an invalid type`);
       }

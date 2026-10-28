@@ -69,6 +69,93 @@ describe("review report writer", () => {
     expect(report).toContain("业务流程");
   });
 
+  it("describes a ready data plan without claiming that target data already exists", () => {
+    const scenario = scenarioFixture();
+    scenario.dataPlan = {
+      scenarioId: scenario.id,
+      profileIds: ["data-route-condition"],
+      entityReferences: [],
+      operations: [{
+        profileId: "data-route-condition",
+        field: "overseaEstablishment",
+        action: "lookup",
+        readiness: "ready",
+        dependencyProfileIds: [],
+        dependencyEntityReferences: [],
+        cleanup: "none",
+        sourceRefs: ["需求:1"]
+      }],
+      dependencies: [],
+      readiness: "ready",
+      missingProfileIds: [],
+      missingEntityReferences: [],
+      reasons: [],
+      sourceRefs: ["需求:1"],
+      plannedLifecycle: ["lookup", "verify"]
+    };
+    const report = renderRequirementAnalysisReport({
+      title: "订单审批需求",
+      setStatus: "draft",
+      analysis: analysisFixture(),
+      evaluation: evaluationFixture(),
+      evaluationGate: gateFixture(),
+      coverage: { totalClauses: 2, coveredClauseSourceRefs: ["需求:1"], uncoveredClauseSourceRefs: ["需求:2"], intentCount: 1 },
+      coverageProfile: coverageFixture(),
+      workflowModels: [workflowFixture()],
+      stateMachineModels: [stateMachineFixture()],
+      businessObjectModels: [objectFixture()],
+      decisionTableModels: [decisionTableFixture()],
+      businessScenarios: [scenario],
+      scenarioAssuranceContracts: [],
+      scenarioTrustRecords: [],
+      intents: [intentFixture()],
+      evidenceCatalog: evidenceCatalogFixture()
+    });
+
+    expect(report).toContain("数据方案可用");
+    expect(report).not.toContain("数据已就绪");
+  });
+
+  it("does not label a positive route precondition as a negative scenario", () => {
+    const route = intentFixture();
+    route.title = "GHR-ROUTE-01 海外路由：前置条件为 overseaEstablishment == 1";
+    route.objective = "验证海外分支当前下一审批节点为 HRBP";
+    route.preconditions = ["overseaEstablishment == 1"];
+    route.expectedResults = ["当前下一审批节点为 HRBP"];
+    route.coverageDimensions = ["workflow", "state"];
+    route.techniques = ["scenario", "decision-table", "state-transition"];
+    route.actorJourney = [];
+    route.scenarioType = "positive";
+
+    const blocked = intentFixture();
+    blocked.title = "GHR-CLOSE-02 任一关联 Offer 已接受时阻止直接关闭";
+    blocked.objective = blocked.title;
+    blocked.expectedResults = ["系统阻止直接关闭，不记录需求关闭成功"];
+    blocked.coverageDimensions = ["workflow", "state"];
+    blocked.techniques = ["scenario", "error-guessing"];
+    blocked.actorJourney = [];
+
+    const skipped = intentFixture();
+    skipped.title = "GHR-ROUTE-05 未映射职级分支：本轮未执行";
+    skipped.objective = skipped.title;
+    skipped.expectedResults = ["保留在固定分母并记为未执行"];
+    skipped.coverageDimensions = ["state"];
+    skipped.techniques = ["scenario", "error-guessing"];
+    skipped.actorJourney = [];
+
+    const report = renderTestIntentReport({
+      title: "Test5 GHR",
+      setStatus: "draft",
+      intents: [route, blocked, skipped],
+      scenarioCount: 3,
+      workflowCount: 0,
+      stateMachineCount: 0
+    });
+
+    expect(report).toContain("场景类型**：条件分支 1、异常或非法状态 1、未执行分支 1");
+    expect(report).not.toContain("异常或非法状态 2");
+  });
+
   it("labels host-agent requirement analysis accurately", () => {
     const analysis = analysisFixture();
     analysis.provider = "host-agent";
