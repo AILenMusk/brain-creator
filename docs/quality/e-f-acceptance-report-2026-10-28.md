@@ -1,6 +1,6 @@
 # E/F Acceptance Report — 2026-10-28
 
-The latest passing candidate checks before this report-only update were PR #187 CI #532 and Documentation #242 at `840085f`. This update also records the user's exact Test5 process URL and the latest read-only Chrome/System Brain evidence. It replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
+Before this route-evidence update, candidate head `831409c0b3af015e10f5cd9d43cfc145182a0b80` had passing PR #187 CI #534 and Documentation #244. This update records a direct read-only inspection of the exact Test5 process designer URL supplied by the user; these documentation changes need fresh local documentation/hygiene verification before the PR is updated. It replaces the earlier v3 status snapshot; the dated history remains in `trust-convergence.md`.
 
 ## Acceptance verdict
 
@@ -93,3 +93,10 @@ The latest passing candidate checks before this report-only update were PR #187 
 - The user supplied Test5 process identifier `Proc000019`. AuthProfile `auth_onb5ja03` was reverified at `2026-10-28T05:47:43.270Z` on the Test5 base page.
 - A read-only exploration using the previously observed designer route pattern with the supplied identifier completed as `exploration_gbs74l6m` at `2026-10-28T05:48:16.241Z`; PageModel `page_ag781kc2` captured `访问的资源不存在: hc招聘需求流程`. No warning, Gap, or business interaction occurred. The process identifier alone does not yield an accessible configuration page; the current designer route remains unverified.
 - PR #187 head `d0fd39a236c9b9d5dcfd6532244e3633717e7f9e` passed CI #531 on Node 20/22 and Documentation #241. These checks include tests, type checking, package build, documentation build, package contents, repository hygiene, and clean package installation.
+
+## 2026-10-28 Direct Test5 Designer-Page Evidence
+
+- The user supplied the exact `hc招聘需求流程` designer route. In the existing authenticated Chrome session, it opened as `流程设计 - 招聘需求 - hc招聘需求流程`; a fresh accessibility-tree read and screenshots of the canvas showed the route conditions and nodes transcribed in `test5-ghr-route-oracle-supplement-2026-10-28.md`. This supplements the prior Brain Creator PageModel capture, which had zero locators and no screenshot.
+- The visible canvas includes `暂存` and `发布` buttons. Neither was clicked. The designer page alone does not prove that the displayed content is published, corresponds to the list's `Proc000019` v9, or is the route used by a live approval. No route branch was exercised, and no business record was read or written.
+- The previous attempt to inspect the separate process-list tab timed out; it did not change the page or application state. The published-version-to-designer-page binding remains unverified.
+- This direct browser evidence is recorded in the candidate docs only. No Brain Creator Store mutation or Test5 business write occurred. The formal RequirementSet remains draft/blocked, the 28 outcomes remain unmapped and not executed, and E remains blocked at 0/28 independently evidenced outcomes.

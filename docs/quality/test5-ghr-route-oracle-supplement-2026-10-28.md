@@ -21,13 +21,19 @@
 
 ### 最新页面核验与证据边界
 
-用户提供了 Test5 `hc招聘需求流程` 设计页路径 `/dwApp/process/designer/db88e8d8-7c40-11f1-9dfa-fefcfe44737d?title=hc%E6%8B%9B%E8%81%98%E9%9C%80%E6%B1%82%E6%B5%81%E7%A8%8B`。2026-10-28 在用户现有 Chrome 登录会话中只读打开该地址，页面显示 `流程设计 - 招聘需求 - hc招聘需求流程` 及流程画布。没有点击“暂存”或“发布”。现有详细转录仍以 `knowledgeNode_d051ahq9` 为依据；其来源为该 Chrome 标签页的可访问性树，置信度 0.8。
+用户提供的设计页路径为 `/dwApp/process/designer/db88e8d8-7c40-11f1-9dfa-fefcfe44737d?title=hc%E6%8B%9B%E8%81%98%E9%9C%80%E6%B1%82%E6%B5%81%E7%A8%8B`。2026-10-28 在用户现有 Chrome 登录会话中直接打开后，页面显示 `流程设计 - 招聘需求 - hc招聘需求流程`、流程画布以及“暂存”“发布”按钮。只读检查取得了页面截图和可访问性树；未点击“暂存”或“发布”，也未操作任何业务数据。
 
-Brain Creator 将这次页面采集记录为 PageModel `page_yso7q41u` v4、ProbeResult `probe_aify5s9r`。该采集找到 **0 个定位点**且没有截图；System Brain 为 7 个页面模型，当前快照 `systemBrainSnapshot_dwoles4t` 仍是 candidate，ChangeSet `systemBrainChangeSet_gpemiiu3` 为 `needs-review`，结构化 workflow/state-transition 模型仍为 0。此前独立 Playwright 上下文访问同地址仍跳转到应用 404。当前页面可见性和已有转录都不证明分支实际命中、页面绑定或审批结果。
+本次可见画布中的路线条件转录如下。原始 ID 按页面显示记录，不解释或推断其对应的职级名称：
 
-以上是已登录宿主 Chrome 可访问性树的只读观察，不是逐条审批执行结果。尤其是嵌套职级、默认分支和原始职级 ID 不足以推导出未显示的路径。
+1. 发起后，`overseaEstablishment == 1`（优先级 1）进入 HRBP；“国内”为默认条件（优先级 2）。其后画布出现 HRBP_TA 对接人。
+2. `orgLevel == "6ba7b810-9dad-11d1-80b4-00c04fd430c8" || orgLevel == "3b1f8b40-9b3e-4f6e-8a2d-5c7e9f1a3b6c"` 标记为“2,3级部门”，进入需求部门负责人；默认条件进入四级部门负责人。
+3. 页面显示“职级<2-1”条件，原始 ID 为 `60256f0d-784f-4959-8a30-f92ca0e2e574`、`89fd1471-3701-4f10-b7f7-8556bf51d932`、`e4959ffd-4284-4e50-bd98-1a76228e8bae`；另有“实习生”条件 `personnelType=="2"` 和默认条件。随后画布显示三级部门负责人及嵌套的“职级<=2-3”条件。该嵌套条件包含 `83c6cc96-54ca-4c31-bb84-0af91a42cfcb`、`dac5c9e9-e46f-4772-8c5a-998c5ddee1c4`、`43b6017c-6c16-4c82-9c6a-935b8edef64c`、上述三个 `<2-1` ID，以及 `c8e53ffa-45cb-44df-b4ab-f286b5768ab5`、`c02b7d5a-9a36-4b22-ae53-a349361ccfe7`、`7784afc8-f2f7-40a7-8faf-138857a7ad59`；该嵌套路由的默认条件显示二级部门负责人。
+4. 后续画布显示 HRBP 经理。其后再次显示实习生条件 `personnelType=="2"` 与默认条件。默认条件下可见“职级 > 2-3”条件，所列 ID 为 `40c4405d-93e9-47a3-8b38-039613a34032`、`3153a709-c7fb-4e53-bb25-0de6c66a36f4`、`a7394af7-ccb8-425b-9e2f-93f1aad04b2e`、`58310180-e77e-4733-9cdd-80fb9bab755e`、`3cfb2e05-e360-4a69-a401-3d18884ab1e0`、`1fc3060e-ed96-43b5-ada6-62dbea6f4e28`、`18069b04-13d8-4968-8884-43ca448caaf0`、`a8d75ea7-28f8-41b2-a320-ae8d6e712277`、`50ad1139-ca0e-4693-95f6-44dc4ab08122`、`91348580-148a-4549-aa5e-08fbe1d09380`、`518b94b2-d50a-4f10-a58c-f906b88bb695`、`6815367b-28fc-4c7e-bbd1-8e655f09d392`、`ebb6b5d7-25ff-49b1-9343-7570630c6794`、`e8c444c4-db4d-4630-bbf3-81279f710315`、`df34852f-e8aa-4809-9aee-42f3b409c8e6`；画布可见 HRBP 负责人和 CHO。
+5. 后续嵌套的“职级>3-3”条件列出 `58310180-e77e-4733-9cdd-80fb9bab755e`、`3cfb2e05-e360-4a69-a401-3d18884ab1e0`、`1fc3060e-ed96-43b5-ada6-62dbea6f4e28`、`18069b04-13d8-4968-8884-43ca448caaf0`、`a8d75ea7-28f8-41b2-a320-ae8d6e712277`、`50ad1139-ca0e-4693-95f6-44dc4ab08122`、`ebb6b5d7-25ff-49b1-9343-7570630c6794`、`e8c444c4-db4d-4630-bbf3-81279f710315`、`df34852f-e8aa-4809-9aee-42f3b409c8e6`，指向 CEO；页面另显示默认条件和流程结束节点。
 
-页面上的 `requirementJobLevelId` 值尚未映射到 Test5 职级选项。系统观察只作为路由解释的证据来源，不作为已执行结果或独立业务后置状态证据。
+这次浏览器直读比 Brain Creator 中的 PageModel `page_yso7q41u` v4、ProbeResult `probe_aify5s9r` 更完整：后者没有 locator 或截图，System Brain 的 snapshot `systemBrainSnapshot_dwoles4t` 仍为 candidate，ChangeSet `systemBrainChangeSet_gpemiiu3` 为 `needs-review`，结构化 workflow/state-transition 模型仍为 0。此前独立 Playwright 上下文访问同地址仍跳转到应用 404。上述差异均予保留。
+
+本次观察只证明登录会话中设计画布当前可见的条件与节点。画面存在“暂存”和“发布”操作，因此它本身不能证明该画布内容已发布、与列表显示的 `Proc000019` v9 相同，或是线上审批实际使用的版本；也不能证明任何分支已命中、页面绑定已确认或审批已发生。流程列表与设计页版本的对应关系、实际运行结果仍须单独核验。页面上的 `requirementJobLevelId` 尚未映射到 Test5 职级选项；用户已要求跳过相关职级分支，相关 outcome 继续留在分母并记未执行。
 
 ## 用户确认的分支处置
 
