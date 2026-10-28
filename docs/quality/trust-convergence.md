@@ -2471,3 +2471,9 @@ Trial review now revalidates linked evidence files against their stored hashes a
 1. Resolve the draft's `needs-review` findings and one-to-one map the fixed 28 outcomes while preserving skipped and blocked rows.
 2. Confirm executable System Brain bindings; configure TestData Provider and independent target postcondition verification.
 3. Only after the formal baseline is reviewable and explicitly approved, execute the three real Test5 rounds and record separate evidence. No route URL clarification is outstanding.
+
+## 2026-10-28 Candidate Host Smoke at `7aec957`
+
+- Re-ran `npm run verify:codex-native-entry` on the current candidate: requirement-first starter prompts, host-agent doctor guidance, `/bc help`, context-free `/bc status`, host-agent handoff, and isolated plugin installation from both source checkout and packed package passed.
+- Re-ran `npm run verify:host-agent-document-suite`: TC-001 and TC-002 passed in Playwright Chromium against the smoke's temporary localhost fixture. These are local/synthetic host-path results and count as zero Test5 business outcomes.
+- No Test5 page or record was accessed by these checks. Both scripts completed with exit code 0; no source code file was modified by the runs.
