@@ -1,6 +1,6 @@
 # Brain Creator 项目方向与协作规则
 
-本文是 Codex、Claude Code 和其他代码 Agent 的仓库级协作说明。版本、命令入口和脚本以 `package.json` 为准；Claude Code 通过 `CLAUDE.md` 引用本文，避免维护两份相互冲突的指令。
+`AGENTS.md` 是本仓库唯一权威的开发入口，适用于 Codex、Claude Code 和其他代码 Agent。版本、命令入口和脚本以 `package.json` 为准。Claude Code 通过根目录 `CLAUDE.md` 加载本文；不要在 `CLAUDE.md` 维护第二份项目规则。
 
 ## 产品目标与设计
 
@@ -105,3 +105,5 @@ git push origin main
 | 修改仓库说明、Skill 或 Hook | `docs/development-conventions.md` |
 
 `skills/brain-creator/SKILL.md` 是产品 Skill 正本。`.claude/skills/brain-creator/SKILL.md` 与 `plugins/brain-creator/skills/brain-creator/SKILL.md` 必须逐字节一致。安装器只复制单个 Skill 文件；增加引用文件时同步更新安装和打包契约。
+
+Claude Code 的专用 Agent 与 Skill 文件位于 `.claude/`，它们是宿主执行资源，不是另一套项目开发规则。修改这些文件时同时遵循本文的业务、安全、测试和打包约定。
