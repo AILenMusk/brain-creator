@@ -10,7 +10,8 @@ import type {
   RequirementSuiteRun,
   RunLedgerEntry,
   TestDataLease,
-  TestDataTask
+  TestDataTask,
+  TestIntent
 } from "../domain/types.js";
 import { evaluateConformance } from "../execution/conformance.js";
 
@@ -35,7 +36,9 @@ export type EvaluationTrialMetrics = {
   linkedRunIds: string[];
   linkedRunCount: number;
   scenarioIds: string[];
+  businessOutcomeIds: string[];
   businessConformance: EvaluationScenarioMetric;
+  businessOutcomeConformance: EvaluationScenarioMetric;
   operations: {
     firstValidResult: {
       status: "measured" | "not-measured";
@@ -67,6 +70,14 @@ export type EvaluationTrialMetrics = {
     denominator: number | null;
     rate: number | null;
     manualScenarioIds: string[] | null;
+    businessOutcomes: {
+      status: EvaluationMetricStatus;
+      autonomous: number | null;
+      denominator: number | null;
+      rate: number | null;
+      manualIds: string[] | null;
+      reason: string;
+    };
     authenticationInterventionCounts: {
       initialAuthorization: number;
       sessionRecovery: number;
@@ -82,6 +93,7 @@ export function calculateEvaluationTrialMetrics(input: {
   evidence: ExecutionEvidence[];
   conformanceResults: ConformanceResult[];
   scenarios: BusinessScenario[];
+  testIntents?: TestIntent[];
   executableCases: ExecutableCase[];
   interventions: InterventionRecord[];
   runLedgerEntries?: RunLedgerEntry[];
@@ -96,6 +108,7 @@ export function calculateEvaluationTrialMetrics(input: {
 }): EvaluationTrialMetrics {
   const scope = input.trial.executionScope;
   const scenarioIds = [...new Set(scope?.businessScenarioIds ?? [])];
+  const businessOutcomeIds = [...new Set(scope?.businessOutcomeIds ?? [])];
   const comparableReasons: string[] = [];
   if (input.trial.status === "invalidated") comparableReasons.push("Evaluation trial is invalidated");
   if (!scope || scenarioIds.length === 0) comparableReasons.push("Evaluation trial has no frozen business scenario scope");
@@ -107,11 +120,33 @@ export function calculateEvaluationTrialMetrics(input: {
   if (scenarioIds.some((scenarioId) => !input.scenarios.some((scenario) => scenario.id === scenarioId))) {
     comparableReasons.push("Frozen business scenario scope contains an unknown scenario");
   }
+  const outcomeScopeReasons = validateBusinessOutcomeScope({
+    trial: input.trial,
+    scope,
+    businessOutcomeIds,
+    testIntents: input.testIntents,
+    scenarios: input.scenarios
+  });
+  comparableReasons.push(...outcomeScopeReasons);
 
   const linkedRuns = input.runs.filter((run) => isLinkedEvaluationRun(run, input.trial));
   const scenarioEvaluation = comparableReasons.length > 0
-    ? { metric: notComparableMetric(scenarioIds.length > 0 ? scenarioIds.length : null), outcomes: new Map<string, ScenarioOutcome>() }
+    ? { metric: notComparableMetric(scenarioIds.length > 0 ? scenarioIds.length : null), outcomes: new Map<string, ScenarioOutcome>(), outcomesByCaseId: new Map<string, ScenarioOutcome>() }
     : scenarioMetric(input.trial, scenarioIds, linkedRuns, input.evidence, input.conformanceResults, input.scenarios, input.executableCases, input.artifactValidationByEvidenceId, input.semanticSnapshotValidByEvidenceId);
+  const businessOutcomeEvaluation = comparableReasons.length > 0 || businessOutcomeIds.length === 0
+    ? {
+        metric: notComparableMetric(businessOutcomeIds.length > 0 ? businessOutcomeIds.length : null),
+        outcomes: new Map<string, ScenarioOutcome>(),
+        scenarioByOutcomeId: new Map<string, string>()
+      }
+    : businessOutcomeMetric(
+        input.trial,
+        businessOutcomeIds,
+        input.testIntents ?? [],
+        input.scenarios,
+        input.executableCases,
+        scenarioEvaluation.outcomesByCaseId
+      );
   const interventions = input.interventions.filter((item) => item.trialId === input.trial.id);
   const linkedRunIds = new Set(linkedRuns.map((run) => run.id));
   return {
@@ -120,7 +155,9 @@ export function calculateEvaluationTrialMetrics(input: {
     linkedRunIds: linkedRuns.map((run) => run.id),
     linkedRunCount: linkedRuns.length,
     scenarioIds,
+    businessOutcomeIds,
     businessConformance: scenarioEvaluation.metric,
+    businessOutcomeConformance: businessOutcomeEvaluation.metric,
     operations: calculateOperationalMetrics(
       input.trial,
       scenarioEvaluation.firstValidResult,
@@ -134,6 +171,9 @@ export function calculateEvaluationTrialMetrics(input: {
       input.trial,
       scenarioIds,
       scenarioEvaluation.outcomes,
+      businessOutcomeIds,
+      businessOutcomeEvaluation.outcomes,
+      businessOutcomeEvaluation.scenarioByOutcomeId,
       interventions,
       comparableReasons,
       input.interventionIntegrityValidById,
@@ -240,6 +280,9 @@ function calculateAutonomy(
   trial: EvaluationTrial,
   scenarioIds: string[],
   outcomes: Map<string, ScenarioOutcome>,
+  businessOutcomeIds: string[],
+  businessOutcomeOutcomes: Map<string, ScenarioOutcome>,
+  scenarioByOutcomeId: Map<string, string>,
   interventions: InterventionRecord[],
   comparabilityReasons: string[],
   interventionIntegrityValidById?: Map<string, boolean>,
@@ -255,6 +298,16 @@ function calculateAutonomy(
     denominator: scenarioIds.length || null,
     rate: null,
     manualScenarioIds: null as string[] | null,
+    businessOutcomes: {
+      status: businessOutcomeIds.length > 0 ? "not-measured" as const : "not-comparable" as const,
+      autonomous: null,
+      denominator: businessOutcomeIds.length > 0 ? businessOutcomeIds.length : null,
+      rate: null,
+      manualIds: null as string[] | null,
+      reason: businessOutcomeIds.length > 0
+        ? "Business-outcome autonomy requires valid real-system outcomes and a complete intervention capture."
+        : "Trial has no frozen business-outcome roster."
+    },
     authenticationInterventionCounts: null
   };
   if (comparabilityReasons.length > 0) {
@@ -300,6 +353,13 @@ function calculateAutonomy(
   const autonomousScenarios = scenarioIds.filter((scenarioId) =>
     outcomes.get(scenarioId)?.kind === "passed" && !manualScenarioSet.has(scenarioId)
   ).length;
+  const manualBusinessOutcomeIds = businessOutcomeIds.filter((outcomeId) =>
+    manualScenarioSet.has(scenarioByOutcomeId.get(outcomeId) ?? "")
+  );
+  const manualBusinessOutcomeSet = new Set(manualBusinessOutcomeIds);
+  const autonomousBusinessOutcomes = businessOutcomeIds.filter((outcomeId) =>
+    businessOutcomeOutcomes.get(outcomeId)?.kind === "passed" && !manualBusinessOutcomeSet.has(outcomeId)
+  ).length;
   const authenticationInterventions = interventions.filter((item) => item.category === "user-authentication");
   return {
     ...base,
@@ -312,6 +372,21 @@ function calculateAutonomy(
       unclassified: authenticationInterventions.filter((item) => !item.authenticationPhase).length
     },
     rate: scenarioIds.length > 0 ? autonomousScenarios / scenarioIds.length : null,
+    businessOutcomes: businessOutcomeIds.length > 0 ? {
+      status: "measured",
+      autonomous: autonomousBusinessOutcomes,
+      denominator: businessOutcomeIds.length,
+      rate: autonomousBusinessOutcomes / businessOutcomeIds.length,
+      manualIds: manualBusinessOutcomeIds,
+      reason: "Only frozen business outcomes with qualifying real-system conformance and no attributed user intervention beyond initial authorization count as autonomous; blocked and unexecuted outcomes stay in the denominator."
+    } : {
+      status: "not-comparable",
+      autonomous: null,
+      denominator: null,
+      rate: null,
+      manualIds: null,
+      reason: "Trial has no frozen business-outcome roster."
+    },
     reason: "Only scenarios with qualifying real-system conformance and no attributed user intervention beyond initial authorization count as autonomously completed; initial authorization is reported separately, while session recovery and unclassified authentication remain interventions. Blocked and unexecuted scenarios stay in the denominator."
   };
 }
@@ -330,7 +405,7 @@ function scenarioMetric(
   executableCases: ExecutableCase[],
   artifactValidationByEvidenceId?: Map<string, NonNullable<ExecutionEvidence["artifactValidation"]>>,
   semanticSnapshotValidByEvidenceId?: Map<string, boolean>
-): { metric: EvaluationScenarioMetric; outcomes: Map<string, ScenarioOutcome>; firstValidResult?: { scenarioId: string; at: string } } {
+): { metric: EvaluationScenarioMetric; outcomes: Map<string, ScenarioOutcome>; outcomesByCaseId: Map<string, ScenarioOutcome>; firstValidResult?: { scenarioId: string; at: string } } {
   const evidenceById = new Map(evidence.map((item) => [item.id, item]));
   const conformanceByEvidenceId = new Map(
     conformanceResults.map((item) => [item.executionEvidenceId, item])
@@ -438,7 +513,143 @@ function scenarioMetric(
       rate: measured > 0 ? passed / scenarioIds.length : null
     },
     outcomes,
+    outcomesByCaseId,
     firstValidResult
+  };
+}
+
+function validateBusinessOutcomeScope(input: {
+  trial: EvaluationTrial;
+  scope: EvaluationTrial["executionScope"];
+  businessOutcomeIds: string[];
+  testIntents?: TestIntent[];
+  scenarios: BusinessScenario[];
+}) {
+  const mappedIntents = (input.testIntents ?? []).filter(
+    (intent) => intent.knowledgeProjectId === input.trial.knowledgeProjectId &&
+      intent.requirementSetId === input.trial.requirementSetId &&
+      intent.businessOutcomeId !== undefined
+  );
+  const reasons: string[] = [];
+  if (mappedIntents.some((intent) => !intent.businessOutcomeId!.trim() || intent.businessOutcomeId !== intent.businessOutcomeId!.trim())) {
+    reasons.push("RequirementSet contains an empty or non-normalized TestIntent businessOutcomeId");
+  }
+  if (mappedIntents.length > 0 && !input.testIntents) {
+    reasons.push("Frozen business-outcome scope cannot be checked without the TestIntent roster");
+  }
+  const expectedIds = mappedIntents.map((intent) => intent.businessOutcomeId!).sort();
+  if (new Set(expectedIds).size !== expectedIds.length) {
+    reasons.push("RequirementSet contains duplicate TestIntent businessOutcomeId mappings");
+  }
+  if (mappedIntents.length > 0 && !input.scope?.businessOutcomeIds?.length) {
+    reasons.push("Trial has no frozen business-outcome scope");
+  }
+  const rawIds = input.scope?.businessOutcomeIds ?? [];
+  if (new Set(rawIds).size !== rawIds.length ||
+      JSON.stringify([...new Set(rawIds)].sort()) !== JSON.stringify(expectedIds)) {
+    if (rawIds.length > 0 || expectedIds.length > 0) {
+      reasons.push("Frozen Trial business-outcome scope does not match the complete RequirementSet outcome roster");
+    }
+  }
+  for (const intent of mappedIntents) {
+    const owners = input.scenarios.filter(
+      (scenario) => scenario.knowledgeProjectId === input.trial.knowledgeProjectId &&
+        scenario.requirementSetId === input.trial.requirementSetId &&
+        scenario.testIntentIds?.includes(intent.id)
+    );
+    if (owners.length !== 1 || !input.scope?.businessScenarioIds.includes(owners[0]?.id ?? "")) {
+      reasons.push(`Business outcome ${intent.businessOutcomeId} does not map to exactly one frozen Trial scenario`);
+    }
+    if (intent.scenarioIds && (owners.length !== 1 || intent.scenarioIds.length !== 1 || intent.scenarioIds[0] !== owners[0]?.id)) {
+      reasons.push(`Business outcome ${intent.businessOutcomeId} has inconsistent TestIntent and BusinessScenario membership`);
+    }
+  }
+  return [...new Set(reasons)];
+}
+
+function businessOutcomeMetric(
+  trial: EvaluationTrial,
+  businessOutcomeIds: string[],
+  testIntents: TestIntent[],
+  scenarios: BusinessScenario[],
+  executableCases: ExecutableCase[],
+  outcomesByCaseId: Map<string, ScenarioOutcome>
+): { metric: EvaluationScenarioMetric; outcomes: Map<string, ScenarioOutcome>; scenarioByOutcomeId: Map<string, string> } {
+  const outcomes = new Map<string, ScenarioOutcome>();
+  const scenarioByOutcomeId = new Map<string, string>();
+  for (const outcomeId of businessOutcomeIds) {
+    const mappedIntents = testIntents.filter(
+      (intent) => intent.knowledgeProjectId === trial.knowledgeProjectId &&
+        intent.requirementSetId === trial.requirementSetId &&
+        intent.businessOutcomeId === outcomeId
+    );
+    if (mappedIntents.length !== 1) {
+      outcomes.set(outcomeId, { kind: "inconclusive", at: trial.createdAt });
+      continue;
+    }
+    const intent = mappedIntents[0]!;
+    const owners = scenarios.filter(
+      (scenario) => scenario.knowledgeProjectId === trial.knowledgeProjectId &&
+        scenario.requirementSetId === trial.requirementSetId &&
+        scenario.testIntentIds?.includes(intent.id)
+    );
+    if (owners.length !== 1 || !trial.executionScope?.businessScenarioIds.includes(owners[0]?.id ?? "")) {
+      outcomes.set(outcomeId, { kind: "inconclusive", at: trial.createdAt });
+      continue;
+    }
+    scenarioByOutcomeId.set(outcomeId, owners[0]!.id);
+    const cases = executableCases.filter((item) =>
+      item.knowledgeProjectId === trial.knowledgeProjectId &&
+      item.requirementSetId === trial.requirementSetId &&
+      item.testIntentId === intent.id &&
+      (!item.systemId || item.systemId === trial.systemId) &&
+      (item.status === "ready" || item.status === "executed")
+    );
+    if (cases.length === 0) {
+      outcomes.set(outcomeId, { kind: "not-run", at: trial.createdAt });
+      continue;
+    }
+    if (cases.length !== 1 || scenariosForCase(cases[0]!.id, scenarios, executableCases).length !== 1 ||
+        scenariosForCase(cases[0]!.id, scenarios, executableCases)[0] !== owners[0]!.id) {
+      outcomes.set(outcomeId, { kind: "inconclusive", at: trial.createdAt });
+      continue;
+    }
+    outcomes.set(outcomeId, outcomesByCaseId.get(cases[0]!.id) ?? { kind: "not-run", at: trial.createdAt });
+  }
+  return { metric: countOutcomes(businessOutcomeIds, outcomes), outcomes, scenarioByOutcomeId };
+}
+
+function countOutcomes(ids: string[], outcomes: Map<string, ScenarioOutcome>): EvaluationScenarioMetric {
+  let measured = 0;
+  let passed = 0;
+  let failed = 0;
+  let blocked = 0;
+  let notRun = 0;
+  let syntheticOrUnknown = 0;
+  let inconclusive = 0;
+  for (const id of ids) {
+    const outcome = outcomes.get(id);
+    if (!outcome || outcome.kind === "not-run") notRun += 1;
+    else if (outcome.kind === "blocked") blocked += 1;
+    else if (outcome.kind === "synthetic-or-unknown") syntheticOrUnknown += 1;
+    else if (outcome.kind === "inconclusive") inconclusive += 1;
+    else {
+      measured += 1;
+      if (outcome.kind === "passed") passed += 1;
+      else failed += 1;
+    }
+  }
+  return {
+    status: measured > 0 ? "measured" : "not-measured",
+    denominator: ids.length,
+    measured,
+    passed,
+    failed,
+    blocked,
+    notRun,
+    syntheticOrUnknown,
+    inconclusive,
+    rate: measured > 0 && ids.length > 0 ? passed / ids.length : null
   };
 }
 

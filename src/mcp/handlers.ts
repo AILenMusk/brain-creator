@@ -1325,6 +1325,7 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       runtimeVersions: recordArg(input, "runtimeVersions"),
       runtimeBuildIdentity: runtimeIdentity.buildId,
       businessScenarioIds: stringArrayArg(input, "businessScenarioIds"),
+      businessOutcomeIds: optionalStringArrayArg(input, "businessOutcomeIds"),
       approvalReceiptId
     });
   }
@@ -6884,6 +6885,9 @@ async function knowledgeReview(
         evidence: context.repository.executionEvidence,
         conformanceResults: context.repository.conformanceResults,
         scenarios: context.repository.businessScenarios.filter(
+          (item) => item.knowledgeProjectId === projectId
+        ),
+        testIntents: context.repository.testIntents.filter(
           (item) => item.knowledgeProjectId === projectId
         ),
         executableCases: context.repository.executableCases,

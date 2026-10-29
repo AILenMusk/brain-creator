@@ -163,8 +163,9 @@ describe("KnowledgeService", () => {
     expect(originalIntents.length).toBeGreaterThan(0);
     expect(originalScenarios.length).toBeGreaterThan(0);
 
-    const testIntentDraftUpdates = originalIntents.map((item) => ({
+    const testIntentDraftUpdates = originalIntents.map((item, index) => ({
       id: item.id,
+      businessOutcomeId: index === 0 ? "OUTCOME-01" : item.businessOutcomeId ?? null,
       title: `Reviewed: ${item.title}`,
       objective: `Reviewed objective: ${item.objective}`,
       preconditions: ["Use a unique synthetic order and read its persisted state."],
@@ -208,8 +209,9 @@ describe("KnowledgeService", () => {
     expect("requirementSetStatus" in revised && revised.requirementSetStatus).toBe("draft");
     expect(revised.counts).toEqual({ testIntents: originalIntents.length, businessScenarios: originalScenarios.length });
     expect(repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id)).toEqual(
-      expect.arrayContaining(originalIntents.map((item) => expect.objectContaining({
+      expect.arrayContaining(originalIntents.map((item, index) => expect.objectContaining({
         id: item.id,
+        ...(index === 0 ? { businessOutcomeId: "OUTCOME-01" } : {}),
         status: "draft",
         scenarioIds: item.scenarioIds,
         title: `Reviewed: ${item.title}`
@@ -227,7 +229,7 @@ describe("KnowledgeService", () => {
     const revisedIntents = new Map(repository.testIntents
       .filter((item) => item.requirementSetId === ingested.requirementSet.id)
       .map((item) => [item.id, item]));
-    const intentMutableFields = new Set(["title", "objective", "preconditions", "expectedResults", "updatedAt"]);
+    const intentMutableFields = new Set(["businessOutcomeId", "title", "objective", "preconditions", "expectedResults", "updatedAt"]);
     for (const original of originalIntents) {
       const revisedIntent = revisedIntents.get(original.id)! as unknown as Record<string, unknown>;
       for (const [field, value] of Object.entries(original)) {
@@ -266,7 +268,7 @@ describe("KnowledgeService", () => {
     const intents = repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id);
     const scenarios = repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id);
     const testIntentDraftUpdates = intents.map((item) => ({
-      id: item.id, title: item.title, objective: item.objective,
+      id: item.id, businessOutcomeId: item.businessOutcomeId ?? null, title: item.title, objective: item.objective,
       preconditions: item.preconditions, expectedResults: item.expectedResults
     }));
     const businessScenarioDraftUpdates = scenarios.map((item) => ({
@@ -300,6 +302,19 @@ describe("KnowledgeService", () => {
       testIntentDraftUpdates: testIntentDraftUpdates.slice(1),
       businessScenarioDraftUpdates
     })).toThrow("TestIntent draft revision must update every existing asset exactly once");
+    if (intents.length > 1) {
+      const duplicatedOutcomeUpdates = testIntentDraftUpdates.map((item, index) => ({
+        ...item,
+        businessOutcomeId: index < 2 ? "OUTCOME-DUPLICATE" : null
+      }));
+      expect(() => service.reviseTestDesignDraft({
+        knowledgeProjectId: project.id,
+        requirementSetId: ingested.requirementSet.id,
+        confirm: false,
+        testIntentDraftUpdates: duplicatedOutcomeUpdates,
+        businessScenarioDraftUpdates
+      })).toThrow("assigned to multiple TestIntents");
+    }
   });
 
   it("indexes requirement actions for later System Brain binding", async () => {
