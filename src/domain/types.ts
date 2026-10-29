@@ -468,6 +468,7 @@ export type AgentTask = {
     contextPackPath?: string;
     requirementSuiteRunId?: string;
     requiredStepIds?: string[];
+    requiredPageObjectBindings?: Array<{ pageModelId: string; locatorPointId: string }>;
     actorJourneyRoles?: string[];
     browserMode?: BrowserExecutionMode;
   };

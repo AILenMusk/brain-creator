@@ -11,6 +11,13 @@ import {
   SHARDED_REPOSITORY_SCHEMA_VERSION
 } from "../domain/repository.js";
 import { generateSeedFile } from "../agent/seedGenerator.js";
+import { validatePageObjectUsage } from "../agent/pageObjectValidation.js";
+import { runSubmittedPlaywrightTest } from "../execution/hostPlaywrightRunner.js";
+import {
+  requiredPageObjectBindingsForSteps,
+  validateConfirmedSystemPageObjectBindings,
+  type RequiredSystemPageObjectBinding
+} from "../execution/systemPageObject.js";
 import { buildAgentPrompt } from "../agent/promptBuilder.js";
 import { checkBusinessRules } from "../agent/qualityGate.js";
 import { extractCandidateTerms } from "../agent/termExtractor.js";
@@ -59,7 +66,6 @@ import { writeArtifactManifest } from "../storage/artifactArchive.js";
 import {
   artifactFileName,
   resolveArtifactRunLayout,
-  writeArtifactPlaywrightConfig,
   type ArtifactRunLayout
 } from "../storage/artifactWorkspace.js";
 import { writeStaticSuiteExecutionReport } from "../execution/staticSuiteReport.js";
@@ -73,10 +79,7 @@ import {
   validateManualPostconditionEvidenceArtifacts,
   validatePostconditionVerificationArtifacts
 } from "../execution/postconditionVerifier.js";
-import {
-  browserObservationCapability,
-  playwrightTestArgs
-} from "../execution/browserObservation.js";
+import { browserObservationCapability } from "../execution/browserObservation.js";
 import { normalizeHostSkillAnalysis } from "../knowledge/policies.js";
 import { assessRequirementSourceComplexity } from "../knowledge/requirementRouting.js";
 import { buildContextPack } from "../knowledge/retriever.js";
@@ -118,7 +121,6 @@ import {
   preflightAgentBridge,
   runAgent,
   runChain,
-  spawnCommand,
   validateActorJourneyUsage,
   validateStepInstrumentation,
   type AgentBridge,
@@ -141,10 +143,6 @@ import {
   type TestDataProvider
 } from "../brain/testdata.js";
 import { configuredTestDataAdapter } from "../brain/configuredTestDataAdapter.js";
-import {
-  normalizeReporterExitCode,
-  parsePlaywrightJsonReport
-} from "../execution/playwrightReporter.js";
 import {
   EvaluationProviderRegistry,
   type MutationOutcome
@@ -7566,7 +7564,8 @@ async function generatePlan(context: BrainCreatorMcpContext, input: Record<strin
       workDir: context.workDir,
       outputDir: planLayout.testsDir,
       system,
-      authProfile
+      authProfile,
+      systemBrainSnapshot: context.systemBrainSnapshots.latest(system.id)
     });
     await mkdir(dirname(specPath), { recursive: true });
     const taskPackage = await prepareAgentTask(context, {
@@ -7614,7 +7613,8 @@ async function generatePlan(context: BrainCreatorMcpContext, input: Record<strin
       glossaryTerms: context.service.listGlossaryTerms({ projectId: systemId, query: "" }),
       businessRules: context.service.listBusinessRules(systemId),
       specPath,
-      agentBridge: context.agentBridge
+      agentBridge: context.agentBridge,
+      systemBrainSnapshot: context.systemBrainSnapshots.latest(system.id)
     }),
     structuredOutput: (result) => plannerOutputFromResult({
       status: result.agentRun.status === "succeeded" ? "succeeded" : "failed",
@@ -7668,6 +7668,17 @@ async function runApprovedChain(context: BrainCreatorMcpContext, input: Record<s
   }
   if (executionPlan && executionPlan.systemId !== testCase.systemId) {
     throw new Error("Execution plan belongs to another business system");
+  }
+  const systemBrainSnapshot = context.systemBrainSnapshots.latest(system.id);
+  const requiredPageObjectBindings = executionPlan
+    ? requiredPageObjectBindingsForSteps(executionPlan.steps)
+    : [];
+  const pageObjectReadiness = validateConfirmedSystemPageObjectBindings(
+    systemBrainSnapshot,
+    requiredPageObjectBindings
+  );
+  if (!pageObjectReadiness.valid) {
+    throw new Error(pageObjectReadiness.reason);
   }
   const authProfile = executionPlan?.auth
     ? findAuthProfileById(
@@ -7726,7 +7737,8 @@ async function runApprovedChain(context: BrainCreatorMcpContext, input: Record<s
       outputDir: artifactScope.layout.testsDir,
       system,
       authProfile,
-      actorJourney: actorJourneyProfiles
+      actorJourney: actorJourneyProfiles,
+      systemBrainSnapshot
     });
     const taskPackage = await prepareAgentTask(context, {
       systemId: system.id,
@@ -7753,6 +7765,7 @@ async function runApprovedChain(context: BrainCreatorMcpContext, input: Record<s
         requiredStepIds: executionPlan?.steps
           .filter((step) => step.action !== "api")
           .map((step) => step.id),
+        requiredPageObjectBindings,
         actorJourneyRoles: actorJourneyProfiles?.map((actor) => actor.role),
         browserMode
       },
@@ -7801,6 +7814,8 @@ async function runApprovedChain(context: BrainCreatorMcpContext, input: Record<s
       requiredStepIds: executionPlan?.steps
         .filter((step) => step.action !== "api")
         .map((step) => step.id),
+      requiredPageObjectBindings,
+      systemBrainSnapshot,
       browserMode,
       artifactLayout: artifactScope.layout,
       caseNo: artifactScope.caseNo
@@ -8208,7 +8223,8 @@ async function generateSeed(context: BrainCreatorMcpContext, input: Record<strin
     workDir: context.workDir,
     outputDir: optionalStringArg(input, "outputDir") ?? join(context.workDir, "tests"),
     system,
-    authProfile
+    authProfile,
+    systemBrainSnapshot: context.systemBrainSnapshots.latest(system.id)
   });
 }
 
@@ -8353,7 +8369,8 @@ async function prepareAgentTask(
       args,
       outputPaths,
       requiredStepIds: chainContext?.requiredStepIds,
-      actorJourneyRoles: chainContext?.actorJourneyRoles
+      actorJourneyRoles: chainContext?.actorJourneyRoles,
+      requiredPageObjectBindings: chainContext?.requiredPageObjectBindings
     }),
     "utf8"
   );
@@ -8722,6 +8739,11 @@ async function submitAgentOutput(context: BrainCreatorMcpContext, input: Record<
     if (!journeyCheck.valid) throw new Error(journeyCheck.reason);
     const instrumentationCheck = validateStepInstrumentation(source, requiredStepIds);
     if (!instrumentationCheck.valid) throw new Error(instrumentationCheck.reason);
+    const pageObjectCheck = validatePageObjectUsage(
+      source,
+      pendingTask.chainContext.requiredPageObjectBindings ?? []
+    );
+    if (!pageObjectCheck.valid) throw new Error(pageObjectCheck.reason);
     const secretFindings = scanGeneratedTestSecrets(context, pendingTask.systemId, source);
     if (secretFindings.length > 0) {
       throw new Error(
@@ -8808,13 +8830,15 @@ async function submitAgentOutput(context: BrainCreatorMcpContext, input: Record<
   const testResult =
     result.agentRun.status === "succeeded" &&
     (result.task.agent === "generator" || result.task.agent === "healer")
-      ? await runSubmittedTest(
-          context,
-          chainContext.testPath,
-          result.task.systemId,
-          result.task.id,
-          chainContext.browserMode
-        )
+      ? await runSubmittedPlaywrightTest({
+          workDir: context.workDir,
+          testPath: chainContext.testPath,
+          systemId: result.task.systemId,
+          runId: result.task.id,
+          browserMode: chainContext.browserMode,
+          runner: context.runner,
+          protectedSecrets: protectedSecretsForSystem(context, result.task.systemId)
+        })
       : undefined;
   const healAttempts = chainContext.healAttempts ?? 0;
   const maxHealAttempts = chainContext.maxHealAttempts ?? 1;
@@ -9489,7 +9513,7 @@ async function maybeCreateHostAgentBugReport(
 function hostAgentFailureReason(
   agent: AgentRun["agent"],
   agentError: string | undefined,
-  testResult: Awaited<ReturnType<typeof runSubmittedTest>> | undefined
+  testResult: Awaited<ReturnType<typeof runSubmittedPlaywrightTest>> | undefined
 ) {
   const detail = [agentError, testResult?.stderr, testResult?.stdout].find(
     (value): value is string => Boolean(value?.trim())
@@ -9501,111 +9525,6 @@ function hostAgentFailureReason(
     return `Playwright failed after generator: ${detail}`;
   }
   return detail;
-}
-
-async function runSubmittedTest(
-  context: BrainCreatorMcpContext,
-  testPath: string,
-  systemId: string,
-  runId = "host-agent",
-  browserMode: BrowserExecutionMode = "headless"
-) {
-  const runner = context.runner ?? spawnCommand;
-  const artifactLayout = artifactLayoutFromTestPath(context.workDir, testPath);
-  const testRunPath = relative(
-    artifactLayout?.testsDir ?? context.workDir,
-    testPath
-  ).replace(/\\/g, "/");
-  const playwrightConfigPath = artifactLayout
-    ? await writeArtifactPlaywrightConfig({ workDir: context.workDir, layout: artifactLayout })
-    : undefined;
-  try {
-    const rawResult = await runner(
-      "npx",
-      playwrightTestArgs(testRunPath, {
-        browserMode,
-        structuredReporter: true,
-        ...(playwrightConfigPath
-          ? { configPath: relative(context.workDir, playwrightConfigPath).replace(/\\/g, "/") }
-          : {})
-      }),
-      {
-      cwd: context.workDir
-      }
-    );
-    const protectedSecrets = protectedSecretsForSystem(context, systemId);
-    const result: CommandResult = {
-      ...rawResult,
-      stdout: redactSensitiveText(rawResult.stdout, protectedSecrets),
-      stderr: redactSensitiveText(rawResult.stderr, protectedSecrets),
-      ...(rawResult.structuredReporter
-        ? {
-            structuredReporter: JSON.parse(
-              redactSensitiveText(JSON.stringify(rawResult.structuredReporter), protectedSecrets)
-            )
-          }
-        : {})
-    };
-    const reporter = result.structuredReporter ?? parseHostReporter(result.stdout);
-    if (!reporter) {
-      return {
-        ...result,
-        exitCode: result.exitCode === 0 ? 1 : result.exitCode,
-        stderr: [
-          result.stderr,
-          "Structured Playwright Reporter output was missing; execution is not auditable."
-        ].filter(Boolean).join("\n")
-      };
-    }
-    const reporterPath = result.reporterPath ?? hostReporterPath(
-      context.workDir,
-      testPath,
-      runId
-    );
-    await mkdir(dirname(reporterPath), { recursive: true });
-    if (!result.reporterPath) {
-      await writeFile(reporterPath, `${JSON.stringify(reporter, null, 2)}\n`, "utf8");
-    }
-    return {
-      ...result,
-      exitCode: normalizeReporterExitCode(result.exitCode, reporter),
-      structuredReporter: reporter,
-      reporterPath
-    };
-  } catch (error) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
-function artifactLayoutFromTestPath(workDir: string, testPath: string): ArtifactRunLayout | undefined {
-  const normalized = relative(workDir, testPath).replace(/\\/g, "/");
-  if (!normalized.startsWith(".brain-creator/artifacts/")) return undefined;
-  const root = dirname(dirname(resolve(workDir, testPath)));
-  return {
-    root,
-    sourceDir: join(root, "source"),
-    analysisDir: join(root, "analysis"),
-    casesDir: join(root, "cases"),
-    specsDir: join(root, "specs"),
-    testsDir: join(root, "tests"),
-    evidenceDir: join(root, "evidence"),
-    reportDir: join(root, "report"),
-    manifestPath: join(root, "manifest.json"),
-    indexPath: join(root, "index.md"),
-    latestPath: join(root, "..", "latest.json")
-  };
-}
-
-function hostReporterPath(workDir: string, testPath: string, runId: string) {
-  const normalized = relative(workDir, testPath).replace(/\\/g, "/");
-  if (normalized.startsWith(".brain-creator/artifacts/")) {
-    return join(dirname(dirname(resolve(workDir, testPath))), "evidence", `${runId}-playwright-report.json`);
-  }
-  return join(workDir, ".brain-creator", "runs", runId, "playwright-report.json");
 }
 
 function redactHostAgentText(
@@ -9664,14 +9583,6 @@ function protectedSecretsForSystem(
   );
 }
 
-function parseHostReporter(output: string) {
-  try {
-    return parsePlaywrightJsonReport(JSON.parse(output));
-  } catch {
-    return undefined;
-  }
-}
-
 function scanGeneratedTestSecrets(
   context: BrainCreatorMcpContext,
   systemId: string,
@@ -9694,6 +9605,7 @@ function hostAgentPrompt(input: {
   outputPaths: string[];
   requiredStepIds?: string[];
   actorJourneyRoles?: string[];
+  requiredPageObjectBindings?: RequiredSystemPageObjectBinding[];
 }) {
   return [
     `# Brain Creator Host Agent Task`,
@@ -9715,6 +9627,15 @@ function hostAgentPrompt(input: {
     ...(input.requiredStepIds?.length
       ? [
           `- Instrument every declared execution step with bc.step(): ${input.requiredStepIds.join(", ")}.`
+        ]
+      : []),
+    ...(input.requiredPageObjectBindings?.length
+      ? [
+          "- Resolve each required page control only with the confirmed System Brain seed API: bc.pageObject(page, <pageModelId>).control(<locatorPointId>). Do not use raw selectors or substitute another binding.",
+          "- Complex controls may use an explicitly registered workspace-local extension passed in bc.pageObject(..., extensions); invoke it through control.extend(extensionId), and keep the extension out of Brain Creator product source.",
+          `- Required confirmed bindings: ${input.requiredPageObjectBindings
+            .map(({ pageModelId, locatorPointId }) => `${pageModelId}/${locatorPointId}`)
+            .join(", ")}.`
         ]
       : []),
     ...(input.actorJourneyRoles && input.actorJourneyRoles.length > 1
@@ -11986,6 +11907,7 @@ function chainContextArg(input: Record<string, unknown>): AgentTask["chainContex
   const executionEvidenceId = candidate.executionEvidenceId;
   const contextPackPath = candidate.contextPackPath;
   const requiredStepIds = candidate.requiredStepIds;
+  const requiredPageObjectBindings = candidate.requiredPageObjectBindings;
   const actorJourneyRoles = candidate.actorJourneyRoles;
   const browserMode = candidate.browserMode;
   if (typeof testCaseId !== "string" || typeof specPath !== "string" || typeof testPath !== "string") {
@@ -12023,6 +11945,17 @@ function chainContextArg(input: Record<string, unknown>): AgentTask["chainContex
       throw new Error(`chainContext ${name} must be an array of strings when provided`);
     }
   }
+  if (
+    requiredPageObjectBindings !== undefined &&
+    (!Array.isArray(requiredPageObjectBindings) ||
+      requiredPageObjectBindings.some((item) => {
+        if (!item || typeof item !== "object") return true;
+        const binding = item as Record<string, unknown>;
+        return typeof binding.pageModelId !== "string" || typeof binding.locatorPointId !== "string";
+      }))
+  ) {
+    throw new Error("chainContext requiredPageObjectBindings must be an array of page/locator id pairs");
+  }
   if (browserMode !== undefined && browserMode !== "headless" && browserMode !== "observe") {
     throw new Error("chainContext browserMode must be headless or observe");
   }
@@ -12041,6 +11974,7 @@ function chainContextArg(input: Record<string, unknown>): AgentTask["chainContex
     executionEvidenceId: executionEvidenceId as string | undefined,
     contextPackPath: contextPackPath as string | undefined,
     requiredStepIds: requiredStepIds as string[] | undefined,
+    requiredPageObjectBindings: requiredPageObjectBindings as RequiredSystemPageObjectBinding[] | undefined,
     actorJourneyRoles: actorJourneyRoles as string[] | undefined,
     browserMode: browserMode as "headless" | "observe" | undefined
   };

@@ -5,6 +5,12 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { buildAgentPrompt } from "./promptBuilder.js";
 import { generateSeedFile } from "./seedGenerator.js";
+import type { SystemBrainSnapshot } from "../brain/types.js";
+import { validatePageObjectUsage } from "./pageObjectValidation.js";
+import {
+  validateConfirmedSystemPageObjectBindings,
+  type RequiredSystemPageObjectBinding
+} from "../execution/systemPageObject.js";
 import { formatScenariosAsMarkdown, parseSpecMarkdown } from "./caseFormatter.js";
 import { checkBusinessRules } from "./qualityGate.js";
 import { extractCandidateTerms } from "./termExtractor.js";
@@ -156,6 +162,7 @@ type GeneratePlanDraftInput = {
   businessRules: BusinessRule[];
   specPath: string;
   agentBridge?: AgentBridge;
+  systemBrainSnapshot?: SystemBrainSnapshot;
 };
 
 type RunChainInput = {
@@ -170,6 +177,8 @@ type RunChainInput = {
   structuredReporter?: boolean;
   actorJourney?: Array<{ role: string; authProfile: AuthProfile }>;
   requiredStepIds?: string[];
+  requiredPageObjectBindings?: RequiredSystemPageObjectBinding[];
+  systemBrainSnapshot?: SystemBrainSnapshot;
   browserMode?: BrowserExecutionMode;
   artifactLayout?: ArtifactRunLayout;
   caseNo?: string;
@@ -271,7 +280,8 @@ export async function generatePlanDraft(input: GeneratePlanDraftInput) {
     workDir: input.workDir,
     outputDir: seedDir,
     system: input.system,
-    authProfile: input.authProfile
+    authProfile: input.authProfile,
+    systemBrainSnapshot: input.systemBrainSnapshot
   });
 
   await mkdir(dirname(input.specPath), { recursive: true });
@@ -317,6 +327,13 @@ export async function runChain(input: RunChainInput) {
   if (input.testCase.status !== "approved") {
     throw new Error("Test case must be approved before running chain");
   }
+  const snapshotBindings = validateConfirmedSystemPageObjectBindings(
+    input.systemBrainSnapshot,
+    input.requiredPageObjectBindings ?? []
+  );
+  if (!snapshotBindings.valid) {
+    throw new Error(snapshotBindings.reason);
+  }
 
   const layout = input.artifactLayout ?? resolveArtifactRunLayout({
     workDir: input.workDir,
@@ -358,7 +375,8 @@ export async function runChain(input: RunChainInput) {
     outputDir: layout.testsDir,
     system: input.system,
     authProfile: input.authProfile,
-    actorJourney: input.actorJourney
+    actorJourney: input.actorJourney,
+    systemBrainSnapshot: input.systemBrainSnapshot
   });
   const protectedSecrets = Object.fromEntries(
     [input.authProfile, ...(input.actorJourney ?? []).map((actor) => actor.authProfile)]
@@ -411,6 +429,13 @@ export async function runChain(input: RunChainInput) {
       const instrumentationCheck = validateStepInstrumentation(source, input.requiredStepIds);
       if (!instrumentationCheck.valid) {
         return { exitCode: 1, stdout: "", stderr: instrumentationCheck.reason };
+      }
+    }
+    if (input.requiredPageObjectBindings?.length) {
+      const source = await readFile(testPath, "utf8");
+      const pageObjectCheck = validatePageObjectUsage(source, input.requiredPageObjectBindings);
+      if (!pageObjectCheck.valid) {
+        return { exitCode: 1, stdout: "", stderr: pageObjectCheck.reason };
       }
     }
     const args = playwrightTestArgs(testRunPath, {
@@ -508,7 +533,12 @@ export async function runChain(input: RunChainInput) {
     });
     const afterHealSource = await readGeneratedSource(testPath);
     const mutationCheck = beforeHealSource && afterHealSource
-      ? validateHealerMutation(beforeHealSource, afterHealSource, input.requiredStepIds ?? [])
+      ? validateHealerMutation(
+          beforeHealSource,
+          afterHealSource,
+          input.requiredStepIds ?? [],
+          input.requiredPageObjectBindings ?? []
+        )
       : beforeHealSource && !afterHealSource
         ? { valid: false as const, reason: "Healer removed the generated test file." }
         : { valid: true as const };
@@ -663,7 +693,8 @@ export function validateStepInstrumentation(source: string, stepIds: string[]) {
 export function validateHealerMutation(
   beforeSource: string,
   afterSource: string,
-  requiredStepIds: string[]
+  requiredStepIds: string[],
+  requiredPageObjectBindings: RequiredSystemPageObjectBinding[] = []
 ) {
   const before = removeSourceComments(beforeSource);
   const after = removeSourceComments(afterSource);
@@ -675,6 +706,8 @@ export function validateHealerMutation(
   }
   const instrumentation = validateStepInstrumentation(after, requiredStepIds);
   if (!instrumentation.valid) return instrumentation;
+  const pageObjectUsage = validatePageObjectUsage(after, requiredPageObjectBindings);
+  if (!pageObjectUsage.valid) return pageObjectUsage;
   const beforeAssertions = countAssertions(before);
   const afterAssertions = countAssertions(after);
   if (afterAssertions < beforeAssertions) {
