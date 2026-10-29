@@ -2,9 +2,18 @@
 
 This register tracks the six-package business-closure plan. Implementation, real business completion, and autonomy are separate measurements. Completing a unit test does not count as a real business run.
 
-Current implementation base: origin/main at 62d7487dded6bb444eb9eb32ef6c4363fa3f3238 (PR #185, fast-forwarded from the initially selected ac03cd5 after confirming its changed files did not overlap this worktree's local changes). Read-only git ls-remote confirms origin/main remains 62d7487dded6bb444eb9eb32ef6c4363fa3f3238. Candidate PR branch codex/trust-closure-main; implementation commit b6e6d9ccb86646c60f67d1810bee71ee09da7532; acceptance-documentation CI was verified on documentation commit 90917c0dffbc34bb620c9e5ccbc1cdca0dadcc7b.
+## 最新状态复核（2026-10-29）
 
-Current verified status (2026-10-26; acceptance recheck and strategy rewrite are recorded at the end of this register):
+- PR #186 已于 2026-10-26 合入，合并提交为 `eedc217d41b631815ca32d0142a3e4dfe26399d9`；当前 `main` / `origin/main` 为 `cb89e78852fc0c27d2cee753caae17c0d84762b9`，包含该合并提交。以下 2026-10-26 之前的“PR 未合并”记录仅作为历史审计内容，不代表当前 GitHub 状态。
+- PR 最新 head `fda79135be195356c3c3e647ccbd02676dfb8954` 的 Node 20、Node 22 和 build checks 均通过，deploy 为 skipped。GitHub 合并提交和当前 main 未返回组合状态；台账没有找到合并后针对当前 main SHA 的 package/runtime smoke 记录。
+- 按本台账原验收规则，正式实现验收仍为 **0/6**，当前原因是缺少可追溯的合并后验收记录，不再是 PR 未合并。A–D 的候选工程结论仍为 **4/6**；合入本身不能替代正式验收。
+- E（真实业务评估）仍无真实 Trial 与独立业务后置状态证据；业务完成度、自主完成度和真实恢复/清理指标均为**未测量**。Beisen 仍需第二真实系统和单独授权。
+- F（复核与交付）仍为**部分完成**：指标隔离、分母门禁和候选工程检查有记录，但没有真实基线比较及人工业务标注，正式交付报告和合并后交付 smoke 尚未完成。
+- 用户已要求 E、F 暂缓。此状态下不启动 E/F 验收、Test5 业务写入、Trial 或清理；只有用户明确恢复后再继续。
+
+Historical implementation base (candidate PR record): origin/main at 62d7487dded6bb444eb9eb32ef6c4363fa3f3238 (PR #185, fast-forwarded from the initially selected ac03cd5 after confirming its changed files did not overlap this worktree's local changes). Candidate PR branch codex/trust-closure-main; implementation commit b6e6d9ccb86646c60f67d1810bee71ee09da7532; acceptance-documentation CI was verified on documentation commit 90917c0dffbc34bb620c9e5ccbc1cdca0dadcc7b.
+
+Historical verified status (2026-10-26; superseded by the 2026-10-29 status above):
 
 - Formal accepted delivery remains **0/6**; PR #186 is open as Draft and unmerged. Implementation commit b6e6d9ccb86646c60f67d1810bee71ee09da7532 is on the remote branch and its Node 20, Node 22, and build checks succeeded; deploy was skipped. Documentation-only revision 90917c0dffbc34bb620c9e5ccbc1cdca0dadcc7b also passed Node 20, Node 22, and build checks; deploy was skipped. Preceding documentation revisions cbb8910 and 838d161 likewise passed. Untracked runner-report.json is excluded.
 - The latest read-only source capture identifies the main Test5 document at revision `2045`; the linked project `knowledgeProject_o3mtvnlm` has v2 draft source `requirementSource_8dk46kq4` and five user-confirmed attachment analyses, which remain analysis inputs rather than approved Oracles or a frozen Trial baseline. Latest Facade projection: 202 draft TestIntents and 180 BusinessScenario records (178 draft, 2 stale); 148 report data-plan readiness `ready` and 32 `blocked`. The latter is a planning signal, not execution readiness. Current `bc_status` reports 11 open project Gaps; `bc_review target=gap` reports 11 open / 4 resolved (15 total). The 202/202 coverage result means source traceability only.
@@ -16,7 +25,7 @@ Current verified status (2026-10-26; acceptance recheck and strategy rewrite are
 - Desktop inventory returned the existing `HRONE - Google Chrome` window, but `sky.activate_window` failed twice with `failed to activate captured window`; Chrome DevTools endpoints 9222–9224 were unavailable. In a separate isolated Playwright-controlled Chrome session, the user manually signed into Test5. Read-only navigation confirmed `/recruitmentPlatform/demands` and `/recruitmentPlatform/offer`, and the demand status filter exposes `已关闭` along with the documented workflow labels. The user now states that the current account has the required permissions; this is user-provided authorization context, not independent role/grant evidence. The latest browser-extension check confirmed the demand-list route, its status filters, and visible/enabled top-level create and transfer controls; no submit/approve/close buttons were present in the list view. The Role Configuration entry opens a matrix-role definitions page but did not expose the current account's role assignment. Target postconditions and all business outcomes remain unverified.
 - A fresh 2026-10-23 read-only DOM check of the active Test5 `角色配置 → 矩阵角色管理` page again showed role-type definitions only, not the signed-in user's assignment or operation grants; the page also displayed `服务未找到` notices. No role record was opened or modified. This does not resolve the actor or postcondition evidence Gap.
 
-## Current Delivery Acceptance Matrix
+## Delivery Acceptance Matrix (2026-10-26 snapshot; superseded by latest status)
 
 Keep package acceptance and live business validation separate. The formal `N/6` score counts a package only after its implementation gate passes on the exact candidate, it is merged into the selected base, and the merged package smoke succeeds. Real-system validation has its own gates below; synthetic results never satisfy them.
 

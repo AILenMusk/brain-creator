@@ -120,19 +120,99 @@ npx brain-creator plugin install
 
 实现检查、合成验证和真实业务结果分别报告。真实 Trial 没有样本时，相关业务指标应写“未测量”；blocked（阻塞）、失败和未执行场景保留在固定分母中。
 
-## 仓库结构
+## 工程文件结构与代码分层
 
-| 路径 | 内容 |
-|---|---|
-| `src/agent/` | Agent 任务、宿主接续和运行时适配。 |
-| `src/brain/` | 五个 Brain 的核心模型和 Harness 类型。 |
-| `src/knowledge/` | 需求分析、系统探索、测试编译、数据准备和报告服务。 |
-| `src/domain/`、`src/storage/` | 领域资产、仓库、隔离和持久化。 |
-| `src/execution/`、`src/runner/` | 执行、证据评估、调度和恢复。 |
-| `src/mcp/`、`src/cli/` | Facade/MCP 与命令行产品入口。 |
-| `skills/brain-creator/` | Codex、Claude Code 等宿主使用的产品 Skill。 |
-| `docs/zh-CN/` | 面向中文用户的快速开始、概念、操作和故障排查文档。 |
-| `docs/quality/` | 验收策略、质量台账、真实系统回归和交付证据。 |
+先按用途区分产品源码、可复用验证代码、项目文档和运行产物。文件数本身不是问题；模块职责混杂、边界不清和变化互相牵连才是主要维护风险。
+
+```text
+.
+├── AGENTS.md                 # 所有代码 Agent 的开发规则正本
+├── CLAUDE.md                 # Claude Code 的短入口，指向 AGENTS.md
+├── README.md                 # 产品入口、工程结构和使用说明
+├── README.legacy.md          # 旧版 README 的只读历史备份
+├── src/                      # npm 包中的产品运行时代码
+│   ├── cli/                  # 安装、诊断、配置和维护命令
+│   ├── mcp/                  # MCP 工具注册、Facade 请求适配
+│   ├── agent/                # 宿主 Agent、认证和任务接续适配
+│   ├── knowledge/            # 需求、系统知识、编译、数据与工作流服务
+│   ├── brain/                # Brain 模型、Harness 状态和能力服务
+│   ├── domain/               # 资产类型、领域服务和仓库接口/实现
+│   ├── execution/            # 浏览器执行、断言、证据和报告
+│   ├── evaluation/           # Trial 完整性、指标和历史证据复核
+│   ├── runner/               # 套件调度入口
+│   ├── storage/              # 文件产物布局、归档、迁移和保留策略
+│   ├── shared/               # 工作区、运行身份、加密等共享能力
+│   ├── caseSource/           # Excel/Markdown 等既有用例来源适配
+│   └── quality/              # 质量台账、回归和黄金样本的测试文件
+├── tests/                    # 可复用的浏览器/集成夹具与测试辅助代码
+├── scripts/                  # CI、安装、Agent 宿主和工程验收脚本
+├── skills/                   # Brain Creator 产品 Skill 正本
+├── plugin/、plugins/         # 宿主插件及其安装资源
+├── docs/zh-CN/               # 面向中文用户的产品文档
+├── docs/quality/             # 质量规则和当前验收台账
+├── dist/                     # 构建生成目录，不是源码
+├── node_modules/             # npm 依赖，不是项目源码
+└── <业务项目>/.brain-creator/ # 用户工作区中的 Store、运行产物和本地密钥
+```
+
+目录职责已经有基本分区，但当前还不是严格、可检查的分层架构：`src/mcp/handlers.ts` 承担了大量 Facade 分发、业务编排、执行推进、报告和参数解析；`src/knowledge/` 同时容纳多类业务流程；`src/domain/types.ts` 汇集了大量跨域类型。后续按单一职责逐步拆分，保持公开 MCP/CLI 契约不变，不做无目标的整体搬迁。
+
+新代码遵循以下依赖方向：
+
+```text
+Agent / CLI / MCP 适配入口
+          ↓
+按业务动作组织的用例与流程服务
+          ↓
+Brain / Domain 模型与业务规则
+          ↓
+由 Storage、浏览器、数据 Provider 等适配器实现的技术能力
+```
+
+- `src/mcp/` 和 `src/cli/` 负责输入校验、协议转换、调用和输出；业务规则放在对应的服务中。
+- Domain/Brain 的核心规则不依赖 MCP、CLI 或某一种具体文件/浏览器 Provider；通过接口传入外部能力。
+- 一个模块应有清楚的主要职责。已有超大模块作为拆分债务登记；新增工作流先拆成可独立测试的服务，不继续把逻辑堆进 `handlers.ts`。
+- `*.test.ts`、`tests/` 中可重复运行的测试和 `scripts/` 中的通用检查属于工程代码；截图、真实需求副本、Trial 记录及单次运行报告属于验收/运行资产，不能混放在产品源码中。
+
+### 工程代码、验收资产与运行产物
+
+| 类别 | 放置规则 | 例子 |
+|---|---|---|
+| 产品工程 | 进入 `src/`、产品 Skill/插件和用户文档；可随 npm 发布的内容由 `package.json` 明确列出。 | Brain、MCP/CLI、通用业务逻辑、Skill。 |
+| 可复用验证代码 | 保留在 `*.test.ts`、`tests/`、`scripts/`，作为产品质量门禁维护；其中不得写入真实账号或业务数据。 | 单元/集成测试、订单审批合成夹具、包安装检查。 |
+| 验收规则 | 保留方法、固定评估口径和问题状态；逐轮结果应由明确的 Trial/提交版本索引。 | `docs/quality/` 中的验收策略、问题台账。 |
+| 单轮验收与业务产物 | 放在目标业务工作区 `.brain-creator/artifacts/` 或批准的独立归档中，保留清单和哈希；真实鉴权材料不得进入源码包或 Git。 | 需求快照、Oracle 标注、截图、trace、Reporter、HTML/Markdown 报告。 |
+
+当前仍有边界债务：`docs/quality/` 同时存在长期规则和 Test5/单轮评审资料；`package.json` 用 `docs/**/*.md` 打包规则，可能把质量台账 Markdown 一并放入 npm 包。下一步整理应先把稳定政策与单轮记录分开，并收紧 npm 文档白名单；不要删除或改写历史证据来制造“干净”状态。
+
+### npm 用户如何定位运行产物
+
+Brain Creator 的运行数据写入**用户的业务工作区**，不是写进 `node_modules/brain-creator`。默认工作区是 MCP/CLI 进程的当前目录；设置 `BRAIN_CREATOR_WORKSPACE` 后以该目录为准。安装后运行 `npx brain-creator doctor`，检查该 CLI 进程的 `Workspace`、`Store directory` 和 `Knowledge directory`；Agent 侧查看 `bc_status.runtimeIdentity.workspace`，以实际 MCP 进程的工作区作为运行产物位置。两者可能因启动目录不同而不一致，不要只根据插件安装目录猜产物位置。
+
+默认布局如下：
+
+```text
+<Workspace>/.brain-creator/
+├── store/                              # 持久知识、资产、任务和运行台账
+├── artifacts/
+│   └── <系统>/<需求>-v<版本>/
+│       ├── latest.json                 # 指向该需求下最近一次运行
+│       └── <SuiteRunId>/
+│           ├── source/                 # 本轮需求来源快照
+│           ├── analysis/               # 分析和审核材料
+│           ├── cases/                  # 测试用例/场景
+│           ├── specs/                  # 本轮生成的测试规格
+│           ├── tests/                  # 本轮生成的 Playwright 测试
+│           ├── evidence/               # 截图、trace、Reporter 等执行证据
+│           ├── report/                 # 人可读报告
+│           ├── manifest.json           # 文件路径、来源、大小和 SHA-256
+│           └── index.md                # 本轮产物索引
+└── system-explorations/<探索 ID>/      # 独立系统探索记录和截图
+```
+
+每轮路径由目标系统、需求标识/版本和 `SuiteRunId` 组成，避免不同系统、需求版本和运行互相覆盖。此处的 `specs/` 是单轮生成产物；仓库根目录的旧 `specs/` 和 `tests/generated/` 是兼容迁移来源，不是新的产品代码写入位置。`BRAIN_CREATOR_STORE_DIR` 只覆盖 Store 路径；要整体迁移默认工作区与运行产物位置，应设置 `BRAIN_CREATOR_WORKSPACE`。
+
+迁移旧产物先运行 `npx brain-creator artifacts migrate` 查看预览；确认后才传 `--confirm`。需要交付单轮结果时，运行 `npx brain-creator export --suite <SuiteRunId> --output <归档路径>`，导出包含清单和哈希，不包含凭据、浏览器 storage state 或无关工作区文件。更完整的存储、迁移、保留和证据规则见[存储与证据](docs/zh-CN/guides/storage-and-evidence.md)。
 
 ## 中文文档
 
@@ -149,6 +229,9 @@ npx brain-creator plugin install
 - [故障排查](docs/zh-CN/troubleshooting.md)
 - [可靠性控制](docs/zh-CN/quality/reliability-controls.md)
 - [真实系统回归](docs/zh-CN/quality/real-system-regression.md)
+- [六包实施验收策略](docs/quality/trust-convergence-acceptance-strategy.md)
+- [六包验收状态台账](docs/quality/trust-convergence.md)
+- [Agent 开发规则](AGENTS.md)
 - [旧版 README 备份](README.legacy.md)
 
 ## 源码开发
