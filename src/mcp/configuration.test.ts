@@ -253,10 +253,10 @@ describe("Brain Creator local integration files", () => {
   it("documents the user entrypoint map in the Agent guide and Brain Creator skill", async () => {
     const readme = await readFile("README.md", "utf8");
     const skill = await readFile("skills/brain-creator/SKILL.md", "utf8");
-    const agentUsage = await readFile("docs/agent-usage.md", "utf8");
+    const agentUsage = await readFile("docs/zh-CN/agent-usage.md", "utf8");
 
-    expect(readme).toContain("docs/agent-usage.md");
-    expect(agentUsage).toContain("## User Entrypoints");
+    expect(readme).toContain("docs/zh-CN/agent-usage.md");
+    expect(agentUsage).toContain("## 用户入口映射");
     expect(skill).toContain("## User Entrypoint Map");
 
     for (const marker of [
@@ -279,7 +279,7 @@ describe("Brain Creator local integration files", () => {
       expect(skill).toContain(marker);
     }
     expect(agentUsage).toContain("/bc help");
-    expect(agentUsage).toContain("Brain Creator shortcuts");
+    expect(agentUsage).toContain("显示快捷帮助");
     expect(await readFile("docs/release-checklist.md", "utf8")).toContain(
       "verify:codex-native-entry"
     );

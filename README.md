@@ -132,7 +132,7 @@ npx brain-creator plugin install
 ├── README.legacy.md          # 旧版 README 的只读历史备份
 ├── src/                      # npm 包中的产品运行时代码
 │   ├── cli/                  # 安装、诊断、配置和维护命令
-│   ├── mcp/                  # MCP 工具注册、Facade 请求适配
+│   ├── mcp/                  # MCP 注册与 Facade；工具分发、工作流、投影和参数模块分置
 │   ├── agent/                # 宿主 Agent、认证和任务接续适配
 │   ├── knowledge/            # 需求、系统知识、编译、数据与工作流服务
 │   ├── brain/                # Brain 模型、Harness 状态和能力服务
@@ -155,7 +155,9 @@ npx brain-creator plugin install
 └── <业务项目>/.brain-creator/ # 用户工作区中的 Store、运行产物和本地密钥
 ```
 
-目录职责已经有基本分区，但当前还不是严格、可检查的分层架构：`src/mcp/handlers.ts` 承担了大量 Facade 分发、业务编排、执行推进、报告和参数解析；`src/knowledge/` 同时容纳多类业务流程；`src/domain/types.ts` 汇集了大量跨域类型。后续按单一职责逐步拆分，保持公开 MCP/CLI 契约不变，不做无目标的整体搬迁。
+目录职责已有基本分区，但当前仍有分层债务。第一轮 MCP 拆分已将浏览器运行/Reporter、需求工作流、状态与审核投影、参数解析移入独立模块；`src/mcp/handlers.ts` 保留工具分发及尚未拆完的 Facade 操作，仍约 5,800 行，不能称为薄适配层。`src/knowledge/` 仍同时容纳多类业务流程，`src/domain/types.ts` 仍汇集大量跨域类型。后续按稳定接口继续拆分，优先降低单文件改动范围和跨域依赖，不做无目标的整体搬迁。
+
+当前 MCP 文件职责：`handlers.ts` 注册 Facade 分支并适配请求；`requirementWorkflowHandlers.ts` 承接需求准备、测试数据续跑与执行计划工作流；`facadeProjectionHandlers.ts` 组装状态和审核投影；`handlerArguments.ts` 处理参数校验、解析和响应格式；`execution/hostPlaywrightRunner.ts` 负责宿主提交的 Playwright 运行及结构化 Reporter。新增流程应优先进入可独立测试的服务；不要将这些模块互相循环导入，也不要把领域规则放进参数/展示层。
 
 ### 知识驱动的 POM
 
