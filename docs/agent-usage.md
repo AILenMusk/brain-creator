@@ -50,6 +50,8 @@ If the host connector already downloaded a Feishu attachment, pass it in the sam
 
 Run requirement understanding with `bc_prepare action=generate-analysis provider=host-agent`. The response advances through Document Mapper, Clause Analyst, Business Modeler, and an isolated Coverage Critic. Execute each returned prompt and repeat the same action with `taskId` plus the JSON `analysisPackage`. The Critic sees source evidence and structured stage output, not the designer conversation. After completion, call `generate-test-design` with the same provider. One structured retry is allowed; a second failure is persisted as a recoverable Gap. A Host Skill may seed mapping and clauses, but it never skips modeling or Critic review.
 
+For large inputs, a work package can reference a complete source or prior-stage JSON file in the workspace instead of placing all content inline. The host must have access to those files, verify their stated SHA-256 values, read them in bounded ranges, and retain the exact source anchors. Brain Creator checks the pinned source and prior-stage snapshots again when output is submitted; changed or unavailable inputs stop the task rather than being treated as complete.
+
 After confirmation, run `generate-test-design` again. The design fingerprint includes confirmed attachment analyses, so an earlier draft is rebuilt with WorkflowModel/StateMachineModel clauses, transition tests, negative state tests, Actor Journeys, and dimension coverage. Do not approve a baseline while `unconfirmed-attachment` or `missing-process-coverage` is blocked.
 
 ### 3. Analyze And Design

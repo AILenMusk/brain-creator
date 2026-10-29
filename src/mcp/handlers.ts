@@ -1626,12 +1626,12 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
           nextAction: "Run generate-analysis with provider=host-agent before generating test design."
         };
       }
-      if (result.evaluation.verdict === "blocked" || result.evaluation.verdict === "retry") {
+      if (result.evaluation.verdict === "retry") {
         return {
           status: "blocked",
           requirementSetId,
           evaluation: result.evaluation,
-          nextAction: "Resolve the Requirement Host Harness findings before generating test design."
+          nextAction: "Retry or complete the active Requirement Host Harness task before generating test design."
         };
       }
       const design = await context.knowledgeService.generateTestDesign(
@@ -1640,17 +1640,27 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
         result.analysis,
         result.models
       );
-      return adjudicateRequirementDesign(context, requirementSet, provider, design);
+      const adjudicated = adjudicateRequirementDesign(context, requirementSet, provider, design);
+      return result.evaluation.verdict === "blocked"
+        ? {
+            ...adjudicated,
+            draftDesignCreated: true,
+            draftOnly: true,
+            draftTestIntentCount: design.testIntents.length,
+            draftScenarioCount: design.businessScenarios.length,
+            nextAction: "Review the draft design and resolve the blocked Requirement Host Harness findings before baseline approval, compilation, or execution."
+          }
+        : adjudicated;
     }
     if (provider === "host-skill" && action === "generate-test-design" && input.analysisPackage === undefined) {
       const result = await context.requirementAnalysisHarness.latestCompletedResult(requirementSetId);
       if (result?.analysis.provider === "host-skill") {
-        if (result.evaluation.verdict === "blocked" || result.evaluation.verdict === "retry") {
+        if (result.evaluation.verdict === "retry") {
           return {
             status: "blocked",
             requirementSetId,
             evaluation: result.evaluation,
-            nextAction: "Resolve the Requirement Host Harness findings before generating test design."
+            nextAction: "Retry or complete the active Requirement Host Harness task before generating test design."
           };
         }
         const design = await context.knowledgeService.generateTestDesign(
@@ -1659,7 +1669,17 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
           result.analysis,
           result.models
         );
-        return adjudicateRequirementDesign(context, requirementSet, provider, design);
+        const adjudicated = adjudicateRequirementDesign(context, requirementSet, provider, design);
+        return result.evaluation.verdict === "blocked"
+          ? {
+              ...adjudicated,
+              draftDesignCreated: true,
+              draftOnly: true,
+              draftTestIntentCount: design.testIntents.length,
+              draftScenarioCount: design.businessScenarios.length,
+              nextAction: "Review the draft design and resolve the blocked Requirement Host Harness findings before baseline approval, compilation, or execution."
+            }
+          : adjudicated;
       }
     }
     if (provider === "host-skill" && input.analysisPackage === undefined) {
@@ -1795,6 +1815,20 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
     const requiresReceipt = requirementSet.analysisProvider === "host-agent" ||
       requirementSet.analysisProvider === "host-skill";
     if (!optionalBooleanArg(input, "confirm")) {
+      try {
+        context.knowledgeService.validateRequirementSetApproval(requirementSetId);
+      } catch (error) {
+        return {
+          status: "blocked",
+          requirementSetId,
+          analysisProvider: requirementSet.analysisProvider ?? "builtin",
+          approvalRequired: requiresReceipt,
+          reasons: [error instanceof Error ? error.message : String(error)],
+          stageEvaluations: context.requirementGate.list({ requirementSetId, status: "current" }),
+          requiresConfirmation: false,
+          nextAction: "Resolve the baseline blockers before requesting an approval challenge."
+        };
+      }
       const challenge = requiresReceipt
         ? context.requirementGate.issueApprovalChallenge(requirementSetId)
         : undefined;

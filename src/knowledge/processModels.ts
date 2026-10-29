@@ -212,10 +212,22 @@ export function buildRequirementCoverageProfile(input: {
     reasons.push("State transitions are missing traceable test coverage");
   }
   if (input.workflowModels.some((model) => model.transitions.length === 0)) {
-    reasons.push("A confirmed workflow model has no transitions");
+    const incomplete = input.workflowModels.find((model) => model.transitions.length === 0)!;
+    reasons.push(
+      incomplete.status === "confirmed"
+        ? "A confirmed workflow model has no transitions"
+        : `A ${incomplete.status} workflow model has no transitions`
+    );
   }
   if (input.stateMachineModels.some((model) => model.states.length < 2 || model.transitions.length === 0)) {
-    reasons.push("A confirmed state-machine model lacks states or transitions");
+    const incomplete = input.stateMachineModels.find(
+      (model) => model.states.length < 2 || model.transitions.length === 0
+    )!;
+    reasons.push(
+      incomplete.status === "confirmed"
+        ? "A confirmed state-machine model lacks states or transitions"
+        : `A ${incomplete.status} state-machine model lacks states or transitions`
+    );
   }
   const processRequired = input.workflowModels.length + input.stateMachineModels.length > 0;
   if (processRequired && dimensions.workflow.intentCount + dimensions.state.intentCount === 0) {

@@ -36,6 +36,8 @@ Agent 通过 `bc_configure target=knowledge-project` 创建知识项目，此时
 
 需求理解使用 `bc_prepare action=generate-analysis provider=host-agent`。响应会依次推进文档地图、条款分析、业务建模和隔离 Coverage Critic；宿主执行每个返回的 prompt，再以同一 action 携带 `taskId` 和 JSON `analysisPackage` 提交结果。Critic 只读取来源证据和结构化阶段产物，不继承设计者对话。完成后再以相同 provider 调用 `generate-test-design`。结构化失败只重试一次，第二次失败会持久化为可恢复 Gap。Host Skill 可以为文档地图和条款分析提供增强输入，但不能跳过业务建模或 Critic。
 
+输入较大时，工作包可能引用工作区内的完整源文件或前序阶段 JSON 文件。宿主必须能访问这些文件，核验给出的 SHA-256，分段读取完整内容并保留准确来源锚点。提交结果时 Brain Creator 会再次检查固定的来源和阶段快照；文件不可用或内容变化时，任务会停止，不能视为分析完整。
+
 确认后再次执行 `generate-test-design`。设计指纹包含已确认的附件分析，旧草稿会重建为包含 WorkflowModel/StateMachineModel 条款、状态正负向用例、Actor Journey 和五维覆盖的版本。存在 blocked 的 `unconfirmed-attachment` 或 `missing-process-coverage` 时不得批准基线。
 
 ### 3. 分析与测试设计

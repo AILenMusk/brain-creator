@@ -79,6 +79,7 @@ describe("Brain Creator real local agent chain", () => {
         })
       );
       cleanupPaths.push(result.chainRun.specPath, result.chainRun.testPath);
+      cleanupPaths.push(result.testResult.reporterOutputPath, result.testResult.reporterPath);
       const specsA = dataOf(await handleBrainCreatorTool(context, "bc_list_specs", { systemId: systemA.id }));
       const testsA = dataOf(await handleBrainCreatorTool(context, "bc_list_tests", { systemId: systemA.id }));
       const specsB = dataOf(await handleBrainCreatorTool(context, "bc_list_specs", { systemId: systemB.id }));
@@ -109,6 +110,11 @@ describe("Brain Creator real local agent chain", () => {
         throw new Error(`${JSON.stringify(result.chainRun, null, 2)}\n\n${generatedTest}`);
       }
       expect(result.chainRun.status).toBe("succeeded");
+      expect(result.testResult.structuredReporter).toEqual(
+        expect.objectContaining({ status: "passed", total: 1, passed: 1 })
+      );
+      const rawReporter = JSON.parse(await readFile(result.testResult.reporterOutputPath, "utf8"));
+      expect(rawReporter.stats).toEqual(expect.objectContaining({ expected: 1, unexpected: 0 }));
       expect(result.healerRuns).toEqual([]);
       expect(specsA).toEqual(expect.arrayContaining([expect.objectContaining({ path: result.chainRun.specPath })]));
       expect(testsA).toEqual([expect.objectContaining({ path: result.chainRun.testPath })]);

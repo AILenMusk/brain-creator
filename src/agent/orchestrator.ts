@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { buildAgentPrompt } from "./promptBuilder.js";
@@ -47,6 +47,7 @@ export type CommandResult = {
   stderr: string;
   structuredReporter?: StructuredReporterResult;
   reporterPath?: string;
+  reporterOutputPath?: string;
   actorRoleEvidencePath?: string;
 };
 
@@ -448,10 +449,23 @@ export async function runChain(input: RunChainInput) {
         ? join(layout.evidenceDir, `${input.testCase.id}-actor-journey.jsonl`)
         : undefined;
     if (actorRoleEvidencePath) await mkdir(dirname(actorRoleEvidencePath), { recursive: true });
+    const reporterOutputPath = structuredReporterEnabled && !input.runner
+      ? join(layout.evidenceDir, `${input.testCase.id}-playwright-json-report.json`)
+      : undefined;
+    if (reporterOutputPath) {
+      await mkdir(dirname(reporterOutputPath), { recursive: true });
+      await rm(reporterOutputPath, { force: true });
+    }
     const rawResult = await runner("npx", args, {
       cwd: input.workDir,
-      ...(actorRoleEvidencePath
-        ? { env: { ...process.env, BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } }
+      ...(actorRoleEvidencePath || reporterOutputPath
+        ? {
+            env: {
+              ...process.env,
+              ...(actorRoleEvidencePath ? { BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } : {}),
+              ...(reporterOutputPath ? { PLAYWRIGHT_JSON_OUTPUT_FILE: reporterOutputPath } : {})
+            }
+          }
         : {})
     });
     const result = {
@@ -473,7 +487,9 @@ export async function runChain(input: RunChainInput) {
     if (!structuredReporterEnabled) {
       return { ...result, ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {}) };
     }
-    const reporter = parseReporterOutput(result.stdout);
+    const reporter = reporterOutputPath
+      ? await parseReporterFile(reporterOutputPath)
+      : parseReporterOutput(result.stdout);
     if (!reporter) {
       return {
         ...result,
@@ -482,6 +498,7 @@ export async function runChain(input: RunChainInput) {
           result.stderr,
           "Structured Playwright Reporter output was missing; execution is not auditable."
         ].filter(Boolean).join("\n"),
+        ...(reporterOutputPath ? { reporterOutputPath } : {}),
         ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {})
       };
     }
@@ -494,6 +511,7 @@ export async function runChain(input: RunChainInput) {
       exitCode: normalizeReporterExitCode(result.exitCode, reporter),
       structuredReporter: safeReporter,
       reporterPath,
+      ...(reporterOutputPath ? { reporterOutputPath } : {}),
       ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {})
     };
   };
@@ -829,6 +847,14 @@ async function verifyActorRoleEvidence(
 function parseReporterOutput(output: string): StructuredReporterResult | undefined {
   try {
     return parsePlaywrightJsonReport(JSON.parse(output));
+  } catch {
+    return undefined;
+  }
+}
+
+async function parseReporterFile(path: string): Promise<StructuredReporterResult | undefined> {
+  try {
+    return parsePlaywrightJsonReport(JSON.parse(await readFile(path, "utf8")));
   } catch {
     return undefined;
   }

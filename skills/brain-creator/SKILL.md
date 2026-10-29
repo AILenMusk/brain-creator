@@ -167,6 +167,8 @@ Document suites stop on the first environment, auth, locator, automation, or evi
 
 Codex plugin mode normally uses `host-agent`. Treat `needs_agent_execution` and `waiting-for-agent` as actionable work, not a missing AgentBridge. Read the task prompt/context, write only requested outputs, then call `bc_submit_agent_output`.
 
+When a requirement-analysis work package references a source or structured-output snapshot, verify its stated SHA-256 and read the complete file in bounded ranges before producing the requested output. Preserve its exact source anchors. If a file is inaccessible or its hash differs, stop that task and report the missing or changed input; do not infer the omitted content.
+
 Subprocess modes may use Claude or Codex. Check bridge readiness with `bc_status` or `brain-creator-doctor` before confirmed execution. If unavailable, report the blocker immediately instead of waiting for a long timeout.
 
 Generator writes Playwright tests, Playwright executes them, and Healer performs bounded repairs. Business mismatches create BugReports. Auth, environment, locator, network, and missing-evidence blockers create Gaps.

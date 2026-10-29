@@ -3,8 +3,10 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
+import { SemanticSpineService } from "../brain/semanticSpine.js";
+import { SystemBrainSnapshotService } from "../brain/systemSnapshot.js";
 import type {
   ExecutableCaseStep,
   RequirementContentPackage
@@ -544,6 +546,43 @@ describe("System Brain", () => {
     expect(
       await readFile(join(knowledgeDir, "recruiting-knowledge", "MOC.md"), "utf8")
     ).toContain("[[systems/system-recruiting/brain|system-recruiting]]");
+  });
+
+  it("persists a refreshed semantic index as one batch", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const semanticSpine = new SemanticSpineService(repository);
+    const snapshots = new SystemBrainSnapshotService(repository);
+    const service = new KnowledgeService(
+      repository,
+      await tempDir(),
+      process.cwd(),
+      snapshots,
+      semanticSpine
+    );
+    const project = await service.createProject({
+      name: "Batched System Knowledge",
+      key: "batched-system-knowledge",
+      defaultLocale: "en-US"
+    });
+    addSystem(repository, "system-recruiting");
+    service.bindSystem(project.id, "system-recruiting");
+    addSystemAssets(repository, "system-recruiting");
+    const persist = vi.spyOn(repository, "persist");
+
+    const brain = await service.refreshSystemBrain(project.id, "system-recruiting");
+
+    expect(brain.pages).toHaveLength(1);
+    expect(repository.semanticConcepts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          knowledgeProjectId: project.id,
+          systemId: "system-recruiting",
+          identityKey: "page:/recruiting/requests"
+        })
+      ])
+    );
+    expect(repository.systemBrainSnapshots).toHaveLength(1);
+    expect(persist).toHaveBeenCalledTimes(3);
   });
 
   it("keeps requirement expectations separate when a system observation conflicts", async () => {

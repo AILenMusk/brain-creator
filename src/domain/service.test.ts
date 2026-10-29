@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BrainCreatorService } from "./service.js";
 import { InMemoryBrainCreatorRepository } from "./repository.js";
 
@@ -252,6 +255,28 @@ describe("BrainCreatorService", () => {
         token: "private-token"
       }
     });
+  });
+
+  it("uses the selected workspace key for captured auth state even when the process runs elsewhere", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "brain-auth-workspace-"));
+    try {
+      const repository = new InMemoryBrainCreatorRepository();
+      const service = new BrainCreatorService(repository);
+      const profile = service.createAuthProfile({
+        projectId: "project-1",
+        env: "test",
+        role: "qa-admin",
+        loginMethod: "script",
+        secrets: {}
+      });
+      service.setAuthStorageStatePath(profile.id, ".brain-creator/auth/renewed.json", workspace);
+      expect(service.getCaptureAuth(profile.id, workspace)?.secrets.storageStatePath).toBe(
+        ".brain-creator/auth/renewed.json"
+      );
+      expect(() => service.getCaptureAuth(profile.id)).toThrow();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("discovers a page model with locator points and probe result", () => {

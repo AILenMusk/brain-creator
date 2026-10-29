@@ -380,13 +380,18 @@ export class KnowledgeService {
         testIntents: existingIntents,
         dataProfiles: this.repository.testDataProfiles.filter((item) => item.requirementSetId === requirementSetId)
       });
-      requirementSet.evaluationGate ??= buildRequirementEvaluationGate(
+      const refreshedEvaluationGate = buildRequirementEvaluationGate(
         analysis,
         reusedEvaluation,
         requirementGaps,
         existingCoverageProfile,
         criticalAttachments
       );
+      requirementSet.evaluationGate = preserveConfirmedRequirementEvalActions(
+        requirementSet.evaluationGate,
+        refreshedEvaluationGate
+      );
+      requirementSet.updatedAt = requirementSet.evaluationGate.generatedAt;
       this.repository.persist();
       const coveredClauseSourceRefs = [
         ...new Set(existingIntents.flatMap((item) => item.requirementRefs))
@@ -2611,13 +2616,14 @@ export class KnowledgeService {
     for (const draft of systemObservationDrafts(sourceBrain)) {
       this.upsertSystemObservation(project, systemId, draft);
     }
-    this.repository.persist();
     const brain = buildSystemBrain(this.repository, projectId, systemId);
     this.indexSystemBrainSemantics(brain, projectId, systemId);
     this.semanticSpine?.linkRequirementActionsToSystem({
       knowledgeProjectId: projectId,
-      systemId
+      systemId,
+      persist: false
     });
+    this.repository.persist();
     const snapshotResult = this.systemBrainSnapshots?.capture({
       knowledgeProjectId: projectId,
       systemId,
@@ -2786,7 +2792,8 @@ export class KnowledgeService {
         knowledgeProjectId,
         systemId,
         sourceRefs: page.sourceRefs,
-        confidence: page.probeIssueCount > 0 ? 0.7 : 0.95
+        confidence: page.probeIssueCount > 0 ? 0.7 : 0.95,
+        persist: false
       });
       for (const locator of page.locators) {
         const label = locator.name || locator.text || locator.role;
@@ -2798,7 +2805,8 @@ export class KnowledgeService {
           knowledgeProjectId,
           systemId,
           sourceRefs: [...page.sourceRefs, `locator-point:${locator.id}`],
-          confidence: locator.confidence
+          confidence: locator.confidence,
+          persist: false
         });
       }
       for (const transition of brain.stateTransitions.filter(
@@ -2813,14 +2821,16 @@ export class KnowledgeService {
           knowledgeProjectId,
           systemId,
           sourceRefs: transition.sourceRefs,
-          confidence: 0.95
+          confidence: 0.95,
+          persist: false
         });
         this.semanticSpine.linkConcepts({
           fromConceptId: pageConcept.id,
           toConceptId: actionConcept.id,
           relation: "supports-action",
           sourceRefs: transition.sourceRefs,
-          confidence: 0.9
+          confidence: 0.9,
+          persist: false
         });
       }
     }
@@ -3583,6 +3593,54 @@ function buildRequirementEvaluationGate(
           : "passed",
     actions,
     generatedAt: createdAt
+  };
+}
+
+function preserveConfirmedRequirementEvalActions(
+  previous: RequirementEvaluationGate | undefined,
+  next: RequirementEvaluationGate
+): RequirementEvaluationGate {
+  if (!previous) return next;
+
+  const actionIdentity = (action: RequirementEvalAction) =>
+    JSON.stringify([
+      action.kind,
+      action.message,
+      [...new Set(action.sourceRefs)].sort()
+    ]);
+  const previouslyConfirmed = new Map(
+    previous.actions
+      .filter((action) => action.status === "confirmed")
+      .map((action) => [actionIdentity(action), action] as const)
+  );
+  const actions = next.actions.map((action) => {
+    const prior = previouslyConfirmed.get(actionIdentity(action));
+    if (!prior) return action;
+    return {
+      ...action,
+      status: "confirmed" as const,
+      confirmedAt: prior.confirmedAt,
+      confirmedBy: prior.confirmedBy,
+      confirmationNote: prior.confirmationNote,
+      resolutionNodeId: prior.resolutionNodeId
+    };
+  });
+  const blocked = actions.some((action) => action.status === "blocked");
+  const pending = actions.some((action) => action.status === "pending");
+  const fullyConfirmed = actions.length > 0 && !blocked && !pending;
+  const status = next.verdict === "blocked" || blocked
+    ? "blocked"
+    : pending
+      ? "needs-confirmation"
+      : fullyConfirmed
+        ? "confirmed"
+        : "passed";
+
+  return {
+    ...next,
+    actions,
+    status,
+    ...(fullyConfirmed && previous.confirmedAt ? { confirmedAt: previous.confirmedAt } : {})
   };
 }
 

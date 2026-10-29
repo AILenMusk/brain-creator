@@ -208,12 +208,12 @@ function existingSecretKey(workspace: string) {
   return createHash("sha256").update(readFileSync(keyPath)).digest();
 }
 
-export function migrateEncryptedSecrets(encryptedSecrets: Record<string, string>) {
+export function migrateEncryptedSecrets(encryptedSecrets: Record<string, string>, workspace?: string) {
   const migrated: Record<string, string> = {};
   let changed = false;
   for (const [key, value] of Object.entries(encryptedSecrets)) {
     if (value.startsWith("enc:v1:")) {
-      migrated[key] = encryptSecretValue(decryptSecretValue(value));
+      migrated[key] = encryptSecretValue(decryptSecretValue(value, workspace), workspace);
       changed = true;
     } else {
       migrated[key] = value;

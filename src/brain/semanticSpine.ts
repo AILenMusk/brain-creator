@@ -198,6 +198,7 @@ export class SemanticSpineService {
   linkRequirementActionsToSystem(input: {
     knowledgeProjectId: string;
     systemId: string;
+    persist?: boolean;
   }) {
     const requirementActions = this.store.semanticConcepts.filter(
       (concept) =>
@@ -226,7 +227,8 @@ export class SemanticSpineService {
         confidence: Math.min(requirementAction.confidence, systemAction.confidence),
         status: requirementAction.status === "confirmed" && systemAction.status === "confirmed"
           ? "confirmed"
-          : "draft"
+          : "draft",
+        persist: input.persist
       }));
     }
     return relations;
