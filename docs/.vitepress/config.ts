@@ -70,6 +70,7 @@ const chineseTheme = {
       text: "开始",
       items: [
         { text: "文档首页", link: "/zh-CN/" },
+        { text: "产品方向", link: "/zh-CN/product-direction" },
         { text: "快速开始", link: "/zh-CN/getting-started" },
         { text: "核心概念", link: "/zh-CN/core-concepts" }
       ]

@@ -1,6 +1,8 @@
 # Brain Creator CLI 参考
 
-使用统一的 `brain-creator` 命令安装、查看、诊断和启动 Brain Creator。
+CLI 是安装、诊断、配置和维护入口；日常需求分析、测试方案审核、执行和复核仍以 Agent 对话为主。MCP server 通常由宿主启动，用户不需要把 CLI 当作另一套测试工作台。
+
+使用统一的 `brain-creator` 命令执行这些辅助操作。完整产品定位见[产品方向](product-direction.md)。
 
 ## 命令概览
 

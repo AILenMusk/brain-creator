@@ -4,7 +4,17 @@
 
 ## 产品目标与设计
 
-Brain Creator 是需求驱动的 Agent 原生测试产品。目标是把业务需求变成可审核、可追踪、可执行、可复核和可恢复的测试工作流。Agent 对话是主要用户入口；CLI、MCP、Skill 和 Harness 提供具体能力。
+Brain Creator 是面向中文团队的需求驱动测试产品，目标是把业务需求变成可审核、可追踪、可执行、可复核和可恢复的测试工作流。当前以 Codex 作为首要宿主，用户主要通过 Agent 对话使用产品；Claude Code 通过同一套 Skill 与 MCP 契约接入。
+
+### 产品形态与边界
+
+- npm 包是安装和分发方式，不是另一种用户界面。
+- Skill（Agent 工作指引）组织 Agent 的工作步骤；Facade MCP（统一工具接口）提供 Agent 调用能力。
+- CLI（命令行）负责初始化、诊断、配置和必要的维护操作，不构成平行的主要测试工作流。
+- Harness（任务编排运行时）和五个 Brain 是产品内部实现边界，不作为独立产品入口。
+- 新宿主应适配同一套产品契约；不要为不同宿主复制不同的核心工作流。
+
+正式产品定位、默认使用路径和命令边界见 [`docs/zh-CN/product-direction.md`](docs/zh-CN/product-direction.md)。
 
 | Brain | 职责 |
 |---|---|

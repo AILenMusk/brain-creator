@@ -1,8 +1,30 @@
 # Brain Creator
 
-Brain Creator 是面向中文团队的需求驱动测试系统。它通过 Codex、Claude Code、命令行和 MCP 工作，把需求来源转成可审查、可追踪、可恢复的测试流程。
+Brain Creator 是面向中文团队的需求驱动测试系统，当前以 Codex 作为首要宿主。用户主要通过 Agent 对话，把需求来源转成可审查、可追踪、可执行和可恢复的测试流程；Claude Code 可通过相同的 MCP 接口接入。
 
-**Brain Creator 没有独立 Web UI。** 用户通过 Agent 对话描述目标；产品入口负责组织需求分析、系统探索、用例准备、执行和结果复核。npm 版本、命令入口和脚本以 [package.json](package.json) 为准。
+**Brain Creator 没有独立 Web UI。** Skill 负责指导 Agent 推进流程，Facade MCP 提供工具；npm 包负责安装和分发，CLI 负责初始化、诊断与维护。Harness 和五个 Brain 是内部实现，不是额外的用户入口。产品边界见[产品方向](docs/zh-CN/product-direction.md)。
+
+## 产品形态
+
+| 层次 | 职责 |
+|---|---|
+| Agent 对话 | 用户描述需求、审核方案、确认执行和复核结果，是主要使用体验。 |
+| Brain Creator Skill | 指导 Agent 按统一流程工作，不单独执行测试。 |
+| Facade MCP | 向 Agent 提供统一工具接口；宿主负责启动 MCP server。 |
+| npm 包 | 将运行时、Skill、MCP 和宿主插件资源交付到业务项目。 |
+| CLI | 提供初始化、诊断、配置和维护命令；高级命令不是日常主入口。 |
+
+### 内部能力边界
+
+| 组件 | 负责内容 |
+|---|---|
+| Requirement Brain（需求大脑） | 保存需求条款、来源引用、业务对象、规则、流程、状态和覆盖情况。 |
+| System Brain（系统大脑） | 保存目标系统中的页面、导航、角色、控件和状态证据。 |
+| Testcase Brain（测试用例大脑） | 管理测试意图、可执行用例、来源关系和编译缺口。 |
+| Testdata Brain（测试数据大脑） | 管理实体、数据依赖、Provider（数据提供器）、租约与清理记录。 |
+| Testexecution Brain（测试执行大脑） | 管理执行计划、断言、Reporter（结构化结果）、证据、诊断与回归记录。 |
+| Harness（任务编排运行时） | 组织可恢复任务、人工审核、Agent 接续、评估和重试边界。 |
+| Facade（统一工具入口） | 汇总 Agent 常用操作；底层 MCP 工具保留兼容、审计和调试用途。 |
 
 ## 适用场景
 
@@ -25,31 +47,31 @@ flowchart LR
   O --> R
 ```
 
-### 五个 Brain 与协作层
-
-| 组件 | 负责内容 |
-|---|---|
-| Requirement Brain（需求大脑） | 保存需求条款、来源引用、业务对象、规则、流程、状态和覆盖情况。 |
-| System Brain（系统大脑） | 保存目标系统中的页面、导航、角色、控件和状态证据。 |
-| Testcase Brain（测试用例大脑） | 管理测试意图、可执行用例、来源关系和编译缺口。 |
-| Testdata Brain（测试数据大脑） | 管理实体、数据依赖、Provider（数据提供器）、租约与清理记录。 |
-| Testexecution Brain（测试执行大脑） | 管理执行计划、断言、Reporter（结构化结果）、证据、诊断与回归记录。 |
-| Harness（任务编排运行时） | 组织可恢复任务、人工审核、Agent 接续、评估和重试边界。 |
-| Facade（统一工具入口） | 为 Agent 提供少量高层操作；底层 MCP 工具保留兼容、审计和调试用途。 |
-
 ## 五分钟开始
 
 ### 在要测试的业务项目中安装
 
-需要 Node.js 20 或更新版本，以及 Codex 或 Claude Code。进入业务项目目录运行：
+需要 Node.js 20 或更新版本，以及 Codex（当前首要宿主）或 Claude Code。进入业务项目目录安装 npm 包：
 
 ```bash
 npm install --save-dev brain-creator
+```
+
+Codex 默认路径会同时安装项目级插件：
+
+```bash
+npx brain-creator init --provider host-agent --with-plugin
+npx brain-creator doctor
+```
+
+Claude Code 使用相同的 MCP 和 Skill 契约，不安装 Codex 插件：
+
+```bash
 npx brain-creator init --provider host-agent
 npx brain-creator doctor
 ```
 
-Codex 用户还可以安装项目级插件：
+已完成初始化、只需单独补装 Codex 插件时，运行：
 
 ```bash
 npx brain-creator plugin install
@@ -114,6 +136,7 @@ npx brain-creator plugin install
 
 ## 中文文档
 
+- [产品方向](docs/zh-CN/product-direction.md)
 - [快速开始](docs/zh-CN/getting-started.md)
 - [核心概念](docs/zh-CN/core-concepts.md)
 - [需求到测试流程](docs/zh-CN/guides/requirement-to-test.md)

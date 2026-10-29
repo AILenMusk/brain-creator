@@ -31,6 +31,7 @@ features:
 
 | 目标 | 从这里开始 |
 |---|---|
+| 理解产品定位与 CLI、MCP、Skill 的边界 | [产品方向](/zh-CN/product-direction) |
 | 安装并分析第一份需求 | [快速开始](/zh-CN/getting-started) |
 | 理解产品模型 | [核心概念](/zh-CN/core-concepts) |
 | 执行已批准需求 | [从需求到测试](/zh-CN/guides/requirement-to-test) |
