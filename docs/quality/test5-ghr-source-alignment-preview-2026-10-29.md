@@ -78,4 +78,6 @@ Brain Creator Facade 预览 hash 为 `afe4bfde6b8543669f35735c73c0b162555d338a58
 
 来源对齐后的 Facade Eval 预览返回原有 18 项 gate action：4 项已确认、14 项待处理；gate `generatedAt` 仍是 `2026-10-28T19:22:10.656Z`，本轮没有把旧评估冒充为新的来源评估。此次对齐另外使 12 条旧 stage-eval 关联失效；这与 14 项待处理 action 是不同计数。待处理内容包括实习后续状态、替补数据、OA 流程独立读回、本地 Offer 路径与角色/附件、配置/迁移/导出范围、路线命中、账号角色、测试数据和真实运行证据。尚未确认任何 Eval action 或基线。
 
+对齐后又通过 `revise-test-design-draft confirm=false` 做了 28 条 outcome 映射预览：28 个 `GHR-*` outcome 与现有 28 个 TestIntent 一对一关联，其余 9 条路线/检查/回调支持意图保持 `null`。预览使用 current draft hash `c3b26c796d425fb413a61e009ed84217016cf0be443c20ddb4683af1ce0844a2`，没有写回 Store；映射仍是待人工审核的 Oracle 草稿，不是批准或实测结果。
+
 为避免旧快照覆盖，对齐前结束了仍等待“登录后回到终端按 Enter”的专用 `auth capture` 进程。该进程尚未保存鉴权状态；Test5 AuthProfile 仍未验证。没有批准基线、创建 Trial、执行 Test5 业务写入或清理。

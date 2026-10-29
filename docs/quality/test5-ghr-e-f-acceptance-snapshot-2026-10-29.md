@@ -19,7 +19,7 @@
 | 测试设计 | 37 个 TestIntent、11 个 BusinessScenario 已修订并读回；仍均为 draft，成员链接有效 | 草稿已修订，未批准 |
 | 需求来源 | `lark-cli` 本轮复核主文档 revision 2045、流程子文档 revision 5；四份子表 revision 154/607/175/62 与冻结包一致。通过 `bc_prepare action=align-test-design-source` 将现有 draft 对齐到正式来源；新 Facade 进程读回 37/11、成员关系与来源 hash。387/400 条直接来源引用指向正式源；123 条 KnowledgeNode 旧 v4 引用作为历史保留 | 来源对齐已持久化；Oracle 与 RequirementSet 仍未批准 |
 | Requirement Eval | 对齐后 Facade 预览读取到 18 项 gate action：4 项已确认、14 项待处理，gate 的 `generatedAt` 仍为 2026-10-28；本轮未将旧 gate 当作新来源评估。对齐使 12 条旧 stage-eval 关联失效 | 需来源对齐后的评估及 pending 项处理 |
-| outcome 映射 | 28 项映射只有候选预览；Store 中 37 个 `businessOutcomeId` 均为空 | 未批准、未写回 |
+| outcome 映射 | 对齐后新 Facade 预览将 28 个固定 `GHR-*` outcome 一对一映射到 28 个现有 TestIntent；9 条路线/检查/回调支持意图保持 `null`。Draft hash 为 `c3b26c796d425fb413a61e009ed84217016cf0be443c20ddb4683af1ce0844a2` | 预览通过；待用户审阅 Oracle，Store 未写回 |
 | Trial 与业务结果 | `EvaluationTrial` 数量为 0；真实完成 **0/28** | 未执行 |
 | 鉴权与数据 | Test5 AuthProfile 仍为 `failed`，checkpoint 为 `awaiting-user`；旧专用 auth capture 在登录后 Enter 等待点被结束，未保存登录态。未发现对应系统的 TestData Profile；独立后置状态 verifier / Provider 尚未配置 | Trial admission blocked |
 | 审批路线 | 用户确认以 Test5 当前生效配置 `Proc000019 v9` 为 Oracle | 口径已确定，无需再提供链接 |
@@ -45,11 +45,11 @@
 ## 继续验收的具体门槛
 
 1. 对新增 387 条正式源直接引用执行逐项相关性审核，并安全重跑来源绑定的 Requirement Eval；保留 37/11 ID 和成员关系。检查被失效的 12 个旧 stage-eval 关联及 14 项待处理 gate action。此步骤不批准 RequirementSet 或 Trial。
-2. 审核并确认 28 条 outcome 与 Oracle 映射，保持固定分母；未定义项须保留 blocked。
+2. 用户审阅并确认 28 条 outcome 与 Oracle 映射，再写回 draft；保持固定分母，未定义项须保留 blocked。
 3. 建立可在新上下文复验的 Test5 登录态，并配置独立目标后置状态校验与 TestData Provider。
 4. 通过全部 admission gates 后创建固定范围 Trial，再按授权完成三轮业务执行；每轮用本轮新证据核验目标系统后置状态。
 5. 执行中断恢复与清理/保留核验；失败、人工介入和未执行 outcome 保留在报告分母。以实际 Trial 数据更新最终 E/F 报告；在此之前不把 E 或 F 标记为通过。
 
 ## 结论
 
-当前可证明的是候选实现与工程检查通过，Test5 需求草稿已通过 Brain Creator Facade 对齐到正式飞书来源并由独立进程回读。草稿仍未批准，28 条 outcome 尚未映射，登录态和独立后置状态校验未就绪。当前不能证明真实业务闭环、恢复不重放、三轮复跑、基线提升或自主完成目标。故本快照不改变正式实现验收 **4/6**，真实业务结果仍为 **0/28**，E 阻塞，F 部分完成。
+当前可证明的是候选实现与工程检查通过，Test5 需求草稿已对齐正式飞书来源并由独立进程回读；28 项映射已通过 Facade 预览但尚未取得 Oracle 审批或写回。登录态和独立后置状态校验未就绪。当前不能证明真实业务闭环、恢复不重放、三轮复跑、基线提升或自主完成目标。故本快照不改变正式实现验收 **4/6**，真实业务结果仍为 **0/28**，E 阻塞，F 部分完成。
