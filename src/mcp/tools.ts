@@ -135,7 +135,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
     name: "bc_prepare",
     title: "Brain Creator prepare requirement",
     description:
-      "Requirement-first facade for ingesting sources, running staged Requirement Eval, revising a complete existing draft test design through an ID-preserving confirmed operation, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, recording scenario-attributed Trial interventions and manual recovery, confirming immutable execution preflight snapshots, re-evaluating fully reviewed legacy execution evidence, and attesting complete Trial intervention capture.",
+      "Requirement-first facade for ingesting sources, running staged Requirement Eval, revising a complete existing draft test design through an ID-preserving confirmed operation, refreshing its current read-only projection, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, recording scenario-attributed Trial interventions and manual recovery, confirming immutable execution preflight snapshots, re-evaluating fully reviewed legacy execution evidence, and attesting complete Trial intervention capture.",
     inputSchema: z.object({
       action: z.enum([
         "start-evaluation-trial",
@@ -153,6 +153,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         "generate-analysis",
         "generate-test-design",
         "revise-test-design-draft",
+        "refresh-test-design-projection",
         "assess-scenarios",
         "record-scenario-run",
         "evaluate-mutations",

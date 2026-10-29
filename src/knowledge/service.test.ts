@@ -151,7 +151,8 @@ describe("KnowledgeService", () => {
 
   it("revises every draft TestIntent and BusinessScenario atomically without changing IDs or links", async () => {
     const repository = new InMemoryBrainCreatorRepository();
-    const service = new KnowledgeService(repository, await tempDir());
+    const knowledgeDir = await tempDir();
+    const service = new KnowledgeService(repository, knowledgeDir);
     const project = await service.createProject({ name: "Draft revision", key: "draft-revision", defaultLocale: "en-US" });
     const ingested = await service.ingestRequirement({
       projectId: project.id,
@@ -182,7 +183,7 @@ describe("KnowledgeService", () => {
       expectedBusinessOutcomes: ["The order state matches the approved business rule."],
       risk: item.risk
     }));
-    const preview = service.reviseTestDesignDraft({
+    const preview = await service.reviseTestDesignDraft({
       knowledgeProjectId: project.id,
       requirementSetId: ingested.requirementSet.id,
       confirm: false,
@@ -195,7 +196,7 @@ describe("KnowledgeService", () => {
     expect(repository.businessScenarios.map((item) => item.title)).toEqual(originalScenarios.map((item) => item.title));
 
     const confirmationNote = "User requested revision of the existing draft while preserving asset IDs and links.";
-    const revised = service.reviseTestDesignDraft({
+    const revised = await service.reviseTestDesignDraft({
       knowledgeProjectId: project.id,
       requirementSetId: ingested.requirementSet.id,
       expectedDraftHash: preview.currentDraftHash,
@@ -254,6 +255,76 @@ describe("KnowledgeService", () => {
       message: expect.stringContaining(`Confirmation note: ${confirmationNote}`),
       refs: expect.arrayContaining([ingested.requirementSet.id])
     });
+    const projection = await readFile(
+      join(knowledgeDir, project.key, "requirements", ingested.requirementSet.id, "draft-test-design-current.md"),
+      "utf8"
+    );
+    expect(projection).toContain("projection: current-draft-test-design");
+    expect(projection).toContain(`requirement_set_id: "${ingested.requirementSet.id}"`);
+    expect(projection).toContain(testIntentDraftUpdates[0]!.title);
+    expect(projection).toContain(businessScenarioDraftUpdates[0]!.title);
+    expect(projection).toContain(confirmationNote);
+  });
+
+  it("refreshes only the current draft projection and is idempotent", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const knowledgeDir = await tempDir();
+    const service = new KnowledgeService(repository, knowledgeDir);
+    const project = await service.createProject({ name: "Draft projection", key: "draft-projection", defaultLocale: "en-US" });
+    const ingested = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("draft-projection", "An order can be submitted and approved.")
+    });
+    await service.generateTestDesign(ingested.requirementSet.id);
+    const first = await service.refreshTestDesignProjection({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    });
+    expect(first.status).toBe("refreshed");
+
+    const intent = repository.testIntents.find((item) => item.requirementSetId === ingested.requirementSet.id)!;
+    const scenario = repository.businessScenarios.find((item) => item.requirementSetId === ingested.requirementSet.id)!;
+    intent.objective = "Latest saved draft objective";
+    scenario.expectedBusinessOutcomes = ["Latest saved scenario outcome"];
+    const storeSnapshot = structuredClone({
+      intents: repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    });
+
+    const refreshed = await service.refreshTestDesignProjection({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    });
+    expect(refreshed.status).toBe("refreshed");
+    expect(refreshed.projectionHash).not.toBe(first.projectionHash);
+    const projectionPath = join(knowledgeDir, project.key, "requirements", ingested.requirementSet.id, "draft-test-design-current.md");
+    const projection = await readFile(projectionPath, "utf8");
+    expect(projection).toContain("Latest saved draft objective");
+    expect(projection).toContain("Latest saved scenario outcome");
+    expect({
+      intents: repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    }).toEqual(storeSnapshot);
+
+    const repeated = await service.refreshTestDesignProjection({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    });
+    expect(repeated.status).toBe("current");
+    expect(repeated.projectionHash).toBe(refreshed.projectionHash);
+    expect(await readFile(projectionPath, "utf8")).toBe(projection);
+
+    await writeFile(projectionPath, projection.replace("Latest saved draft objective", "tampered objective"), "utf8");
+    const repaired = await service.refreshTestDesignProjection({
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    });
+    expect(repaired.status).toBe("refreshed");
+    const repairedProjection = await readFile(projectionPath, "utf8");
+    expect(repairedProjection).toContain("Latest saved draft objective");
+    expect(repairedProjection).not.toContain("tampered objective");
   });
 
   it("rejects stale or partial draft TestIntent and BusinessScenario revisions", async () => {
@@ -276,7 +347,7 @@ describe("KnowledgeService", () => {
       actors: item.actors, preconditions: item.preconditions, testDataNeeds: item.testDataNeeds,
       expectedBusinessOutcomes: item.expectedBusinessOutcomes, risk: item.risk
     }));
-    const preview = service.reviseTestDesignDraft({
+    const preview = await service.reviseTestDesignDraft({
       knowledgeProjectId: project.id,
       requirementSetId: ingested.requirementSet.id,
       confirm: false,
@@ -285,7 +356,7 @@ describe("KnowledgeService", () => {
     });
     const changedIntent = intents[0]!;
     changedIntent.title = "Changed after preview";
-    expect(() => service.reviseTestDesignDraft({
+    await expect(service.reviseTestDesignDraft({
       knowledgeProjectId: project.id,
       requirementSetId: ingested.requirementSet.id,
       expectedDraftHash: preview.currentDraftHash,
@@ -293,27 +364,27 @@ describe("KnowledgeService", () => {
       confirmationNote: "Confirm draft revision",
       testIntentDraftUpdates,
       businessScenarioDraftUpdates
-    })).toThrow("Draft test-design assets changed after preview");
+    })).rejects.toThrow("Draft test-design assets changed after preview");
     expect(intents[0]?.title).toBe("Changed after preview");
-    expect(() => service.reviseTestDesignDraft({
+    await expect(service.reviseTestDesignDraft({
       knowledgeProjectId: project.id,
       requirementSetId: ingested.requirementSet.id,
       confirm: false,
       testIntentDraftUpdates: testIntentDraftUpdates.slice(1),
       businessScenarioDraftUpdates
-    })).toThrow("TestIntent draft revision must update every existing asset exactly once");
+    })).rejects.toThrow("TestIntent draft revision must update every existing asset exactly once");
     if (intents.length > 1) {
       const duplicatedOutcomeUpdates = testIntentDraftUpdates.map((item, index) => ({
         ...item,
         businessOutcomeId: index < 2 ? "OUTCOME-DUPLICATE" : null
       }));
-      expect(() => service.reviseTestDesignDraft({
+      await expect(service.reviseTestDesignDraft({
         knowledgeProjectId: project.id,
         requirementSetId: ingested.requirementSet.id,
         confirm: false,
         testIntentDraftUpdates: duplicatedOutcomeUpdates,
         businessScenarioDraftUpdates
-      })).toThrow("assigned to multiple TestIntents");
+      })).rejects.toThrow("assigned to multiple TestIntents");
     }
   });
 

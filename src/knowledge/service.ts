@@ -1,6 +1,6 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   AttachmentAnalysis,
@@ -112,6 +112,7 @@ import { evaluateConformance } from "../execution/conformance.js";
 import { buildCaseDependencyGraph } from "./caseDependencyGraph.js";
 import {
   renderRequirementAnalysisReport,
+  renderDraftTestDesignProjection,
   renderTestIntentReport
 } from "./reportWriter.js";
 import { buildEvidenceCatalog, renderEvidenceIndex } from "./evidenceCatalog.js";
@@ -1585,7 +1586,120 @@ export class KnowledgeService {
     return this.repository.testIntents.filter((item) => item.knowledgeProjectId === projectId);
   }
 
-  reviseTestDesignDraft(input: {
+  async refreshTestDesignProjection(input: {
+    knowledgeProjectId: string;
+    requirementSetId: string;
+  }) {
+    const requirementSet = this.getRequirementSet(input.requirementSetId);
+    if (requirementSet.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Requirement set does not belong to the selected knowledge project");
+    }
+    if (requirementSet.status !== "draft") {
+      throw new Error("Only a draft RequirementSet can refresh its current draft projection");
+    }
+    const project = this.getProject(input.knowledgeProjectId);
+    const source = this.getRequirementSource(requirementSet.sourceId);
+    const intents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const scenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (intents.length === 0 || scenarios.length === 0) {
+      throw new Error("Draft test design must contain TestIntents and BusinessScenarios");
+    }
+
+    const draftHash = hashTestDesignDraft(intents, scenarios);
+    const revisionEvent = [...this.repository.brainEvents].reverse().find((event) =>
+      event.type === "draft-test-design-revised" && event.refs.includes(requirementSet.id)
+    );
+    const projectionPath = join(
+      this.knowledgeDir,
+      project.key,
+      "requirements",
+      requirementSet.id,
+      "draft-test-design-current.md"
+    );
+    let currentProjection: string | undefined;
+    try {
+      currentProjection = await readFile(projectionPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    let existingGeneratedAt: string | undefined;
+    const existingGeneratedAtJson = currentProjection?.match(/^generated_at: ("(?:[^"\\]|\\.)*")$/m)?.[1];
+    if (existingGeneratedAtJson) {
+      try {
+        existingGeneratedAt = JSON.parse(existingGeneratedAtJson) as string;
+      } catch {
+        existingGeneratedAt = undefined;
+      }
+    }
+    if (currentProjection && existingGeneratedAt) {
+      const existingContent = renderDraftTestDesignProjection({
+        title: requirementSet.title,
+        requirementSetId: requirementSet.id,
+        requirementSetStatus: requirementSet.status,
+        sourceId: source.id,
+        sourceContentHash: source.contentHash,
+        draftHash,
+        generatedAt: existingGeneratedAt,
+        lastRevisionEvent: revisionEvent
+          ? { id: revisionEvent.id, createdAt: revisionEvent.createdAt, message: revisionEvent.message }
+          : undefined,
+        intents,
+        scenarios
+      });
+      if (currentProjection === existingContent) {
+        return {
+          status: "current" as const,
+          requirementSetId: requirementSet.id,
+          knowledgeProjectId: project.id,
+          counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+          draftHash,
+          projectionPath,
+          projectionHash: createHash("sha256").update(currentProjection, "utf8").digest("hex"),
+          storeChanged: false
+        };
+      }
+    }
+
+    const content = renderDraftTestDesignProjection({
+      title: requirementSet.title,
+      requirementSetId: requirementSet.id,
+      requirementSetStatus: requirementSet.status,
+      sourceId: source.id,
+      sourceContentHash: source.contentHash,
+      draftHash,
+      generatedAt: timestamp(),
+      lastRevisionEvent: revisionEvent
+        ? { id: revisionEvent.id, createdAt: revisionEvent.createdAt, message: revisionEvent.message }
+        : undefined,
+      intents,
+      scenarios
+    });
+    const projectionHash = createHash("sha256").update(content, "utf8").digest("hex");
+    await mkdir(dirname(projectionPath), { recursive: true });
+    const temporaryPath = `${projectionPath}.${process.pid}.${id("projection")}.tmp`;
+    try {
+      await writeFile(temporaryPath, content, "utf8");
+      await rename(temporaryPath, projectionPath);
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+    return {
+      status: "refreshed" as const,
+      requirementSetId: requirementSet.id,
+      knowledgeProjectId: project.id,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      draftHash,
+      projectionPath,
+      projectionHash,
+      storeChanged: false
+    };
+  }
+
+  async reviseTestDesignDraft(input: {
     knowledgeProjectId: string;
     requirementSetId: string;
     expectedDraftHash?: string;
@@ -1762,6 +1876,18 @@ export class KnowledgeService {
     const updatedScenarios = this.repository.businessScenarios
       .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
       .sort((left, right) => left.id.localeCompare(right.id));
+    let projection: Awaited<ReturnType<KnowledgeService["refreshTestDesignProjection"]>> | { status: "failed"; error: string };
+    try {
+      projection = await this.refreshTestDesignProjection({
+        knowledgeProjectId: input.knowledgeProjectId,
+        requirementSetId: requirementSet.id
+      });
+    } catch (error) {
+      projection = {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Unknown projection refresh error"
+      };
+    }
     return {
       status: "revised" as const,
       requirementSetId: requirementSet.id,
@@ -1769,9 +1895,12 @@ export class KnowledgeService {
       counts: { testIntents: updatedIntents.length, businessScenarios: updatedScenarios.length },
       currentDraftHash,
       updatedDraftHash: hashTestDesignDraft(updatedIntents, updatedScenarios),
+      projection,
       testIntents: updatedIntents,
       businessScenarios: updatedScenarios,
-      nextAction: "Review the persisted draft assets. Keep the RequirementSet draft until source fidelity, TestIntent and BusinessScenario quality, and the fixed outcome mapping are reviewed."
+      nextAction: projection.status === "failed"
+        ? "The draft assets were revised, but the current projection could not be refreshed. Call refresh-test-design-projection and verify the returned projection hash."
+        : "Review the persisted draft assets and current projection. Keep the RequirementSet draft until source fidelity, TestIntent and BusinessScenario quality, and the fixed outcome mapping are reviewed."
     };
   }
 

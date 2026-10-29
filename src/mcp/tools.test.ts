@@ -184,6 +184,12 @@ describe("BRAIN_CREATOR_TOOLS", () => {
     }).success).toBe(true);
 
     expect(prepare?.inputSchema.safeParse({
+      action: "refresh-test-design-projection",
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1"
+    }).success).toBe(true);
+
+    expect(prepare?.inputSchema.safeParse({
       action: "start-evaluation-trial",
       businessScenarioIds: ["scenario-1"],
       businessOutcomeIds: ["GHR-REQ-01", "GHR-REQ-02"]

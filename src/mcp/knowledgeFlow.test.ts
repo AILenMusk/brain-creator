@@ -1248,6 +1248,63 @@ describe("Brain Creator requirement-first facade", () => {
     expect(approved.status).toBe("approved");
   });
 
+  it("refreshes the current draft projection through the prepare facade without changing Store data", async () => {
+    const workDir = await tempDir();
+    const dataFilePath = join(workDir, ".brain-creator", "local-assets.json");
+    const context = createBrainCreatorMcpContext({ workDir, dataFilePath });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Draft Projection",
+      key: "draft-projection",
+      defaultLocale: "en-US"
+    }));
+    const source = join(workDir, "requirement.md");
+    await writeFile(source, "# Order\n\nAn order can be submitted and approved.", "utf8");
+    const ingested = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source
+    }));
+    await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-test-design",
+      requirementSetId: ingested.requirementSet.id
+    });
+    const storeBefore = await readFile(dataFilePath);
+    const assetsBefore = structuredClone({
+      intents: context.repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: context.repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: context.repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    });
+
+    const refreshed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "refresh-test-design-projection",
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    }));
+    const projectionPath = join(
+      workDir,
+      ".brain-creator",
+      "knowledge",
+      project.key,
+      "requirements",
+      ingested.requirementSet.id,
+      "draft-test-design-current.md"
+    );
+
+    expect(refreshed).toEqual(expect.objectContaining({
+      status: "refreshed",
+      counts: { testIntents: 1, businessScenarios: 1 },
+      storeChanged: false
+    }));
+    expect(await readFile(projectionPath, "utf8")).toContain("projection: current-draft-test-design");
+    expect(await readFile(dataFilePath)).toEqual(storeBefore);
+    expect({
+      intents: context.repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: context.repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: context.repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    }).toEqual(assetsBefore);
+  });
+
   it("keeps a clarification Gap open until its separate evidence-referenced Facade transition", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
