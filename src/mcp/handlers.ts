@@ -1604,6 +1604,23 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       >[0]["businessScenarioDraftUpdates"]
     });
   }
+  if (action === "align-test-design-source") {
+    return context.knowledgeService.alignTestDesignSource({
+      knowledgeProjectId: stringArg(input, "knowledgeProjectId"),
+      requirementSetId: stringArg(input, "requirementSetId"),
+      targetRequirementSourceId: stringArg(input, "targetRequirementSourceId"),
+      expectedSourceHash: stringArg(input, "expectedSourceHash"),
+      expectedAlignmentHash: optionalStringArg(input, "expectedAlignmentHash"),
+      confirm: optionalBooleanArg(input, "confirm") === true,
+      confirmationNote: optionalStringArg(input, "confirmationNote"),
+      testIntentSourceUpdates: (input.testIntentSourceUpdates ?? []) as Parameters<
+        KnowledgeService["alignTestDesignSource"]
+      >[0]["testIntentSourceUpdates"],
+      businessScenarioSourceUpdates: (input.businessScenarioSourceUpdates ?? []) as Parameters<
+        KnowledgeService["alignTestDesignSource"]
+      >[0]["businessScenarioSourceUpdates"]
+    });
+  }
   if (action === "refresh-test-design-projection") {
     return context.knowledgeService.refreshTestDesignProjection({
       knowledgeProjectId: stringArg(input, "knowledgeProjectId"),
@@ -13059,6 +13076,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
       "generate-analysis",
       "generate-test-design",
       "revise-test-design-draft",
+      "align-test-design-source",
       "refresh-test-design-projection",
       "assess-scenarios",
       "record-scenario-run",
@@ -13120,6 +13138,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
     | "generate-analysis"
     | "generate-test-design"
     | "revise-test-design-draft"
+    | "align-test-design-source"
     | "refresh-test-design-projection"
     | "assess-scenarios"
     | "record-scenario-run"

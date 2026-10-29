@@ -42,6 +42,8 @@ Agent 通过 `bc_configure target=knowledge-project` 创建知识项目，此时
 
 `bc_prepare action=generate-test-design` 返回模块、角色、字段、规则、流程、状态、权限、集成、来源引用、置信度、风险、TestIntent、TestDataProfile 和 Gap。
 
+需要保留现有草稿的意图 ID 和场景成员关系、并将来源切换到已核实的新权威版本时，使用 `bc_prepare action=align-test-design-source`。先读取并冻结完整来源层级及 revision；为每条现有 TestIntent 提交完整 `requirementRefs`，为每个 BusinessScenario 提交完整 `sourceRefs`。预览哈希同时绑定当前草稿和提议的锚点，确认时必须带回该哈希、目标来源 hash 和用户确认说明。操作会更新 RequirementSet 来源 ID/hash，保留草稿状态并使旧 Eval/基线关联失效。KnowledgeNode 锚点会作为历史保留并单独报告，不会被声称已重锚；复核来源忠实度及这些历史节点前不得批准基线。此操作不会映射 outcome 或创建 Trial。
+
 内置策略不依赖外部 Skill。宿主存在 `RequirementAnalysis.skill` 或 `TestCaseDesign.skill` 时可增强分析，但仍必须经过 Brain Creator schema、Eval、来源追踪和审批。
 
 ### 4. 批准基线

@@ -184,6 +184,22 @@ describe("BRAIN_CREATOR_TOOLS", () => {
     }).success).toBe(true);
 
     expect(prepare?.inputSchema.safeParse({
+      action: "align-test-design-source",
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      targetRequirementSourceId: "source-formal",
+      expectedSourceHash: "a".repeat(64),
+      testIntentSourceUpdates: [{
+        id: "intent-1",
+        requirementRefs: ["source:source-formal#line:12"]
+      }],
+      businessScenarioSourceUpdates: [{
+        id: "scenario-1",
+        sourceRefs: ["source:source-formal#line:12"]
+      }]
+    }).success).toBe(true);
+
+    expect(prepare?.inputSchema.safeParse({
       action: "refresh-test-design-projection",
       knowledgeProjectId: "project-1",
       requirementSetId: "requirement-1"

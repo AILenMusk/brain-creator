@@ -388,6 +388,239 @@ describe("KnowledgeService", () => {
     }
   });
 
+  it("reanchors a complete draft design with hash-bound confirmation and preserves IDs and memberships", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({ name: "Source alignment", key: "source-alignment", defaultLocale: "en-US" });
+    const current = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("local-v4", "A request can be submitted and approved.")
+    });
+    await service.generateTestDesign(current.requirementSet.id);
+    const targetPackage = requirementPackage("formal-source", "The formal source defines request submission and approval.");
+    targetPackage.source = "requirements/formal.md";
+    const target = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: targetPackage
+    });
+    const requirementSet = repository.requirementSets.find((item) => item.id === current.requirementSet.id)!;
+    const intents = repository.testIntents.filter((item) => item.requirementSetId === requirementSet.id);
+    const scenarios = repository.businessScenarios.filter((item) => item.requirementSetId === requirementSet.id);
+    const originalIntentIds = intents.map((item) => item.id).sort();
+    const originalScenarioIds = scenarios.map((item) => item.id).sort();
+    const originalMemberships = scenarios.map((item) => [item.id, [...(item.testIntentIds ?? [])].sort()]);
+    const nodes = repository.knowledgeNodes.filter((item) => item.requirementSetId === requirementSet.id);
+    const originalNodeAnchors = nodes.map((item) => [item.id, [...item.sourceRefs]]);
+    const oldSourceRefCount = nodes.flatMap((item) => item.sourceRefs)
+      .filter((ref) => ref.startsWith(`source:${current.requirementSet.sourceId}#line:`)).length;
+    requirementSet.evaluationStageIds = ["stage-old-source"];
+    requirementSet.baselineFingerprint = "old-source-fingerprint";
+    requirementSet.approvalReceiptId = "old-source-receipt";
+    requirementSet.evaluationGate = {
+      policyId: "requirement-eval",
+      policyVersion: "1",
+      verdict: "pass",
+      score: 1,
+      coverage: { totalClauses: 1, coveredClauses: 1, coverageRate: 1, uncoveredSourceRefs: [] },
+      status: "confirmed",
+      actions: [],
+      generatedAt: "2026-10-01T00:00:00.000Z",
+      confirmedAt: "2026-10-01T00:00:00.000Z"
+    };
+    const testIntentSourceUpdates = intents.map((item, index) => ({
+      id: item.id,
+      requirementRefs: [
+        `source:${target.requirementSet.sourceId}#line:1`,
+        ...(index === 0 ? ["user-confirmation://codex/2026-10-29/source-alignment"] : [])
+      ]
+    }));
+    const businessScenarioSourceUpdates = scenarios.map((item) => ({
+      id: item.id,
+      sourceRefs: [`source:${target.requirementSet.sourceId}#line:1`]
+    }));
+
+    const preview = await service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates,
+      businessScenarioSourceUpdates
+    });
+    if (preview.status !== "preview") throw new Error("Expected a source-alignment preview");
+    expect(preview.counts).toEqual({ testIntents: intents.length, businessScenarios: scenarios.length });
+    expect(preview.impact).toMatchObject({
+      preservesAssetIds: true,
+      preservesScenarioMemberships: true,
+      preservesKnowledgeNodeHistory: true,
+      retainedKnowledgeNodeSourceRefs: oldSourceRefCount,
+      keepsRequirementSetDraft: true,
+      invalidatesPreviousEvaluationStageLinks: 1,
+      invalidatesPreviousBaselineFingerprint: true,
+      doesNotApproveOrStartTrial: true
+    });
+    expect(requirementSet.sourceId).toBe(current.requirementSet.sourceId);
+    expect(intents[0]?.requirementRefs.some((ref) => ref.includes(current.requirementSet.sourceId))).toBe(true);
+
+    const changedAnchors = structuredClone(testIntentSourceUpdates);
+    changedAnchors[0]!.requirementRefs = [`source:${target.requirementSet.sourceId}#line:1`];
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      expectedAlignmentHash: preview.currentAlignmentHash,
+      confirm: true,
+      confirmationNote: "Changed anchors after preview must be rejected.",
+      testIntentSourceUpdates: changedAnchors,
+      businessScenarioSourceUpdates
+    })).rejects.toThrow("Draft or source anchors changed after preview");
+
+    const aligned = await service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      expectedAlignmentHash: preview.currentAlignmentHash,
+      confirm: true,
+      confirmationNote: "User approved formal Feishu source alignment while preserving draft IDs and memberships.",
+      testIntentSourceUpdates,
+      businessScenarioSourceUpdates
+    });
+    if (aligned.status !== "aligned") throw new Error("Expected the draft source alignment to be applied");
+    expect(aligned.requirementSetStatus).toBe("draft");
+    expect(requirementSet.sourceId).toBe(target.requirementSet.sourceId);
+    expect(requirementSet.contentHash).toBe(target.requirementSet.contentHash);
+    expect(requirementSet.evaluationStageIds).toBeUndefined();
+    expect(requirementSet.baselineFingerprint).toBeUndefined();
+    expect(requirementSet.approvalReceiptId).toBeUndefined();
+    expect(requirementSet.evaluationGate).toMatchObject({ status: "needs-confirmation", verdict: "needs-user" });
+    expect(requirementSet.evaluationGate?.confirmedAt).toBeUndefined();
+    expect(intents.map((item) => item.id).sort()).toEqual(originalIntentIds);
+    expect(scenarios.map((item) => item.id).sort()).toEqual(originalScenarioIds);
+    expect(scenarios.map((item) => [item.id, [...(item.testIntentIds ?? [])].sort()])).toEqual(originalMemberships);
+    expect(nodes.map((item) => [item.id, [...item.sourceRefs]])).toEqual(originalNodeAnchors);
+    expect(aligned.retainedKnowledgeNodeSourceRefs).toBe(oldSourceRefCount);
+    expect(intents.every((item) => item.status === "draft" && item.requirementRefs.every((ref) => ref.includes(target.requirementSet.sourceId) || ref.startsWith("user-confirmation://")))).toBe(true);
+    expect(scenarios.every((item) => item.status === "draft" && item.sourceRefs.every((ref) => ref.includes(target.requirementSet.sourceId)))).toBe(true);
+    expect(repository.brainEvents.at(-1)?.message).toContain("User approved formal Feishu source alignment");
+    expect(repository.evaluationTrials).toHaveLength(0);
+  });
+
+  it("rejects incomplete, foreign, stale, or out-of-range source anchors before mutation", async () => {
+    const repository = new InMemoryBrainCreatorRepository();
+    const service = new KnowledgeService(repository, await tempDir());
+    const project = await service.createProject({ name: "Source alignment guards", key: "source-alignment-guards", defaultLocale: "en-US" });
+    const current = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: requirementPackage("old-source", "A request can be submitted.")
+    });
+    const currentSourceId = current.requirementSet.sourceId;
+    await service.generateTestDesign(current.requirementSet.id);
+    const targetPackage = requirementPackage("target-source", "The target source has one bounded line.");
+    targetPackage.source = "requirements/target.md";
+    const target = await service.ingestRequirement({
+      projectId: project.id,
+      contentPackage: targetPackage
+    });
+    const intents = repository.testIntents.filter((item) => item.requirementSetId === current.requirementSet.id);
+    const scenarios = repository.businessScenarios.filter((item) => item.requirementSetId === current.requirementSet.id);
+    const validIntentUpdates = intents.map((item) => ({
+      id: item.id,
+      requirementRefs: [`source:${target.requirementSet.sourceId}#line:1`]
+    }));
+    const validScenarioUpdates = scenarios.map((item) => ({
+      id: item.id,
+      sourceRefs: [`source:${target.requirementSet.sourceId}#line:1`]
+    }));
+    const otherProject = await service.createProject({ name: "Foreign source project", key: "foreign-source-project", defaultLocale: "en-US" });
+    const foreignTarget = await service.ingestRequirement({
+      projectId: otherProject.id,
+      contentPackage: {
+        ...requirementPackage("foreign-source", "A foreign source."),
+        source: "requirements/foreign.md"
+      }
+    });
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: foreignTarget.requirementSet.sourceId,
+      expectedSourceHash: foreignTarget.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: validIntentUpdates,
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("Target requirement source does not belong to the selected knowledge project");
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: [validIntentUpdates[0]!, validIntentUpdates[0]!, ...validIntentUpdates.slice(2)],
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("contains duplicate IDs");
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: validIntentUpdates.slice(1),
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("must update every existing asset exactly once");
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: "0".repeat(64),
+      confirm: false,
+      testIntentSourceUpdates: validIntentUpdates,
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("Target requirement source changed after preview");
+    const originalStatus = current.requirementSet.status;
+    current.requirementSet.status = "approved";
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: validIntentUpdates,
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("Only a draft RequirementSet can receive source-anchor alignment");
+    current.requirementSet.status = originalStatus;
+    const originalIntentStatus = intents[0]!.status;
+    intents[0]!.status = "approved";
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: validIntentUpdates,
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("Every TestIntent and BusinessScenario in the selected draft must remain draft");
+    intents[0]!.status = originalIntentStatus;
+    const invalidLineUpdates = validIntentUpdates.map((item, index) => ({
+      ...item,
+      requirementRefs: [index === 0
+        ? `source:${target.requirementSet.sourceId}#line:9999`
+        : `source:${target.requirementSet.sourceId}#line:1`]
+    }));
+    await expect(service.alignTestDesignSource({
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      confirm: false,
+      testIntentSourceUpdates: invalidLineUpdates,
+      businessScenarioSourceUpdates: validScenarioUpdates
+    })).rejects.toThrow("references a missing source line");
+    expect(current.requirementSet.sourceId).toBe(currentSourceId);
+    expect(intents.every((item) => item.requirementRefs.every((ref) => ref.includes(currentSourceId)))).toBe(true);
+  });
+
   it("indexes requirement actions for later System Brain binding", async () => {
     const repository = new InMemoryBrainCreatorRepository();
     const knowledgeDir = await tempDir();

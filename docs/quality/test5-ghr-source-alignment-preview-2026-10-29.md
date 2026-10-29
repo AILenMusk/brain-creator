@@ -1,6 +1,6 @@
 # Test5 GHR 37/11 来源锚点对齐预览
 
-**状态：** 只读候选映射；未写回 Store。它不批准 RequirementSet、28 条 outcome Oracle、基线或 Trial。
+**状态：** 用户已确认来源对齐策略；Brain Creator Facade 的完整 37/11 预览通过，尚未写回 Store。它不批准 RequirementSet、28 条 outcome Oracle、基线或 Trial。
 
 ## 当前来源事实
 
@@ -70,4 +70,6 @@
 
 ## 结论
 
-该映射提供了逐条候选来源，不会自动把候选来源变成批准 Oracle。正式写回前仍需确认：是否将正式飞书 revision 2045 / 流程子文档 revision 5 作为本组 draft 的权威来源，保留现有 37/11 ID 与成员关系，并把本地 v4 仅保留为历史设计修订。确认后应使用受控 Facade preview/confirm 更新来源锚点，复核所有 37 个意图和 11 个场景；遇到来源没有定义的期待保持 blocked，不补造规则。
+该映射提供了逐条候选来源，不会自动把候选来源变成批准 Oracle。用户已确认正式飞书 revision 2045 / 流程子文档 revision 5 为本组 draft 的权威来源，保留现有 37/11 ID 与成员关系，并把本地 v4 留作历史。
+
+Brain Creator Facade 的只读预览确认恰好覆盖 37 个 TestIntent 和 11 个 BusinessScenario，映射与现有 ID 集合完整一致；目标 Store 中 123 条 KnowledgeNode 来源引用仍指向旧本地 v4，预览明确保留它们为历史，不声称已重锚。确认写入会使 12 个旧 Eval 阶段关联及既有基线指纹失效。预览 hash 为 `afe4bfde6b8543669f35735c73c0b162555d338a58ff4fb82b0a405ec01d8c65`，固定映射见上表。当前同一 workspace 仍有旧 `auth capture` 进程运行；在它退出前暂停 Store 写入，避免该进程随后持有的旧快照覆盖此次对齐。收到新进程回读前，不得报告为已持久化。来源未定义的期待继续 blocked，不补造规则。

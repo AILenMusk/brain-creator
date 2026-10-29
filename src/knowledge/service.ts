@@ -1899,6 +1899,218 @@ export class KnowledgeService {
     };
   }
 
+  async alignTestDesignSource(input: {
+    knowledgeProjectId: string;
+    requirementSetId: string;
+    targetRequirementSourceId: string;
+    expectedSourceHash: string;
+    expectedAlignmentHash?: string;
+    confirm: boolean;
+    confirmationNote?: string;
+    testIntentSourceUpdates: Array<Pick<TestIntent, "id" | "requirementRefs">>;
+    businessScenarioSourceUpdates: Array<Pick<BusinessScenario, "id" | "sourceRefs">>;
+  }) {
+    const requirementSet = this.getRequirementSet(input.requirementSetId);
+    if (requirementSet.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Requirement set does not belong to the selected knowledge project");
+    }
+    if (requirementSet.status !== "draft") {
+      throw new Error("Only a draft RequirementSet can receive source-anchor alignment");
+    }
+
+    const targetSource = this.repository.requirementSources.find(
+      (item) => item.id === input.targetRequirementSourceId
+    );
+    if (!targetSource || targetSource.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Target requirement source does not belong to the selected knowledge project");
+    }
+    if (targetSource.accessStatus !== "available") {
+      throw new Error("Target requirement source must be available before source-anchor alignment");
+    }
+    if (input.expectedSourceHash !== targetSource.contentHash) {
+      throw new Error("Target requirement source changed after preview; fetch it again and prepare a new alignment");
+    }
+    const previousSource = this.repository.requirementSources.find(
+      (item) => item.id === requirementSet.sourceId
+    );
+    if (!previousSource || previousSource.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Current RequirementSet source is missing or outside the selected knowledge project");
+    }
+
+    const intents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const scenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (intents.length === 0 || scenarios.length === 0) {
+      throw new Error("Draft test design must contain TestIntents and BusinessScenarios");
+    }
+    if (intents.some((item) => item.status !== "draft") || scenarios.some((item) => item.status !== "draft")) {
+      throw new Error("Every TestIntent and BusinessScenario in the selected draft must remain draft");
+    }
+
+    const intentUpdates = validateExactDraftRevisionIds(
+      "TestIntent",
+      intents.map((item) => item.id),
+      input.testIntentSourceUpdates
+    );
+    const scenarioUpdates = validateExactDraftRevisionIds(
+      "BusinessScenario",
+      scenarios.map((item) => item.id),
+      input.businessScenarioSourceUpdates
+    );
+    const sourceLineCounts = new Map(
+      this.repository.requirementSources.map((source) => [source.id, source.content.split(/\r?\n/).length])
+    );
+    for (const update of input.testIntentSourceUpdates) {
+      validateDraftSourceRefs(update.requirementRefs, {
+        sourceLineCounts,
+        targetSourceId: targetSource.id,
+        previousSourceId: previousSource.id
+      }, `TestIntent ${update.id}`);
+    }
+    for (const update of input.businessScenarioSourceUpdates) {
+      validateDraftSourceRefs(update.sourceRefs, {
+        sourceLineCounts,
+        targetSourceId: targetSource.id,
+        previousSourceId: previousSource.id
+      }, `BusinessScenario ${update.id}`);
+    }
+    const retainedKnowledgeNodeSourceRefs = this.repository.knowledgeNodes
+      .filter((node) => node.knowledgeProjectId === input.knowledgeProjectId && node.requirementSetId === requirementSet.id)
+      .flatMap((node) => node.sourceRefs)
+      .filter((sourceRef) => sourceRef.startsWith(`source:${previousSource.id}#line:`)).length;
+
+    const currentAlignmentHash = hashTestDesignSourceAlignment(
+      requirementSet,
+      targetSource,
+      intents,
+      scenarios,
+      intentUpdates,
+      scenarioUpdates
+    );
+    if (input.expectedAlignmentHash && input.expectedAlignmentHash !== currentAlignmentHash) {
+      throw new Error("Draft or source anchors changed after preview; read them again and prepare a new alignment");
+    }
+    const preview = {
+      status: "preview" as const,
+      requirementSetId: requirementSet.id,
+      knowledgeProjectId: requirementSet.knowledgeProjectId,
+      fromSource: {
+        id: previousSource.id,
+        title: previousSource.title,
+        contentHash: requirementSet.contentHash
+      },
+      targetSource: {
+        id: targetSource.id,
+        title: targetSource.title,
+        sourceType: targetSource.sourceType,
+        revision: targetSource.revision,
+        contentHash: targetSource.contentHash,
+        contentLineCount: sourceLineCounts.get(targetSource.id) ?? 0
+      },
+      currentAlignmentHash,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      testIntentSourceUpdates: input.testIntentSourceUpdates.map((item) => ({
+        id: item.id,
+        requirementRefs: [...item.requirementRefs]
+      })),
+      businessScenarioSourceUpdates: input.businessScenarioSourceUpdates.map((item) => ({
+        id: item.id,
+        sourceRefs: [...item.sourceRefs]
+      })),
+      impact: {
+        preservesAssetIds: true,
+        preservesScenarioMemberships: true,
+        preservesKnowledgeNodeHistory: true,
+        retainedKnowledgeNodeSourceRefs,
+        keepsRequirementSetDraft: true,
+        invalidatesPreviousEvaluationStageLinks: requirementSet.evaluationStageIds?.length ?? 0,
+        invalidatesPreviousBaselineFingerprint: Boolean(requirementSet.baselineFingerprint),
+        doesNotApproveOrStartTrial: true
+      },
+      requiresConfirmation: true,
+      nextAction: "Review every TestIntent and BusinessScenario source anchor. KnowledgeNode anchors remain tied to the previous local source as history and are not represented as re-anchored. To apply, repeat with confirm=true, expectedAlignmentHash, expectedSourceHash, and the user's confirmation note. The RequirementSet stays draft; prior evaluation links are invalidated, and this action does not map outcomes, approve a baseline, or start a Trial."
+    };
+    if (!input.confirm) return preview;
+    if (!input.expectedAlignmentHash) {
+      throw new Error("expectedAlignmentHash from the latest preview is required to confirm source-anchor alignment");
+    }
+    const confirmationNote = input.confirmationNote?.trim();
+    if (!confirmationNote) {
+      throw new Error("A non-empty confirmationNote is required to align draft test-design sources");
+    }
+
+    const updatedAt = timestamp();
+    this.repository.transaction(() => {
+      for (const intent of intents) {
+        intent.requirementRefs = [...intentUpdates.get(intent.id)!.requirementRefs];
+        intent.updatedAt = updatedAt;
+      }
+      for (const scenario of scenarios) {
+        scenario.sourceRefs = [...scenarioUpdates.get(scenario.id)!.sourceRefs];
+      }
+      requirementSet.sourceId = targetSource.id;
+      requirementSet.contentHash = targetSource.contentHash;
+      requirementSet.updatedAt = updatedAt;
+      delete requirementSet.evaluationStageIds;
+      delete requirementSet.baselineFingerprint;
+      delete requirementSet.approvalReceiptId;
+      if (requirementSet.evaluationGate) {
+        requirementSet.evaluationGate.status = "needs-confirmation";
+        requirementSet.evaluationGate.verdict = "needs-user";
+        delete requirementSet.evaluationGate.confirmedAt;
+      }
+      const sequence = Math.max(0, ...this.repository.brainEvents.map((event) => event.sequence)) + 1;
+      this.repository.brainEvents.push({
+        id: id("brainEvent"),
+        sequence,
+        brain: "requirement",
+        type: "draft-test-design-source-aligned",
+        status: "passed",
+        message: `Re-anchored ${intents.length} draft TestIntents and ${scenarios.length} draft BusinessScenarios from ${previousSource.id} to ${targetSource.id} (${targetSource.contentHash}). Existing asset IDs and scenario memberships were preserved; the RequirementSet remains draft and prior evaluation links were invalidated. Confirmation note: ${confirmationNote}.`,
+        traceId: id("trace"),
+        refs: [requirementSet.id, previousSource.id, targetSource.id, ...intents.map((item) => item.id), ...scenarios.map((item) => item.id)],
+        createdAt: updatedAt
+      });
+    });
+
+    const updatedIntents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const updatedScenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    let projection: Awaited<ReturnType<KnowledgeService["refreshTestDesignProjection"]>> | { status: "failed"; error: string };
+    try {
+      projection = await this.refreshTestDesignProjection({
+        knowledgeProjectId: input.knowledgeProjectId,
+        requirementSetId: requirementSet.id
+      });
+    } catch (error) {
+      projection = {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Unknown projection refresh error"
+      };
+    }
+    return {
+      status: "aligned" as const,
+      requirementSetId: requirementSet.id,
+      requirementSetStatus: requirementSet.status,
+      sourceId: requirementSet.sourceId,
+      contentHash: requirementSet.contentHash,
+      counts: { testIntents: updatedIntents.length, businessScenarios: updatedScenarios.length },
+      alignedAt: updatedAt,
+      invalidatedEvaluationStageIds: preview.impact.invalidatesPreviousEvaluationStageLinks,
+      retainedKnowledgeNodeSourceRefs: preview.impact.retainedKnowledgeNodeSourceRefs,
+      projection,
+      testIntents: updatedIntents,
+      businessScenarios: updatedScenarios,
+      nextAction: "Re-run source-grounded Requirement Eval and review every pending Gap before outcome mapping or baseline approval. This action does not approve the RequirementSet or start a Trial."
+    };
+  }
+
   listBusinessScenarios(input: {
     knowledgeProjectId: string;
     requirementSetId?: string;
@@ -4196,6 +4408,86 @@ function hashTestDesignDraft(intents: TestIntent[], scenarios: BusinessScenario[
   return createHash("sha256")
     .update(stableJson({ intents, scenarios }))
     .digest("hex");
+}
+
+function hashTestDesignSourceAlignment(
+  requirementSet: RequirementSet,
+  targetSource: RequirementSource,
+  intents: TestIntent[],
+  scenarios: BusinessScenario[],
+  intentUpdates: Map<string, Pick<TestIntent, "id" | "requirementRefs">>,
+  scenarioUpdates: Map<string, Pick<BusinessScenario, "id" | "sourceRefs">>
+) {
+  return createHash("sha256")
+    .update(stableJson({
+      requirementSet: {
+        id: requirementSet.id,
+        knowledgeProjectId: requirementSet.knowledgeProjectId,
+        sourceId: requirementSet.sourceId,
+        contentHash: requirementSet.contentHash,
+        version: requirementSet.version,
+        title: requirementSet.title,
+        summary: requirementSet.summary,
+        status: requirementSet.status,
+        affectedNodeIds: requirementSet.affectedNodeIds,
+        evaluationStageIds: requirementSet.evaluationStageIds,
+        evaluationGate: requirementSet.evaluationGate,
+        baselineFingerprint: requirementSet.baselineFingerprint,
+        approvalReceiptId: requirementSet.approvalReceiptId
+      },
+      targetSource: {
+        id: targetSource.id,
+        knowledgeProjectId: targetSource.knowledgeProjectId,
+        sourceType: targetSource.sourceType,
+        revision: targetSource.revision,
+        title: targetSource.title,
+        contentHash: targetSource.contentHash,
+        accessStatus: targetSource.accessStatus
+      },
+      intents,
+      scenarios,
+      proposedAnchors: {
+        testIntents: [...intentUpdates.values()].sort((left, right) => left.id.localeCompare(right.id)),
+        businessScenarios: [...scenarioUpdates.values()].sort((left, right) => left.id.localeCompare(right.id))
+      }
+    }))
+    .digest("hex");
+}
+
+function validateDraftSourceRefs(
+  sourceRefs: string[],
+  input: {
+    sourceLineCounts: Map<string, number>;
+    targetSourceId: string;
+    previousSourceId: string;
+  },
+  assetLabel: string
+) {
+  if (!Array.isArray(sourceRefs) || sourceRefs.length === 0 || sourceRefs.some((ref) => !ref.trim())) {
+    throw new Error(`${assetLabel} must have at least one non-empty source reference`);
+  }
+  if (new Set(sourceRefs).size !== sourceRefs.length) {
+    throw new Error(`${assetLabel} contains duplicate source references`);
+  }
+  for (const sourceRef of sourceRefs) {
+    const lineMatch = /^source:([^#]+)#line:(\d+)$/.exec(sourceRef);
+    if (lineMatch) {
+      const sourceId = lineMatch[1]!;
+      const lineNumber = Number(lineMatch[2]);
+      if (sourceId !== input.targetSourceId && sourceId !== input.previousSourceId) {
+        throw new Error(`${assetLabel} references a source outside the alignment pair: ${sourceRef}`);
+      }
+      const lineCount = input.sourceLineCounts.get(sourceId);
+      if (!lineCount || !Number.isSafeInteger(lineNumber) || lineNumber < 1 || lineNumber > lineCount) {
+        throw new Error(`${assetLabel} references a missing source line: ${sourceRef}`);
+      }
+      continue;
+    }
+    if (/^user-confirmation:\/\/codex\/\d{4}-\d{2}-\d{2}\/[a-z0-9][a-z0-9-]*$/.test(sourceRef)) {
+      continue;
+    }
+    throw new Error(`${assetLabel} has an unsupported source reference: ${sourceRef}`);
+  }
 }
 
 function normalizeRequirementAttachments(

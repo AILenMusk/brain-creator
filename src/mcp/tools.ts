@@ -135,7 +135,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
     name: "bc_prepare",
     title: "Brain Creator prepare requirement",
     description:
-      "Requirement-first facade for ingesting sources, running staged Requirement Eval, revising a complete existing draft test design through an ID-preserving confirmed operation, refreshing its current read-only projection, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, recording scenario-attributed Trial interventions and manual recovery, confirming immutable execution preflight snapshots, re-evaluating fully reviewed legacy execution evidence, and attesting complete Trial intervention capture.",
+      "Requirement-first facade for ingesting sources, running staged Requirement Eval, revising a complete existing draft test design through an ID-preserving confirmed operation, aligning a complete draft design's source anchors through a hash-bound preview/confirmation, refreshing its current read-only projection, approving a baseline with a verified receipt, bounded first-system onboarding, reviewing or rolling back historical execution diagnoses, exploring and reconciling System Brain evidence, incrementally recompiling stale cases, compiling evidence-bound cases, resolving compilation exploration tasks, preparing test data, recording and reconciling idempotent write actions, recording scenario-attributed Trial interventions and manual recovery, confirming immutable execution preflight snapshots, re-evaluating fully reviewed legacy execution evidence, and attesting complete Trial intervention capture.",
     inputSchema: z.object({
       action: z.enum([
         "start-evaluation-trial",
@@ -153,6 +153,7 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         "generate-analysis",
         "generate-test-design",
         "revise-test-design-draft",
+        "align-test-design-source",
         "refresh-test-design-projection",
         "assess-scenarios",
         "record-scenario-run",
@@ -368,6 +369,9 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         .default([]),
       confirmationNote: z.string().min(1).max(500).optional(),
       expectedDraftHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      targetRequirementSourceId: z.string().optional(),
+      expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      expectedAlignmentHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
       testIntentDraftUpdates: z.array(z.object({
         id: z.string().min(1),
         businessOutcomeId: z.string().trim().min(1).max(200).nullable(),
@@ -375,6 +379,10 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         objective: z.string().min(1).max(4000),
         preconditions: z.array(z.string().min(1).max(1000)).min(1).max(30),
         expectedResults: z.array(z.string().min(1).max(2000)).min(1).max(30)
+      }).strict()).max(500).optional(),
+      testIntentSourceUpdates: z.array(z.object({
+        id: z.string().min(1),
+        requirementRefs: z.array(z.string().min(1).max(500)).min(1).max(100)
       }).strict()).max(500).optional(),
       businessScenarioDraftUpdates: z.array(z.object({
         id: z.string().min(1),
@@ -396,6 +404,10 @@ export const BRAIN_CREATOR_TOOLS: ToolDefinition[] = [
         testDataNeeds: z.array(z.string().min(1).max(1000)).max(50),
         expectedBusinessOutcomes: z.array(z.string().min(1).max(2000)).min(1).max(100),
         risk: z.enum(["low", "medium", "high", "critical"])
+      }).strict()).max(500).optional(),
+      businessScenarioSourceUpdates: z.array(z.object({
+        id: z.string().min(1),
+        sourceRefs: z.array(z.string().min(1).max(500)).min(1).max(100)
       }).strict()).max(500).optional(),
       diagnosisAssetType: z.enum(["bug", "gap"]).optional(),
       diagnosisAssetId: z.string().optional(),

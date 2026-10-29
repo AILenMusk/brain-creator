@@ -1305,6 +1305,103 @@ describe("Brain Creator requirement-first facade", () => {
     }).toEqual(assetsBefore);
   });
 
+  it("aligns all draft source anchors through the prepare facade and keeps the set draft", async () => {
+    const workDir = await tempDir();
+    const context = createBrainCreatorMcpContext({
+      workDir,
+      dataFilePath: join(workDir, ".brain-creator", "local-assets.json")
+    });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Formal Source Alignment",
+      key: "formal-source-alignment",
+      defaultLocale: "en-US"
+    }));
+    const currentSourceFile = join(workDir, "local-v4.md");
+    const targetSourceFile = join(workDir, "formal-source.md");
+    await writeFile(currentSourceFile, "# Local v4\n\nAn order can be submitted and approved.", "utf8");
+    await writeFile(targetSourceFile, "# Formal source\n\nThe approved requirement source for this project.", "utf8");
+    const current = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source: currentSourceFile
+    }));
+    await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-test-design",
+      requirementSetId: current.requirementSet.id
+    });
+    const target = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source: targetSourceFile
+    }));
+    const intents = context.repository.testIntents.filter((item) => item.requirementSetId === current.requirementSet.id);
+    const scenarios = context.repository.businessScenarios.filter((item) => item.requirementSetId === current.requirementSet.id);
+    const memberships = scenarios.map((item) => [item.id, [...(item.testIntentIds ?? [])].sort()]);
+    const testIntentSourceUpdates = intents.map((item) => ({
+      id: item.id,
+      requirementRefs: [`source:${target.requirementSet.sourceId}#line:1`]
+    }));
+    const businessScenarioSourceUpdates = scenarios.map((item) => ({
+      id: item.id,
+      sourceRefs: [`source:${target.requirementSet.sourceId}#line:1`]
+    }));
+    const preview = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "align-test-design-source",
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      testIntentSourceUpdates,
+      businessScenarioSourceUpdates
+    }));
+    expect(preview).toEqual(expect.objectContaining({
+      status: "preview",
+      fromSource: expect.objectContaining({ id: current.requirementSet.sourceId, title: expect.any(String), contentHash: current.requirementSet.contentHash }),
+      targetSource: expect.objectContaining({ id: target.requirementSet.sourceId, contentHash: target.requirementSet.contentHash }),
+      requiresConfirmation: true,
+      impact: expect.objectContaining({
+        preservesAssetIds: true,
+        preservesScenarioMemberships: true,
+        keepsRequirementSetDraft: true,
+        doesNotApproveOrStartTrial: true
+      })
+    }));
+    expect(context.repository.requirementSets.find((item) => item.id === current.requirementSet.id)?.sourceId)
+      .toBe(current.requirementSet.sourceId);
+
+    const aligned = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "align-test-design-source",
+      knowledgeProjectId: project.id,
+      requirementSetId: current.requirementSet.id,
+      targetRequirementSourceId: target.requirementSet.sourceId,
+      expectedSourceHash: target.requirementSet.contentHash,
+      expectedAlignmentHash: preview.currentAlignmentHash,
+      confirm: true,
+      confirmationNote: "User approved formal source alignment while preserving draft IDs and memberships.",
+      testIntentSourceUpdates,
+      businessScenarioSourceUpdates
+    }));
+    expect(aligned).toEqual(expect.objectContaining({
+      status: "aligned",
+      requirementSetId: current.requirementSet.id,
+      requirementSetStatus: "draft",
+      sourceId: target.requirementSet.sourceId,
+      contentHash: target.requirementSet.contentHash,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      retainedKnowledgeNodeSourceRefs: preview.impact.retainedKnowledgeNodeSourceRefs
+    }));
+    expect(context.repository.requirementSets.find((item) => item.id === current.requirementSet.id)?.status).toBe("draft");
+    expect(context.repository.requirementSets.find((item) => item.id === current.requirementSet.id)?.sourceId)
+      .toBe(target.requirementSet.sourceId);
+    expect(context.repository.businessScenarios
+      .filter((item) => item.requirementSetId === current.requirementSet.id)
+      .map((item) => [item.id, [...(item.testIntentIds ?? [])].sort()])).toEqual(memberships);
+    expect(intents.every((item) => item.requirementRefs.every((ref) => ref === `source:${target.requirementSet.sourceId}#line:1`))).toBe(true);
+    expect(scenarios.every((item) => item.status === "draft" && item.sourceRefs.every((ref) => ref === `source:${target.requirementSet.sourceId}#line:1`))).toBe(true);
+    expect(context.repository.evaluationTrials).toHaveLength(0);
+  });
+
   it("keeps a clarification Gap open until its separate evidence-referenced Facade transition", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
