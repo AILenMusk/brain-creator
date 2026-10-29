@@ -1,14 +1,14 @@
-# Test5 GHR 37/11 来源锚点对齐预览
+# Test5 GHR 37/11 来源锚点对齐记录
 
-**状态：** 用户已确认来源对齐策略；Brain Creator Facade 的完整 37/11 预览通过，尚未写回 Store。它不批准 RequirementSet、28 条 outcome Oracle、基线或 Trial。
+**状态：** 用户已确认来源对齐策略；Brain Creator Facade 已完成 37/11 对齐，且新进程回读通过。它不批准 RequirementSet、28 条 outcome Oracle、基线或 Trial。
 
 ## 当前来源事实
 
 - 待核对集合：`requirementSet_n61e346r`，37 个 TestIntent、11 个 BusinessScenario，均为 draft。
-- 当前集合仍引用旧本地设计源 `requirementSource_dx9nznvc`（v4，SHA-256 `c93bc0c6e793dbf74e8cd0dacfca516dd6527193db2af6a3e0e570e67520c8d0`）。正式飞书源为 `requirementSource_8dk46kq4`，主文档 revision 2045；流程梳理子文档 revision 5。
+- 当前集合已引用正式飞书源 `requirementSource_8dk46kq4`，内容 hash 为 `eb3511da524718e7b03f36e68d46f4994f7ad3b9ab3a72107d1d91500195f065`；原本地设计源 `requirementSource_dx9nznvc`（v4，SHA-256 `c93bc0c6e793dbf74e8cd0dacfca516dd6527193db2af6a3e0e570e67520c8d0`）仍保留。正式主文档 revision 2045；流程梳理子文档 revision 5。
 - 当前 Store 回读的主文档 `contentHash` 为 `eb3511da524718e7b03f36e68d46f4994f7ad3b9ab3a72107d1d91500195f065`。导入的附件/子表内容被展平在同一源内容的后续行；引用下表行号时须同时保持该源 hash。
 - 以下 `F#N` 表示 `source:requirementSource_8dk46kq4#line:N`；`L#N` 表示旧本地设计源的行，仅作为用户决定/修订历史的追踪，不替代正式需求。Test5 路线使用已保存的用户确认 `user-confirmation://codex/2026-10-28/test5-ghr-route-clarification`，不拿一般流程图替代当前系统配置。
-- 任何源锚点映射都不改变 37/11 ID、成员关系、草稿状态、固定 28 分母或 Oracle；正式写回前仍需明确确认来源策略，并由 Brain Creator 做完整预览、确认与新进程回读。
+- 任何源锚点映射都不改变 37/11 ID、成员关系、草稿状态、固定 28 分母或 Oracle。用户已确认来源策略；Brain Creator 已完成完整预览、确认与新进程回读。
 
 ## 37 条 TestIntent 候选锚点
 
@@ -68,8 +68,14 @@
 | S10 编制表单与旧流程迁移 | F#171–176 | HSSC 系统管理员 outcome 保留分母并 not-executed。 |
 | S11 查询一致性与筛选导出 | F#76、F#182–184 | 只查/导出本轮合成实体；字段清单和筛选条件需先冻结。 |
 
-## 结论
+## 对齐结果
 
 该映射提供了逐条候选来源，不会自动把候选来源变成批准 Oracle。用户已确认正式飞书 revision 2045 / 流程子文档 revision 5 为本组 draft 的权威来源，保留现有 37/11 ID 与成员关系，并把本地 v4 留作历史。
 
-Brain Creator Facade 的只读预览确认恰好覆盖 37 个 TestIntent 和 11 个 BusinessScenario，映射与现有 ID 集合完整一致；目标 Store 中 123 条 KnowledgeNode 来源引用仍指向旧本地 v4，预览明确保留它们为历史，不声称已重锚。确认写入会使 12 个旧 Eval 阶段关联及既有基线指纹失效。预览 hash 为 `afe4bfde6b8543669f35735c73c0b162555d338a58ff4fb82b0a405ec01d8c65`，固定映射见上表。当前同一 workspace 仍有旧 `auth capture` 进程运行；在它退出前暂停 Store 写入，避免该进程随后持有的旧快照覆盖此次对齐。收到新进程回读前，不得报告为已持久化。来源未定义的期待继续 blocked，不补造规则。
+Brain Creator Facade 预览 hash 为 `afe4bfde6b8543669f35735c73c0b162555d338a58ff4fb82b0a405ec01d8c65`，写入后将 RequirementSet `requirementSet_n61e346r` 对齐到 `requirementSource_8dk46kq4`。独立 Facade 进程确认 37 个 TestIntent 和 11 个 BusinessScenario 均为 draft、37 条成员关系有效；400 条直接来源引用中有 387 条指向正式源。原有 123 条 KnowledgeNode 来源引用仍指向本地 v4，作为历史保留。旧的 12 个 Eval 阶段关联和旧基线指纹已失效。
+
+最新 draft 投影 SHA-256 为 `a5de04cd0d11d895e23031920ace7719469face59d5f58e4cdd78b7abcfec1a8`。回读确认 37 个 `businessOutcomeId` 仍未映射、EvaluationTrial 数量仍为 0。需要进一步审核知识节点与正式源的相关性，再进行 Requirement Eval、Oracle 映射和基线审批；来源未定义的期待继续 blocked，不补造规则。
+
+来源对齐后的 Facade Eval 预览返回原有 18 项 gate action：4 项已确认、14 项待处理；gate `generatedAt` 仍是 `2026-10-28T19:22:10.656Z`，本轮没有把旧评估冒充为新的来源评估。此次对齐另外使 12 条旧 stage-eval 关联失效；这与 14 项待处理 action 是不同计数。待处理内容包括实习后续状态、替补数据、OA 流程独立读回、本地 Offer 路径与角色/附件、配置/迁移/导出范围、路线命中、账号角色、测试数据和真实运行证据。尚未确认任何 Eval action 或基线。
+
+为避免旧快照覆盖，对齐前结束了仍等待“登录后回到终端按 Enter”的专用 `auth capture` 进程。该进程尚未保存鉴权状态；Test5 AuthProfile 仍未验证。没有批准基线、创建 Trial、执行 Test5 业务写入或清理。
