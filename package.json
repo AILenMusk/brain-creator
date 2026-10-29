@@ -26,6 +26,7 @@
     ".agents/plugins/marketplace.json",
     "playwright.config.ts",
     "docs/**/*.md",
+    "!docs/quality/**",
     "docs/llms.txt",
     "docs/public/brain-creator-mark.png",
     "README.md"

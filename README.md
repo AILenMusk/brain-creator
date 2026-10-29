@@ -137,7 +137,7 @@ npx brain-creator plugin install
 │   ├── knowledge/            # 需求、系统知识、编译、数据与工作流服务
 │   ├── brain/                # Brain 模型、Harness 状态和能力服务
 │   ├── domain/               # 资产类型、领域服务和仓库接口/实现
-│   ├── execution/            # 浏览器执行、断言、证据和报告
+│   ├── execution/            # 浏览器执行、System Brain POM、断言、证据和报告
 │   ├── evaluation/           # Trial 完整性、指标和历史证据复核
 │   ├── runner/               # 套件调度入口
 │   ├── storage/              # 文件产物布局、归档、迁移和保留策略
@@ -156,6 +156,12 @@ npx brain-creator plugin install
 ```
 
 目录职责已经有基本分区，但当前还不是严格、可检查的分层架构：`src/mcp/handlers.ts` 承担了大量 Facade 分发、业务编排、执行推进、报告和参数解析；`src/knowledge/` 同时容纳多类业务流程；`src/domain/types.ts` 汇集了大量跨域类型。后续按单一职责逐步拆分，保持公开 MCP/CLI 契约不变，不做无目标的整体搬迁。
+
+### 知识驱动的 POM
+
+`PageModel`（页面模型）和 `LocatorPoint`（定位点）是 System Brain 保存的页面知识；它们本身不是 POM。执行期的 `src/execution/systemPageObject.ts` 只从已确认的 System Brain 快照读取 `pageModelId` 与 `locatorPointId`，在当前页面路由匹配且定位结果唯一、可见时执行操作。生成的 Playwright seed 提供 `bc.pageObject(page, pageModelId).control(locatorPointId)`，每次操作附带快照版本、页面、定位点、动作和结果，供运行证据引用。
+
+POM 只解决“如何定位和操作控件”。测试步骤、角色交接、数据实体和业务写入顺序仍由 Testcase Brain 与 Harness 决定；预期值和业务符合性仍由 Oracle（业务判定依据）与后置状态核验决定。页面或定位知识不确认、页面路由变化、控件缺失或匹配多个元素时，执行会明确失败并要求探索/复核，不切换到未经确认的选择器。复杂控件可在业务工作区的生成测试中注册具名扩展，通过 `control.extend(extensionId)` 调用；扩展与目标系统的专用验收资产留在业务工作区，不加入 Brain Creator 通用产品源码。
 
 新代码遵循以下依赖方向：
 
@@ -183,7 +189,7 @@ Brain / Domain 模型与业务规则
 | 验收规则 | 保留方法、固定评估口径和问题状态；逐轮结果应由明确的 Trial/提交版本索引。 | `docs/quality/` 中的验收策略、问题台账。 |
 | 单轮验收与业务产物 | 放在目标业务工作区 `.brain-creator/artifacts/` 或批准的独立归档中，保留清单和哈希；真实鉴权材料不得进入源码包或 Git。 | 需求快照、Oracle 标注、截图、trace、Reporter、HTML/Markdown 报告。 |
 
-当前仍有边界债务：`docs/quality/` 同时存在长期规则和 Test5/单轮评审资料；`package.json` 用 `docs/**/*.md` 打包规则，可能把质量台账 Markdown 一并放入 npm 包。下一步整理应先把稳定政策与单轮记录分开，并收紧 npm 文档白名单；不要删除或改写历史证据来制造“干净”状态。
+`docs/quality/` 是仓库内部的质量台账和验收记录，不属于用户安装产品的文档包；npm 清单显式排除该目录。面向用户的中文指南保留在 `docs/zh-CN/`。历史和单轮验收资产应单独归档，不能靠将它们打入 npm 包来保存。
 
 ### npm 用户如何定位运行产物
 
