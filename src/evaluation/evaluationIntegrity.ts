@@ -129,6 +129,9 @@ export class EvaluationIntegrityService {
     if (businessOutcomeIds.length > 0 && (!approvalReceipt || requirementSet?.status !== "approved")) {
       throw new Error("Outcome-scoped evaluation trials require an approved RequirementSet and its approval receipt");
     }
+    if (mappedTestIntents.length > 0 && requestedOutcomeIds === undefined) {
+      throw new Error("Outcome-scoped evaluation trials require an explicit approved business-outcome roster");
+    }
     const peers = this.repository.evaluationTrials.filter(
       (item) => item.comparisonGroupId === input.comparisonGroupId
     );
