@@ -67,6 +67,8 @@ The Agent calls `bc_prepare action=generate-test-design` and presents:
 
 Builtin policies work without external Skills. When `RequirementAnalysis.skill` or `TestCaseDesign.skill` is available, the Agent may use it as an enhancement, but the output still passes Brain Creator schema, Eval, source-trace, and approval gates.
 
+When a user asks to revise an existing design, use `bc_prepare action=revise-test-design-draft` only for a `draft` RequirementSet. Include a complete update for every existing TestIntent and BusinessScenario in that set; the action rejects missing, duplicate, or foreign IDs and does not accept membership or status changes. First call with `confirm=false`, review the returned `currentDraftHash` and target counts, then submit the same complete update with `confirm=true`, that hash, and a non-empty `confirmationNote`. The Facade preserves existing asset IDs, source/model references, intent-to-scenario links, and draft status, and records the revision in Brain Events. It does not approve the RequirementSet, create a Trial, compile cases, or execute business actions. Re-read both asset collections after the confirmed update.
+
 ### 4. Approve The Baseline
 
 The Agent presents every Requirement Eval action. Clarifications and missing branches require an explicit `confirmationNote`; direct contradictions require a source revision. For a first system, the default next step is to bind the system and verified roles, create an OnboardingPlan, and ask for one approval that covers both the Requirement baseline and bounded exploration. `approve-baseline confirm=true` remains the compatibility path when no system onboarding is required.

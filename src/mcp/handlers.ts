@@ -1586,6 +1586,21 @@ async function prepareFacade(context: BrainCreatorMcpContext, input: Record<stri
       confirmedBy: optionalStringArg(input, "confirmedBy")
     });
   }
+  if (action === "revise-test-design-draft") {
+    return context.knowledgeService.reviseTestDesignDraft({
+      knowledgeProjectId: stringArg(input, "knowledgeProjectId"),
+      requirementSetId: stringArg(input, "requirementSetId"),
+      expectedDraftHash: optionalStringArg(input, "expectedDraftHash"),
+      confirm: optionalBooleanArg(input, "confirm") === true,
+      confirmationNote: optionalStringArg(input, "confirmationNote"),
+      testIntentDraftUpdates: (input.testIntentDraftUpdates ?? []) as Parameters<
+        KnowledgeService["reviseTestDesignDraft"]
+      >[0]["testIntentDraftUpdates"],
+      businessScenarioDraftUpdates: (input.businessScenarioDraftUpdates ?? []) as Parameters<
+        KnowledgeService["reviseTestDesignDraft"]
+      >[0]["businessScenarioDraftUpdates"]
+    });
+  }
   if (action === "generate-analysis" || action === "generate-test-design") {
     const requirementSetId = stringArg(input, "requirementSetId");
     const requirementSet = context.repository.requirementSets.find((item) => item.id === requirementSetId);
@@ -7114,8 +7129,16 @@ async function knowledgeReview(
     };
   }
   if (target === "test-intent") {
+    const requestedRequirementSetId = optionalStringArg(input, "requirementSetId");
+    const requestedSetBelongsToProject = !requestedRequirementSetId ||
+      context.repository.requirementSets.some(
+        (item) => item.id === requestedRequirementSetId && item.knowledgeProjectId === projectId
+      );
     const items = context.knowledgeService
       .listTestIntents(projectId)
+      .filter((item) => !requestedRequirementSetId || (
+        requestedSetBelongsToProject && item.requirementSetId === requestedRequirementSetId
+      ))
       .filter((item) => !idValue || item.id === idValue);
     return {
       project,
@@ -13090,6 +13113,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
       "confirm-attachment-analysis",
       "generate-analysis",
       "generate-test-design",
+      "revise-test-design-draft",
       "assess-scenarios",
       "record-scenario-run",
       "evaluate-mutations",
@@ -13149,6 +13173,7 @@ function prepareActionArg(input: Record<string, unknown>, key: string) {
     | "confirm-attachment-analysis"
     | "generate-analysis"
     | "generate-test-design"
+    | "revise-test-design-draft"
     | "assess-scenarios"
     | "record-scenario-run"
     | "evaluate-mutations"
