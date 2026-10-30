@@ -58,7 +58,7 @@
 | `npm run verify:order-fixture` | 通过：7/7，覆盖创建/提交、角色交接、拒绝与金额分支、跨用例实体复用、浏览器重启后先核状态且不重复提交、通用性反例 |
 | `npm run verify:host-agent-document-suite` | 通过：本地合成服务器上的 TC-001、TC-002，使用 Playwright Chromium |
 | `npm run verify:codex-native-entry` | 通过：Host Agent handoff、`/bc` 命令兼容、仓库内 plugin 安装 |
-| `npm run verify:source-mcp-identity` | 提交后复验通过：源码启动返回 commit `5c387241badbf55f3a88793b6ea9cb26448210cb`、对应 build ID、`dirty=false`、PID 与隔离 workspace；不是对现有宿主 MCP 进程升级的证明 |
+| `npm run verify:source-mcp-identity` | 提交后复验通过：源码启动返回与当前提交一致的 build ID、`dirty=false`、PID 与隔离 workspace；不是对现有宿主 MCP 进程升级的证明 |
 | `npm run verify:source-workspace-isolation` | 通过：安装 MCP 的 Store 位于隔离业务 workspace；测试临时目录已移除 |
 | `npm run verify:repository-hygiene` | 通过：380 个 tracked files。首次检查发现验收文档含目标环境主机 URL；已从仓库文档移除该主机，仅保留流程名称和 ID，复跑通过 |
 | `git diff --check` | 通过 |
