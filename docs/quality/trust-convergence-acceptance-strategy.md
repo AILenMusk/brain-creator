@@ -4,7 +4,7 @@
 更新日期：2026-10-30
 状态：当前验收口径；PR #190 已合并，逐次运行结果追加到 trust-convergence.md。
 
-**当前范围：** E（真实业务评估）与 F（结果复核与交付）正在推进。当前基线为 `origin/main` `1a964fc8acb27a564d2381818ca4da019b6b6fc4`，PR #190 已合并，工程交付记录为 **4/6**（A–D）。Test5 仍未达到真实 Trial（试验轮次）准入条件：RequirementSet（需求集）为 draft/blocked，11 个高严重度 Gap 未解决；System Brain（系统大脑）revision 8 是候选快照；独立后置状态验证和 TestData Provider（测试数据提供器）未配置。鉴权已在 2026-10-30 的新浏览器上下文验证成功；两个用户提供的流程配置链接在只读探索中均显示“资源不存在”，尚无工作流证据。固定范围为 28 个本地 GHR outcome；Beisen 保留为第二真实系统外部依赖。不得启动业务写入或清理，直到需求基线、场景 Oracle、系统绑定、测试数据和后置验证门禁满足。
+**当前范围：** E（真实业务评估）与 F（结果复核与交付）正在推进。当前基线为 `origin/main` `1a964fc8acb27a564d2381818ca4da019b6b6fc4`，PR #190 已合并，工程交付记录为 **4/6**（A–D）。Test5 仍未达到真实 Trial（试验轮次）准入条件：RequirementSet（需求集）为 draft/blocked，11 个高严重度 Gap 中 7 个 open、4 个 resolved；System Brain（系统大脑）revision 8 是候选快照；独立后置状态验证和 TestData Provider（测试数据提供器）未配置。鉴权已在 2026-10-30 的新浏览器上下文验证成功；用户确认可从页面查询到流程记录，但点击记录后是否显示画布尚未确认，自动化上下文也未取得画布或工作流证据。固定范围为 28 个本地 GHR outcome；Beisen 保留为第二真实系统外部依赖。不得启动业务写入或清理，直到需求基线、场景 Oracle、系统绑定、测试数据和后置验证门禁满足。
 
 当前 TestIntent（测试意图）草稿未通过业务设计质量复核：191 条均为 draft，显式绑定 28 个固定 outcome 的数量为 0，188 条只有通用基线/环境前置条件，135 条的预期结果直接复述目标。不要把来源可追踪、草稿数量、系统页面打开或 synthetic（合成）检查解释为 E/F 真实验收通过。详细逐次证据以 [`trust-convergence.md`](./trust-convergence.md) 为准。
 
