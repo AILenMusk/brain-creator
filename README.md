@@ -239,6 +239,8 @@ Brain Creator 的运行数据写入**用户的业务工作区**，不是写进 `
 - [真实系统回归](docs/zh-CN/quality/real-system-regression.md)
 - [六包实施验收策略](docs/quality/trust-convergence-acceptance-strategy.md)
 - [六包验收状态台账](docs/quality/trust-convergence.md)
+- [工程收敛实施计划](docs/quality/engineering-convergence-implementation-plan.md)
+- [工程收敛合并后验收报告](docs/quality/engineering-convergence-acceptance-2026-10-30.md)
 - [Agent 开发规则](AGENTS.md)
 - [旧版 README 备份](README.legacy.md)
 

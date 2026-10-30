@@ -2,15 +2,15 @@
 
 This register tracks the six-package business-closure plan. Implementation, real business completion, and autonomy are separate measurements. Completing a unit test does not count as a real business run.
 
-## 当前实施状态（2026-10-29，基于新计划）
+## 当前实施状态（2026-10-30，基于新计划）
 
-- 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)。基线为 `origin/main` `02dd2a64a9bb72dc19471c367454bfda6b1cca9d`；本轮候选已提交并推送至 `fixture`，由 [Draft PR #189](https://github.com/AILenMusk/brain-creator/pull/189) 审查。精确候选 head SHA 以 PR 页面为准。
-- 新基线上的正式 A–F 验收尚未完成，当前实现完成度仍为 **0/6**。候选检查已通过：`npm test` 143 个文件/1,233 项、`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（177 项）、全新目录包安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke。文档构建有既有 chunk-size 提示。结果属于未合并候选和合成夹具证据，不能据此计正式 A–D 或真实业务结果。
+- 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)。基线为 `origin/main` `d1d11a1d931b57aed3177ff7dfee3446e116b241`；PR #189 已按用户批准的 head `880871094ed7a5eb0f58f01a039155ffbbfb6448` squash 合并，远端合并树与批准 head 完全一致。本地 `main` 和 `fixture` 均已同步至该提交。
+- 合并后实现完成度为 **4/6**（A–D 工程交付包通过；E/F 未通过验收）。`npm test` 143 个文件/1,233 项、`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（177 项）、隔离的全新目录安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke 均通过。文档构建有既有 chunk-size 提示。工程与 synthetic（合成）结果不计真实业务结果。
 - 知识驱动 POM 的反例测试覆盖未确认快照、路由变化、缺失/歧义控件和未登记扩展；订单夹具覆盖角色交接、创建/提交/审批/关闭、实体复用及重启后不重复提交。MCP 入口已从约 14,000 行拆至 5,759 行，并形成需求工作流、状态/审核投影、参数解析与浏览器运行模块；Handler 仍过大，不称为薄适配层。
-- PR #187/#188 已留结案说明并关闭，均未合并。其可复用的来源快照、鉴权隔离、需求草稿门禁、Trial outcome 指标/固定 roster、只读草稿投影与 Reporter 隐私修复已选择性移植并通过本地回归；Test5 专属报告、场景草稿和映射未带入当前计划。npm 包内容检查确认排除 `docs/quality/`。
-- 历史工作树已归档至 `E:\Projects\BrainCreator_Acceptance\2026-10-29`：4 个运行状态副本、补丁/未跟踪文件和两个通过 `git bundle verify` 的 Git bundle；3,097 个归档文件 SHA-256 逐项复核无不匹配。仍有 Node 进程，不能可靠证明其是否使用旧工作区 Store，因此保留原工作树和分支，不执行删除。PR #189 尚未合并；`main` 未推送。
+- PR #187/#188 已留结案说明并关闭，均未合并；PR #189 已合并。通用修复已选择性移植，Test5 专属资料未进入本轮。npm 包内容检查确认排除 `docs/quality/`。
+- 历史工作树已归档至 `E:\Projects\BrainCreator_Acceptance\2026-10-29`，含四个旧运行状态副本、补丁/未跟踪文件和三个通过 `git bundle verify` 的 bundle；3,098 项 SHA-256 逐项复核无不匹配。仍有 Node 进程，不能可靠证明其是否使用旧 Store，因此保留四个旧工作树及关联分支。已删除 PR #189 合并后的临时远端 `fixture`，本地 `fixture` 重建并跟踪 `origin/main`。
 - E（真实业务评估）和 F（结果复核与交付）等待新的正式需求文档与目标系统。旧 Test5 内容只作历史审计，不作为新需求、Oracle、Trial 输入或通过证据。未建立新 EvaluationTrial；真实业务完成度、自主完成度、恢复率和清理率均为**未测量**。
-- `fixture` 已推送供审查；只有用户批准 PR #189 当前具体 head SHA 后，才可快进并推送远端 `main`。PR 内容变化后须重新审查新 SHA。不自动发布 npm。
+- 用户已批准 PR #189 的 head SHA；GitHub 已合并，远端 `main` 已包含合并提交。本地 `main` 与 `fixture` 均同步到最新 `origin/main`。今后每次变更仍须开新 PR 并在批准其具体 SHA 后更新远端 `main`。不自动发布 npm。
 
 ## 历史复核记录（2026-10-29；基于旧基线，已被上方状态取代）
 
