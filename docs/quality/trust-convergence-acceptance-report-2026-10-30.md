@@ -40,6 +40,7 @@
 - `requirementSet_teo6nqbx` 仍为 draft/blocked：135 条款中覆盖 130 条，7 项待处理、1 项阻塞；11 个高严重度 Gap 中当前 7 个 open、4 个 resolved。已记录的四项处置分别为旧鉴权失败经新上下文验证关闭、正式需求版次标签仍待来源补足、职级分支留在分母并标未执行、HSSC 管理员支线排除执行但保留 outcome 在分母。Coverage Critic 与 Adjudicator 仍为 `needs-review`。
 - 当前 draft 有 191 个 TestIntent、155 个 BusinessScenario，但 191 条意图全为 draft，显式映射到固定 28 个 outcome 的数量为 0。188/191 条只有通用前置条件；135/191 条的预期结果与 objective 相同；162/191 条集中在宽泛模块。来源可追踪和草稿数量不能代替业务覆盖。
 - 对 155 个当前 BusinessScenario 的复核显示全部仍为 draft；177 条 `expectedBusinessOutcomes` 只有 115 个不同字符串，没有观察到与冻结 28 个 outcome ID 的显式一对一绑定。候选页面定位点方面，首页 11 个中 9 个、招聘需求列表 51 个中 25 个、Offer 列表 21 个中 17 个使用序号定位；即使定位置信度均高于 0.8，也不能把序号定位当作稳定 POM（页面对象模型）知识。
+- 本轮通过 Facade 执行 `bc_prepare action=assess-scenarios`，覆盖当前全部 155 个 BusinessScenario：155 blocked、0 pass、0 needs-review（trace `50f000a4-a68b-4a7e-a021-35e9e5277869`）。逐条原因显示 155/155 缺已确认 System Brain 快照和系统绑定，155/155 的自由文本结果不足以构成结构化 Oracle，140/155 没有场景级 TestDataProfile，37/155 缺已确认的流程、状态或决策模型。该结果是生成设计的准入评估，不是运行或 Trial 结果。
 - System Brain revision 8 仍是 candidate，最新 ChangeSet 为 needs-review，`workflowEvidence=false` 且没有结构化 `WorkflowModel`。局部截图观察已写入为 `knowledgeNode_e7758okl`，但这不确认完整流程、页面/流程唯一绑定或候选快照；仍需完整画布和版本证据。
 - 未配置独立业务后置状态校验器和 TestData Provider。项目的 EvaluationTrial 数量为 0。
 - 当前已连接的宿主 MCP 报告 package `2.1.1`、commit `1a964fc8acb27a564d2381818ca4da019b6b6fc4`、`dirty=true`，即运行的是合并后的 `main` 基线而非 PR #191 候选；候选 workspace 的来源身份 smoke 不能证明宿主 MCP 已更新。
