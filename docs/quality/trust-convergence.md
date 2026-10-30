@@ -22,6 +22,7 @@ This register tracks the six-package business-closure plan. Implementation, real
 - 候选最终验证已通过 `npm test`（143 个测试文件、1,237 项）、`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、`npm run verify:repository-hygiene`（380 个 tracked files）、包内容检查（178 项，1,557,909 bytes）和全新目录 package-install smoke。一次并行验证中的 Runner 和 MCP 超时失败经独立复跑定位，修正引用保留后，最终全量测试全绿。文档构建保留既有 chunk-size 提示。该候选未合并、未加载到此前运行中的 MCP；不代表当前运行时缺陷已修复。
 - 旧套件取消时没有生成报告是已发生的历史事实，候选修复不会补造报告。RequirementSet 仍为草稿，缺少获批基线、确认系统快照和可执行用例，不能启动 Trial。没有发生本轮业务写入、清理或 Trial；真实业务完成度、自主完成度、恢复率、清理率和错误判定率均为**未测量**。Codex 宿主按用户指示保持关闭。
 - [AI 需求文档编写标准](../zh-CN/guides/ai-requirement-authoring-standard.md) 已加入中文文档首页与导航；PR #191 的既有文档提交通过了 `npm run docs:build`。PR #190 已进入远端 `main`；后续变更遵循本地 `fixture` → 本地 `main` → 远端 `main` 的审查流程，不自动发布 npm。
+- 2026-10-30 用户已登录浏览器的招聘流程设计器标签显示画布；其活动链接使用双重编码 `title` 参数。Brain Creator 使用同一已验证 AuthProfile 在新隔离上下文回放该完整链接仍重定向至 `/dw/doesNotExist`（`exploration_mvd22tjs`，候选 PageModel `page_7zva18rt`），此前单重编码直达也失败。编码差异不足以解释全部现象；应用内 SPA/会话上下文依赖只是待验证假设。当前页可访问性树列出后续节点/条件，但截图只覆盖画布上部，页面未显示流程 ID/版本；Proc000019 v9 仍仅有用户确认。Facade 已记录 `knowledgeNode_n4ke4npq` 与 `knowledgeNode_i75p35hl`，均为系统观察，不是结构化 WorkflowModel、确认快照、POM 或业务 Oracle；未点击、暂存、发布或执行业务写入。
 
 ## 历史复核记录（2026-10-29；基于旧基线，已被上方状态取代）
 

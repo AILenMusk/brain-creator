@@ -35,6 +35,8 @@
 - 用户确认可以点开两条流程画布，并提供 `hc招聘需求流程` 的局部截图。截图保存在本工作区忽略目录 `.brain-creator/evidence/manual-system-observations/test5-ghr/2026-10-30-hc-recruitment-flow-top.png`，SHA-256 为 `725111814163B913AA8EFDD82F04B117FC37641FA6F6621D31C0ACEDB27CB476`；本轮已通过 Brain Creator Facade 记为 System Brain 观察 `knowledgeNode_e7758okl`，confidence `0.55`，来源绑定截图哈希。可见起点分为 `海外`（优先级 1，画面显示条件 `${overseaEstablishment = = 1}`）和 `国内`（默认、优先级 2）；截图内海外分支进入 HRBP，国内分支绕过 HRBP，两路汇合至 HRBP_TA 对接人。截图只覆盖画布上半段，且未显示流程 ID/版本号；观察记录明确保留该限制，不能确认完整路线、版本绑定或业务 Oracle，也没有生成执行期定位点。
 - 此截图与正式附件中的两张路线图需要分层比较：业务提供图按海外/国内分支；附件“流程配置”图按工作地区区分；Test5 截图又显示 `overseaEstablishment` 条件。前半段拓扑部分相似，但判定字段并不相同。用户先前确认 Proc000019 v9 是当前生效版本；本截图没有显示其 ID/版本，仍需完整画布导出或可核对的版本页来绑定。旧的自动化探索仍只获得错误页，System Brain 目前为 0 条 workflow；不以手工截图自动晋升其候选快照。
 
+- 2026-10-30 路由复核补充：在用户已登录浏览器当前活动标签中，招聘流程设计器画布可见，活动链接的 `title` 参数为双重 URL 编码；同一完整链接由已验证 AuthProfile 在新隔离上下文直达，仍跳转到 `/dw/doesNotExist`（`exploration_mvd22tjs`、候选 PageModel `page_7zva18rt`）。此前单重编码链接也失败，因此编码差异不足以解释全部问题；当前只能推测页面依赖已建立的应用内 SPA/会话状态，具体机制未证实。当前页可见完整节点/条件标签，但视口截图仅覆盖上部、页面未显示流程 ID/版本；用户另行确认 Proc000019 v9 为当前生效版本。通过 Facade 记录了两条系统观察 `knowledgeNode_n4ke4npq`、`knowledgeNode_i75p35hl`；不据此确认 System Brain 快照、结构化 WorkflowModel、执行期 POM 或业务 Oracle。
+
 ### Trial 准入阻塞
 
 - `requirementSet_teo6nqbx` 仍为 draft/blocked：135 条款中覆盖 130 条，7 项待处理、1 项阻塞；11 个高严重度 Gap 中当前 7 个 open、4 个 resolved。已记录的四项处置分别为旧鉴权失败经新上下文验证关闭、正式需求版次标签仍待来源补足、职级分支留在分母并标未执行、HSSC 管理员支线排除执行但保留 outcome 在分母。Coverage Critic 与 Adjudicator 仍为 `needs-review`。
