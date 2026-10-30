@@ -5,7 +5,7 @@ This register tracks the six-package business-closure plan. Implementation, real
 ## 当前实施状态（2026-10-30，基于新计划）
 
 - 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)；本轮结论和逐项证据见[2026-10-30 验收报告](./trust-convergence-acceptance-report-2026-10-30.md)。PR #190 的已合并基线 `origin/main` 为 `1a964fc8acb27a564d2381818ca4da019b6b6fc4`，本地 `main` 与 `origin/main` 一致。PR #191 在 `fixture` 上包含 Store 修复候选 `a9cacd6` 及本轮验收文档更新；确切审查 head 以 PR 当前元数据为准，未批准合入 `main`。本轮补充检查针对该候选代码和随后仅文档的变更执行，不等同于 `main` 的新验收，也未推送 `main`。
-- 已验收实现完成度仍为 **4/6**（A–D 工程交付包；E/F 未通过最终验收）。2026-10-30 在 fixture 候选上复跑 `npm test` 为 143 个文件/1,237 项通过，`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（178 项，1,557,909 bytes）、全新临时目录包安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke、MCP 来源身份/工作区隔离及仓库卫生（380 个 tracked files）均通过。文档构建保留既有 chunk-size 提示；工程与 synthetic（合成）结果不计真实业务结果。
+- 已验收实现完成度仍为 **4/6**（A–D 工程交付包；E/F 未通过最终验收）。2026-10-30 在 fixture 候选上复跑 `npm test` 为 143 个文件/1,237 项通过，`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（178 项）、全新临时目录包安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke、MCP 来源身份/工作区隔离及仓库卫生（381 个 tracked files）均通过。文档构建保留既有 chunk-size 提示；工程与 synthetic（合成）结果不计真实业务结果。
 - 知识驱动 POM 的反例测试覆盖未确认快照、路由变化、缺失/歧义控件和未登记扩展；订单夹具覆盖角色交接、创建/提交/审批/关闭、实体复用及重启后不重复提交。MCP 入口已从约 14,000 行拆至 5,759 行，并形成需求工作流、状态/审核投影、参数解析与浏览器运行模块；Handler 仍过大，不称为薄适配层。
 - PR #187/#188 已留结案说明并关闭，均未合并；PR #189 已合并。通用修复已选择性移植，Test5 专属资料未进入本轮。npm 包内容检查确认排除 `docs/quality/`。
 - 历史工作树已归档至 `E:\Projects\BrainCreator_Acceptance\2026-10-29`，含四个旧运行状态副本、补丁/未跟踪文件和三个通过 `git bundle verify` 的 bundle；3,098 项 SHA-256 逐项复核无不匹配。仍有 Node 进程，不能可靠证明其是否使用旧 Store，因此保留四个旧工作树及关联分支。已删除 PR #189 合并后的临时远端 `fixture`，本地 `fixture` 重建并跟踪 `origin/main`。

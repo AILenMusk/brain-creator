@@ -53,7 +53,7 @@
 | `npx tsc --noEmit` | 通过 |
 | `npm run build` | 通过 |
 | `npm run docs:build` | 通过；保留既有大 chunk 警告 |
-| `npm run verify:package-contents` | 通过：178 项，1,557,910 bytes |
+| `npm run verify:package-contents` | 通过：178 项；包体积随构建身份内容变化，不作为能力指标 |
 | `npm run verify:package-install` | 通过：本地 tarball 安装、CLI/MCP 启动及恢复 smoke；临时目录已移除 |
 | `npm run verify:order-fixture` | 通过：7/7，覆盖创建/提交、角色交接、拒绝与金额分支、跨用例实体复用、浏览器重启后先核状态且不重复提交、通用性反例 |
 | `npm run verify:host-agent-document-suite` | 通过：本地合成服务器上的 TC-001、TC-002，使用 Playwright Chromium |
