@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parseCaseSource } from "../caseSource/parser.js";
 import { RunLedgerService } from "../knowledge/runLedger.js";
+import { ShardedFileBrainCreatorRepository } from "../domain/repository.js";
+import { resolveArtifactRunLayout } from "../storage/artifactWorkspace.js";
 import {
   createBrainCreatorMcpContext,
   handleBrainCreatorTool,
@@ -3853,8 +3855,9 @@ describe("handleBrainCreatorTool", () => {
 
   it("cancels an existing document suite before auth or bridge checks", async () => {
     const workDir = await tempDir();
+    const storeDir = join(workDir, ".brain-creator", "store");
     const context = createBrainCreatorMcpContext({
-      dataFilePath: join(workDir, "assets.json"),
+      storeDirPath: storeDir,
       workDir,
       agentBridge: Object.assign(
         async () => ({ exitCode: 1, stdout: "", stderr: "bridge unavailable" }),
@@ -3889,6 +3892,20 @@ describe("handleBrainCreatorTool", () => {
       selectedCaseNos: ["TC-001"],
       status: "waiting-for-agent"
     });
+    context.service.recordCaseSuiteRun({
+      systemId: system.id,
+      suiteId: suite.id,
+      sourceId: source.id,
+      status: "blocked",
+      total: 1,
+      passed: 0,
+      failed: 0,
+      blocked: 1,
+      caseResults: [],
+      artifactPaths: ["F:\\legacy-evidence\\old-run.png"],
+      bugReportIds: [],
+      gapIds: []
+    });
     context.service.createAgentTask({
       id: "agentTask_legacy_suite",
       systemId: system.id,
@@ -3905,6 +3922,25 @@ describe("handleBrainCreatorTool", () => {
         title: "Legacy case"
       }
     });
+
+    // Simulate a CLI process saving fresh auth metadata after this MCP context
+    // loaded its snapshot but before the stale context cancels the suite.
+    const cliRepository = new ShardedFileBrainCreatorRepository(
+      storeDir,
+      join(workDir, ".brain-creator", "local-assets.json")
+    );
+    cliRepository.authProfiles.push({
+      id: "auth-captured-by-cli",
+      projectId: system.id,
+      role: "operator",
+      env: "test",
+      loginMethod: "storageState",
+      status: "verified",
+      storageStatePath: ".brain-creator/auth/system/storage-state.json",
+      createdAt: "2026-10-30T00:00:00.000Z",
+      updatedAt: "2026-10-30T00:00:00.000Z"
+    } as never);
+    cliRepository.persist();
 
     const result = dataOf(
       await handleBrainCreatorTool(context, "bc_run", {
@@ -3925,6 +3961,11 @@ describe("handleBrainCreatorTool", () => {
       })
     );
     expect(await readFile(result.reportPath, "utf8")).toContain("Case source could not be read");
+    expect(await readFile(result.reportPath, "utf8")).toContain("historical artifact path(s)");
+    context.repository.reload();
+    expect(context.repository.authProfiles).toEqual([
+      expect.objectContaining({ id: "auth-captured-by-cli", status: "verified" })
+    ]);
     expect(context.service.getCaseSuite(suite.id).status).toBe("cancelled");
     expect(context.service.listAgentTasks(system.id)).toEqual([
       expect.objectContaining({ id: "agentTask_legacy_suite", status: "cancelled" })
@@ -3936,7 +3977,39 @@ describe("handleBrainCreatorTool", () => {
         outcome: "cancelled"
       })
     );
-  });
+
+    const reportFailureSuite = context.service.createCaseSuite({
+      systemId: system.id,
+      sourceId: source.id,
+      totalCases: 1,
+      selectedCaseNos: ["TC-001"],
+      status: "waiting-for-agent"
+    });
+    const reportLayout = resolveArtifactRunLayout({
+      workDir,
+      systemKey: system.name,
+      requirementKey: `document-${source.id}`,
+      suiteRunId: reportFailureSuite.id
+    });
+    await mkdir(dirname(reportLayout.reportDir), { recursive: true });
+    await writeFile(reportLayout.reportDir, "block report directory creation", "utf8");
+    const cancelledWithoutReport = dataOf(
+      await handleBrainCreatorTool(context, "bc_run", {
+        mode: "case-source-suite",
+        systemId: system.id,
+        suiteId: reportFailureSuite.id,
+        suiteAction: "cancel",
+        confirm: true
+      })
+    );
+    expect(cancelledWithoutReport).toEqual(expect.objectContaining({
+      status: "cancelled",
+      reportWarning: expect.any(String),
+      suite: expect.objectContaining({ id: reportFailureSuite.id, status: "cancelled" })
+    }));
+    context.repository.reload();
+    expect(context.service.getCaseSuite(reportFailureSuite.id).status).toBe("cancelled");
+  }, 15_000);
 
   it("blocks a confirmed document suite while manual authentication is pending", async () => {
     const workDir = await tempDir();

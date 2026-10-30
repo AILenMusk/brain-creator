@@ -86,5 +86,14 @@ describe("shared envelope helpers", () => {
         })
       })
     );
+    expect(errorEnvelope(new Error("Brain Creator sharded store write conflict in authProfiles: auth-1"))).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "BC_STORE_CONFLICT",
+          nextAction: "reload-store-and-review",
+          retryable: false
+        })
+      })
+    );
   });
 });

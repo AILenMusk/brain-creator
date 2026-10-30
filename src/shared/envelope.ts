@@ -148,6 +148,15 @@ function errorDetail(error: unknown, message: string): BrainCreatorErrorDetail {
       true
     );
   }
+  if (/sharded store write conflict/i.test(message)) {
+    return knownError(
+      "BC_STORE_CONFLICT",
+      message,
+      "Another Brain Creator process changed the same record. Reload the Store and review the current state before retrying.",
+      "另一个 Brain Creator 进程修改了同一条记录。请先重新加载 Store 并核对当前状态，再决定是否重试。",
+      "reload-store-and-review"
+    );
+  }
   if (/outside.*workspace|must stay inside.*workspace/i.test(message)) {
     return knownError(
       "BC_PATH_OUTSIDE_WORKSPACE",

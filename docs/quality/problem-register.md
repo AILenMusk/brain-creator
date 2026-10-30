@@ -27,7 +27,7 @@ production acceptance conditions are closed.
 | A6 | Gaps had no usable lifecycle | resolved | PR A | Resolve, dismiss, and reopen require a note and evidence references; `service.test.ts`, `controlPlane.test.ts` |
 | A7 | Errors described state but not recovery | partial | PR A/PR C | Facade and execution auth errors now return stable codes, bilingual messages, nextAction, retryable, and UUID trace; Reporter-missing, Bridge-timeout, Bridge-unavailable, store-lock, workspace-path, and execution-budget failures now have stable recovery codes; broader Harness error catalog remains |
 | A8 | Upgrade and migration had no safe path | resolved | PR B/PR F/L3 PR A/PR H | Schema 16 migration creates a timestamped backup; schema 21 migration backs up schema 19/20 and falls back on writer-lock failure; validation, index rebuild, complete Suite export, artifact dry-run/apply/hash validation/rollback, and explicit retention are covered |
-| A9 | A stale MCP snapshot overwrote a newer CLI authentication update; suite cancellation committed before its out-of-workspace report failed | open | PR A/PR D | Serialize or compare generations across Store writers so stale full snapshots cannot overwrite newer records; make suite cancellation and report export failure-safe, with report paths constrained to the active workspace. Add a cross-process regression that interleaves CLI auth capture, Facade suite cancellation, and Store reload; assert the verified AuthProfile and Run Ledger remain intact and a safe report is available |
+| A9 | A stale MCP snapshot overwrote a newer CLI authentication update; suite cancellation committed before its out-of-workspace report failed | partial | PR A/PR D | Candidate code uses a per-record three-way merge under the Store writer lock, rejects conflicting edits to the same record, and journals direct persists as well as transactions. Regressions interleave two repository instances, preserve a verified AuthProfile through stale Facade cancellation and reload, and omit historical artifacts outside the active workspace while still returning the cancellation. Targeted tests and typecheck pass; formal closure requires the candidate to merge and the active MCP runtime identity to confirm the fix is loaded |
 | B1 | SPA exploration missed navigation transitions | partial | PR E | Link navigation and observed safe-interaction URL changes now create queued targets and System Brain navigation edges; state-only changes are explicitly classified as `state` transitions, while full remount and cross-surface recovery remain |
 | B2 | Shared labels produced ambiguous page selection | resolved | PR A/PR E | Confirmed page binding exists; candidate score breakdown and matched evidence are returned for ambiguity diagnostics |
 | B3 | Shadow DOM actions were not reliably reachable | resolved | PR E | Open Shadow DOM, Wujie-like open containers, and same-origin iframe candidates now carry surface-scoped evidence, safe actions, state changes, and System Brain transitions; same-URL iframe candidates now also carry a stable frame ordinal; closed or cross-origin surfaces remain observational |
@@ -73,10 +73,10 @@ production acceptance conditions are closed.
 | Status | Count |
 |---|---:|
 | resolved | 16 |
-| partial | 25 |
+| partial | 26 |
 | open | 0 |
 | deferred | 1 |
-| total | 42 |
+| total | 43 |
 
 This register closes only through its stated acceptance checks. A passing feature test does not close broader evidence, security, or reliability work assigned to a later PR.
 
