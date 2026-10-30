@@ -1,6 +1,6 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type {
   AttachmentAnalysis,
@@ -112,6 +112,7 @@ import { evaluateConformance } from "../execution/conformance.js";
 import { buildCaseDependencyGraph } from "./caseDependencyGraph.js";
 import {
   renderRequirementAnalysisReport,
+  renderDraftTestDesignProjection,
   renderTestIntentReport
 } from "./reportWriter.js";
 import { buildEvidenceCatalog, renderEvidenceIndex } from "./evidenceCatalog.js";
@@ -380,13 +381,18 @@ export class KnowledgeService {
         testIntents: existingIntents,
         dataProfiles: this.repository.testDataProfiles.filter((item) => item.requirementSetId === requirementSetId)
       });
-      requirementSet.evaluationGate ??= buildRequirementEvaluationGate(
+      const refreshedEvaluationGate = buildRequirementEvaluationGate(
         analysis,
         reusedEvaluation,
         requirementGaps,
         existingCoverageProfile,
         criticalAttachments
       );
+      requirementSet.evaluationGate = preserveConfirmedRequirementEvalActions(
+        requirementSet.evaluationGate,
+        refreshedEvaluationGate
+      );
+      requirementSet.updatedAt = requirementSet.evaluationGate.generatedAt;
       this.repository.persist();
       const coveredClauseSourceRefs = [
         ...new Set(existingIntents.flatMap((item) => item.requirementRefs))
@@ -1580,6 +1586,324 @@ export class KnowledgeService {
     return this.repository.testIntents.filter((item) => item.knowledgeProjectId === projectId);
   }
 
+  async refreshTestDesignProjection(input: {
+    knowledgeProjectId: string;
+    requirementSetId: string;
+  }) {
+    const requirementSet = this.getRequirementSet(input.requirementSetId);
+    if (requirementSet.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Requirement set does not belong to the selected knowledge project");
+    }
+    if (requirementSet.status !== "draft") {
+      throw new Error("Only a draft RequirementSet can refresh its current draft projection");
+    }
+    const project = this.getProject(input.knowledgeProjectId);
+    const source = this.getRequirementSource(requirementSet.sourceId);
+    const intents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const scenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (intents.length === 0 || scenarios.length === 0) {
+      throw new Error("Draft test design must contain TestIntents and BusinessScenarios");
+    }
+
+    const draftHash = hashTestDesignDraft(intents, scenarios);
+    const revisionEvent = [...this.repository.brainEvents].reverse().find((event) =>
+      event.type === "draft-test-design-revised" && event.refs.includes(requirementSet.id)
+    );
+    const projectionPath = join(
+      this.knowledgeDir,
+      project.key,
+      "requirements",
+      requirementSet.id,
+      "draft-test-design-current.md"
+    );
+    let currentProjection: string | undefined;
+    try {
+      currentProjection = await readFile(projectionPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    let existingGeneratedAt: string | undefined;
+    const existingGeneratedAtJson = currentProjection?.match(/^generated_at: ("(?:[^"\\]|\\.)*")$/m)?.[1];
+    if (existingGeneratedAtJson) {
+      try {
+        existingGeneratedAt = JSON.parse(existingGeneratedAtJson) as string;
+      } catch {
+        existingGeneratedAt = undefined;
+      }
+    }
+    if (currentProjection && existingGeneratedAt) {
+      const existingContent = renderDraftTestDesignProjection({
+        title: requirementSet.title,
+        requirementSetId: requirementSet.id,
+        requirementSetStatus: requirementSet.status,
+        sourceId: source.id,
+        sourceContentHash: source.contentHash,
+        draftHash,
+        generatedAt: existingGeneratedAt,
+        lastRevisionEvent: revisionEvent
+          ? { id: revisionEvent.id, createdAt: revisionEvent.createdAt, message: revisionEvent.message }
+          : undefined,
+        intents,
+        scenarios
+      });
+      if (currentProjection === existingContent) {
+        return {
+          status: "current" as const,
+          requirementSetId: requirementSet.id,
+          knowledgeProjectId: project.id,
+          counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+          draftHash,
+          projectionPath,
+          projectionHash: createHash("sha256").update(currentProjection, "utf8").digest("hex"),
+          storeChanged: false
+        };
+      }
+    }
+
+    const content = renderDraftTestDesignProjection({
+      title: requirementSet.title,
+      requirementSetId: requirementSet.id,
+      requirementSetStatus: requirementSet.status,
+      sourceId: source.id,
+      sourceContentHash: source.contentHash,
+      draftHash,
+      generatedAt: timestamp(),
+      lastRevisionEvent: revisionEvent
+        ? { id: revisionEvent.id, createdAt: revisionEvent.createdAt, message: revisionEvent.message }
+        : undefined,
+      intents,
+      scenarios
+    });
+    const projectionHash = createHash("sha256").update(content, "utf8").digest("hex");
+    await mkdir(dirname(projectionPath), { recursive: true });
+    const temporaryPath = `${projectionPath}.${process.pid}.${id("projection")}.tmp`;
+    try {
+      await writeFile(temporaryPath, content, "utf8");
+      await rename(temporaryPath, projectionPath);
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+    return {
+      status: "refreshed" as const,
+      requirementSetId: requirementSet.id,
+      knowledgeProjectId: project.id,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      draftHash,
+      projectionPath,
+      projectionHash,
+      storeChanged: false
+    };
+  }
+
+  async reviseTestDesignDraft(input: {
+    knowledgeProjectId: string;
+    requirementSetId: string;
+    expectedDraftHash?: string;
+    confirm: boolean;
+    confirmationNote?: string;
+    testIntentDraftUpdates: Array<Omit<Pick<
+      TestIntent,
+      "id" | "businessOutcomeId" | "title" | "objective" | "preconditions" | "expectedResults"
+    >, "businessOutcomeId"> & { businessOutcomeId: string | null }>;
+    businessScenarioDraftUpdates: Array<Pick<
+      BusinessScenario,
+      | "id"
+      | "title"
+      | "objective"
+      | "family"
+      | "actors"
+      | "preconditions"
+      | "testDataNeeds"
+      | "expectedBusinessOutcomes"
+      | "risk"
+    >>;
+  }) {
+    const requirementSet = this.getRequirementSet(input.requirementSetId);
+    if (requirementSet.knowledgeProjectId !== input.knowledgeProjectId) {
+      throw new Error("Requirement set does not belong to the selected knowledge project");
+    }
+    if (requirementSet.status !== "draft") {
+      throw new Error("Only a draft RequirementSet can receive draft test-design revisions");
+    }
+
+    const intents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const scenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (intents.length === 0 || scenarios.length === 0) {
+      throw new Error("Draft test design must contain TestIntents and BusinessScenarios");
+    }
+    if (intents.some((item) => item.status !== "draft") || scenarios.some((item) => item.status !== "draft")) {
+      throw new Error("Every TestIntent and BusinessScenario in the selected draft must remain draft");
+    }
+
+    const intentUpdates = validateExactDraftRevisionIds(
+      "TestIntent",
+      intents.map((item) => item.id),
+      input.testIntentDraftUpdates
+    );
+    const scenarioUpdates = validateExactDraftRevisionIds(
+      "BusinessScenario",
+      scenarios.map((item) => item.id),
+      input.businessScenarioDraftUpdates
+    );
+    for (const update of input.testIntentDraftUpdates) {
+      if (update.businessOutcomeId !== null && !update.businessOutcomeId.trim()) {
+        throw new Error(`TestIntent ${update.id} has an empty businessOutcomeId`);
+      }
+      if (!update.title.trim() || !update.objective.trim() ||
+        update.preconditions.length === 0 || update.preconditions.some((value) => !value.trim()) ||
+        update.expectedResults.length === 0 || update.expectedResults.some((value) => !value.trim())) {
+        throw new Error(`TestIntent ${update.id} contains an empty required draft field`);
+      }
+    }
+    const outcomeIdOwners = new Map<string, string>();
+    for (const update of input.testIntentDraftUpdates) {
+      const outcomeId = update.businessOutcomeId?.trim();
+      if (!outcomeId) continue;
+      const priorOwner = outcomeIdOwners.get(outcomeId);
+      if (priorOwner) {
+        throw new Error(`Business outcome ${outcomeId} is assigned to multiple TestIntents (${priorOwner}, ${update.id})`);
+      }
+      outcomeIdOwners.set(outcomeId, update.id);
+    }
+    for (const update of input.businessScenarioDraftUpdates) {
+      if (!update.title.trim() || !update.objective.trim() || update.expectedBusinessOutcomes.length === 0 ||
+        [...update.actors, ...update.preconditions, ...update.testDataNeeds, ...update.expectedBusinessOutcomes]
+          .some((value) => !value.trim())) {
+        throw new Error(`BusinessScenario ${update.id} contains an empty required draft field`);
+      }
+    }
+    const knownIntentIds = new Set(intents.map((item) => item.id));
+    for (const scenario of scenarios) {
+      const scenarioIntentIds = scenario.testIntentIds ?? [];
+      if (new Set(scenarioIntentIds).size !== scenarioIntentIds.length) {
+        throw new Error(`BusinessScenario ${scenario.id} contains duplicate TestIntent links`);
+      }
+      if (scenarioIntentIds.some((intentId) => !knownIntentIds.has(intentId))) {
+        throw new Error(`BusinessScenario ${scenario.id} links to a TestIntent outside the selected RequirementSet`);
+      }
+    }
+    const intentMemberships = new Map<string, Set<string>>();
+    for (const scenario of scenarios) {
+      for (const intentId of scenario.testIntentIds ?? []) {
+        const memberships = intentMemberships.get(intentId) ?? new Set<string>();
+        memberships.add(scenario.id);
+        intentMemberships.set(intentId, memberships);
+      }
+    }
+    for (const intent of intents) {
+      const declaredIds = intent.scenarioIds ?? [];
+      const declared = new Set(declaredIds);
+      if (declared.size !== declaredIds.length) {
+        throw new Error(`TestIntent ${intent.id} contains duplicate BusinessScenario links`);
+      }
+      const linked = intentMemberships.get(intent.id) ?? new Set<string>();
+      if (declared.size !== linked.size || [...declared].some((scenarioId) => !linked.has(scenarioId))) {
+        throw new Error(`TestIntent ${intent.id} and BusinessScenario membership disagree`);
+      }
+    }
+
+    const currentDraftHash = hashTestDesignDraft(intents, scenarios);
+    if (input.expectedDraftHash && input.expectedDraftHash !== currentDraftHash) {
+      throw new Error("Draft test-design assets changed after preview; read them again and prepare a new revision");
+    }
+    const preview = {
+      status: "preview" as const,
+      requirementSetId: requirementSet.id,
+      knowledgeProjectId: requirementSet.knowledgeProjectId,
+      currentDraftHash,
+      counts: { testIntents: intents.length, businessScenarios: scenarios.length },
+      testIntentIds: intents.map((item) => item.id),
+      businessScenarioIds: scenarios.map((item) => item.id),
+      requestedTestIntentUpdates: intentUpdates.size,
+      requestedBusinessScenarioUpdates: scenarioUpdates.size,
+      requiresConfirmation: true,
+      nextAction: "Review the exact draft revisions, then repeat with confirm=true, expectedDraftHash, and the user's confirmation note. This action does not approve the RequirementSet or start execution."
+    };
+    if (!input.confirm) return preview;
+    if (!input.expectedDraftHash) throw new Error("expectedDraftHash from the latest preview is required to confirm a draft revision");
+    const confirmationNote = input.confirmationNote?.trim();
+    if (!confirmationNote) throw new Error("A non-empty confirmationNote is required to revise draft test-design assets");
+
+    const updatedAt = timestamp();
+    this.repository.transaction(() => {
+      for (const intent of intents) {
+        const update = intentUpdates.get(intent.id)!;
+        if (update.businessOutcomeId === null) delete intent.businessOutcomeId;
+        else intent.businessOutcomeId = update.businessOutcomeId.trim();
+        intent.title = update.title.trim();
+        intent.objective = update.objective.trim();
+        intent.preconditions = update.preconditions.map((value) => value.trim());
+        intent.expectedResults = update.expectedResults.map((value) => value.trim());
+        intent.updatedAt = updatedAt;
+      }
+      for (const scenario of scenarios) {
+        const update = scenarioUpdates.get(scenario.id)!;
+        scenario.title = update.title.trim();
+        scenario.objective = update.objective.trim();
+        scenario.family = update.family;
+        scenario.actors = update.actors.map((value) => value.trim());
+        scenario.preconditions = update.preconditions.map((value) => value.trim());
+        scenario.testDataNeeds = update.testDataNeeds.map((value) => value.trim());
+        scenario.expectedBusinessOutcomes = update.expectedBusinessOutcomes.map((value) => value.trim());
+        scenario.risk = update.risk;
+      }
+      requirementSet.updatedAt = updatedAt;
+      const sequence = Math.max(0, ...this.repository.brainEvents.map((event) => event.sequence)) + 1;
+      this.repository.brainEvents.push({
+        id: id("brainEvent"),
+        sequence,
+        brain: "testcase",
+        type: "draft-test-design-revised",
+        status: "passed",
+        message: `Updated ${intents.length} draft TestIntents and ${scenarios.length} draft BusinessScenarios through the controlled Facade. Confirmation note: ${confirmationNote}. The RequirementSet remains draft.`,
+        traceId: id("trace"),
+        refs: [requirementSet.id, ...intents.map((item) => item.id), ...scenarios.map((item) => item.id)],
+        createdAt: updatedAt
+      });
+    });
+
+    const updatedIntents = this.repository.testIntents
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const updatedScenarios = this.repository.businessScenarios
+      .filter((item) => item.requirementSetId === requirementSet.id && item.knowledgeProjectId === input.knowledgeProjectId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    let projection: Awaited<ReturnType<KnowledgeService["refreshTestDesignProjection"]>> | { status: "failed"; error: string };
+    try {
+      projection = await this.refreshTestDesignProjection({
+        knowledgeProjectId: input.knowledgeProjectId,
+        requirementSetId: requirementSet.id
+      });
+    } catch (error) {
+      projection = {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Unknown projection refresh error"
+      };
+    }
+    return {
+      status: "revised" as const,
+      requirementSetId: requirementSet.id,
+      requirementSetStatus: requirementSet.status,
+      counts: { testIntents: updatedIntents.length, businessScenarios: updatedScenarios.length },
+      currentDraftHash,
+      updatedDraftHash: hashTestDesignDraft(updatedIntents, updatedScenarios),
+      projection,
+      testIntents: updatedIntents,
+      businessScenarios: updatedScenarios,
+      nextAction: projection.status === "failed"
+        ? "The draft assets were revised, but the current projection could not be refreshed. Call refresh-test-design-projection and verify the returned projection hash."
+        : "Review the persisted draft assets and current projection. Keep the RequirementSet draft until source fidelity, TestIntent and BusinessScenario quality, and the fixed outcome mapping are reviewed."
+    };
+  }
+
   listBusinessScenarios(input: {
     knowledgeProjectId: string;
     requirementSetId?: string;
@@ -2611,13 +2935,14 @@ export class KnowledgeService {
     for (const draft of systemObservationDrafts(sourceBrain)) {
       this.upsertSystemObservation(project, systemId, draft);
     }
-    this.repository.persist();
     const brain = buildSystemBrain(this.repository, projectId, systemId);
     this.indexSystemBrainSemantics(brain, projectId, systemId);
     this.semanticSpine?.linkRequirementActionsToSystem({
       knowledgeProjectId: projectId,
-      systemId
+      systemId,
+      persist: false
     });
+    this.repository.persist();
     const snapshotResult = this.systemBrainSnapshots?.capture({
       knowledgeProjectId: projectId,
       systemId,
@@ -2786,7 +3111,8 @@ export class KnowledgeService {
         knowledgeProjectId,
         systemId,
         sourceRefs: page.sourceRefs,
-        confidence: page.probeIssueCount > 0 ? 0.7 : 0.95
+        confidence: page.probeIssueCount > 0 ? 0.7 : 0.95,
+        persist: false
       });
       for (const locator of page.locators) {
         const label = locator.name || locator.text || locator.role;
@@ -2798,7 +3124,8 @@ export class KnowledgeService {
           knowledgeProjectId,
           systemId,
           sourceRefs: [...page.sourceRefs, `locator-point:${locator.id}`],
-          confidence: locator.confidence
+          confidence: locator.confidence,
+          persist: false
         });
       }
       for (const transition of brain.stateTransitions.filter(
@@ -2813,14 +3140,16 @@ export class KnowledgeService {
           knowledgeProjectId,
           systemId,
           sourceRefs: transition.sourceRefs,
-          confidence: 0.95
+          confidence: 0.95,
+          persist: false
         });
         this.semanticSpine.linkConcepts({
           fromConceptId: pageConcept.id,
           toConceptId: actionConcept.id,
           relation: "supports-action",
           sourceRefs: transition.sourceRefs,
-          confidence: 0.9
+          confidence: 0.9,
+          persist: false
         });
       }
     }
@@ -3586,6 +3915,54 @@ function buildRequirementEvaluationGate(
   };
 }
 
+function preserveConfirmedRequirementEvalActions(
+  previous: RequirementEvaluationGate | undefined,
+  next: RequirementEvaluationGate
+): RequirementEvaluationGate {
+  if (!previous) return next;
+
+  const actionIdentity = (action: RequirementEvalAction) =>
+    JSON.stringify([
+      action.kind,
+      action.message,
+      [...new Set(action.sourceRefs)].sort()
+    ]);
+  const previouslyConfirmed = new Map(
+    previous.actions
+      .filter((action) => action.status === "confirmed")
+      .map((action) => [actionIdentity(action), action] as const)
+  );
+  const actions = next.actions.map((action) => {
+    const prior = previouslyConfirmed.get(actionIdentity(action));
+    if (!prior) return action;
+    return {
+      ...action,
+      status: "confirmed" as const,
+      confirmedAt: prior.confirmedAt,
+      confirmedBy: prior.confirmedBy,
+      confirmationNote: prior.confirmationNote,
+      resolutionNodeId: prior.resolutionNodeId
+    };
+  });
+  const blocked = actions.some((action) => action.status === "blocked");
+  const pending = actions.some((action) => action.status === "pending");
+  const fullyConfirmed = actions.length > 0 && !blocked && !pending;
+  const status = next.verdict === "blocked" || blocked
+    ? "blocked"
+    : pending
+      ? "needs-confirmation"
+      : fullyConfirmed
+        ? "confirmed"
+        : "passed";
+
+  return {
+    ...next,
+    actions,
+    status,
+    ...(fullyConfirmed && previous.confirmedAt ? { confirmedAt: previous.confirmedAt } : {})
+  };
+}
+
 function requirementDesignInputHash(
   requirementSet: RequirementSet,
   analyses: AttachmentAnalysis[],
@@ -3850,6 +4227,33 @@ function executableCaseCompileKey(
 
 function timestamp() {
   return new Date().toISOString();
+}
+
+function validateExactDraftRevisionIds<T extends { id: string }>(
+  assetType: "TestIntent" | "BusinessScenario",
+  existingIds: string[],
+  updates: T[]
+) {
+  const existing = new Set(existingIds);
+  const updateIds = updates.map((item) => item.id);
+  const updateIdSet = new Set(updateIds);
+  if (updateIdSet.size !== updateIds.length) {
+    throw new Error(`${assetType} draft revision contains duplicate IDs`);
+  }
+  const missingIds = [...existing].filter((itemId) => !updateIdSet.has(itemId));
+  const foreignIds = [...updateIdSet].filter((itemId) => !existing.has(itemId));
+  if (missingIds.length > 0 || foreignIds.length > 0) {
+    throw new Error(
+      `${assetType} draft revision must update every existing asset exactly once (missing=${missingIds.length}, foreign=${foreignIds.length})`
+    );
+  }
+  return new Map(updates.map((item) => [item.id, item]));
+}
+
+function hashTestDesignDraft(intents: TestIntent[], scenarios: BusinessScenario[]) {
+  return createHash("sha256")
+    .update(stableJson({ intents, scenarios }))
+    .digest("hex");
 }
 
 function normalizeRequirementAttachments(

@@ -50,6 +50,8 @@ If the host connector already downloaded a Feishu attachment, pass it in the sam
 
 Run requirement understanding with `bc_prepare action=generate-analysis provider=host-agent`. The response advances through Document Mapper, Clause Analyst, Business Modeler, and an isolated Coverage Critic. Execute each returned prompt and repeat the same action with `taskId` plus the JSON `analysisPackage`. The Critic sees source evidence and structured stage output, not the designer conversation. After completion, call `generate-test-design` with the same provider. One structured retry is allowed; a second failure is persisted as a recoverable Gap. A Host Skill may seed mapping and clauses, but it never skips modeling or Critic review.
 
+For large inputs, a work package can reference a complete source or prior-stage JSON file in the workspace instead of placing all content inline. The host must have access to those files, verify their stated SHA-256 values, read them in bounded ranges, and retain the exact source anchors. Brain Creator checks the pinned source and prior-stage snapshots again when output is submitted; changed or unavailable inputs stop the task rather than being treated as complete.
+
 After confirmation, run `generate-test-design` again. The design fingerprint includes confirmed attachment analyses, so an earlier draft is rebuilt with WorkflowModel/StateMachineModel clauses, transition tests, negative state tests, Actor Journeys, and dimension coverage. Do not approve a baseline while `unconfirmed-attachment` or `missing-process-coverage` is blocked.
 
 ### 3. Analyze And Design
@@ -64,6 +66,10 @@ The Agent calls `bc_prepare action=generate-test-design` and presents:
 - parsing, clarification, or connector Gaps.
 
 Builtin policies work without external Skills. When `RequirementAnalysis.skill` or `TestCaseDesign.skill` is available, the Agent may use it as an enhancement, but the output still passes Brain Creator schema, Eval, source-trace, and approval gates.
+
+When a user asks to revise an existing design, use `bc_prepare action=revise-test-design-draft` only for a `draft` RequirementSet. Include a complete update for every existing TestIntent and BusinessScenario in that set; every TestIntent update must include `businessOutcomeId` as a reviewed stable key or `null` when it is not mapped. Do not guess the outcome crosswalk. The action rejects missing, duplicate, or foreign IDs and does not accept membership or status changes. First call with `confirm=false`, review the returned `currentDraftHash` and target counts, then submit the same complete update with `confirm=true`, that hash, and a non-empty `confirmationNote`. The Facade preserves existing asset IDs, source/model references, intent-to-scenario links, and draft status, and records the revision in Brain Events. It does not approve the RequirementSet, create a Trial, compile cases, or execute business actions. Re-read both asset collections after the confirmed update. Trial creation freezes the complete mapped outcome roster from the approved RequirementSet; blocked and unexecuted outcomes stay in the denominator.
+
+Every confirmed revision refreshes the read-only `draft-test-design-current.md` projection from the current Store. For an older draft with a stale or missing projection, call `bc_prepare action=refresh-test-design-projection` with its `knowledgeProjectId` and `requirementSetId`; review the returned asset counts, draft hash, projection hash, and path. This action only writes the projection and reports `storeChanged: false`; it does not edit Store assets, approve the draft, map outcomes, or establish execution evidence. The projection includes the source ID/hash, current TestIntent and BusinessScenario fields, and the latest revision event.
 
 ### 4. Approve The Baseline
 

@@ -1,10 +1,16 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { buildAgentPrompt } from "./promptBuilder.js";
 import { generateSeedFile } from "./seedGenerator.js";
+import type { SystemBrainSnapshot } from "../brain/types.js";
+import { validatePageObjectUsage } from "./pageObjectValidation.js";
+import {
+  validateConfirmedSystemPageObjectBindings,
+  type RequiredSystemPageObjectBinding
+} from "../execution/systemPageObject.js";
 import { formatScenariosAsMarkdown, parseSpecMarkdown } from "./caseFormatter.js";
 import { checkBusinessRules } from "./qualityGate.js";
 import { extractCandidateTerms } from "./termExtractor.js";
@@ -156,6 +162,7 @@ type GeneratePlanDraftInput = {
   businessRules: BusinessRule[];
   specPath: string;
   agentBridge?: AgentBridge;
+  systemBrainSnapshot?: SystemBrainSnapshot;
 };
 
 type RunChainInput = {
@@ -170,6 +177,8 @@ type RunChainInput = {
   structuredReporter?: boolean;
   actorJourney?: Array<{ role: string; authProfile: AuthProfile }>;
   requiredStepIds?: string[];
+  requiredPageObjectBindings?: RequiredSystemPageObjectBinding[];
+  systemBrainSnapshot?: SystemBrainSnapshot;
   browserMode?: BrowserExecutionMode;
   artifactLayout?: ArtifactRunLayout;
   caseNo?: string;
@@ -271,7 +280,8 @@ export async function generatePlanDraft(input: GeneratePlanDraftInput) {
     workDir: input.workDir,
     outputDir: seedDir,
     system: input.system,
-    authProfile: input.authProfile
+    authProfile: input.authProfile,
+    systemBrainSnapshot: input.systemBrainSnapshot
   });
 
   await mkdir(dirname(input.specPath), { recursive: true });
@@ -317,6 +327,13 @@ export async function runChain(input: RunChainInput) {
   if (input.testCase.status !== "approved") {
     throw new Error("Test case must be approved before running chain");
   }
+  const snapshotBindings = validateConfirmedSystemPageObjectBindings(
+    input.systemBrainSnapshot,
+    input.requiredPageObjectBindings ?? []
+  );
+  if (!snapshotBindings.valid) {
+    throw new Error(snapshotBindings.reason);
+  }
 
   const layout = input.artifactLayout ?? resolveArtifactRunLayout({
     workDir: input.workDir,
@@ -358,7 +375,8 @@ export async function runChain(input: RunChainInput) {
     outputDir: layout.testsDir,
     system: input.system,
     authProfile: input.authProfile,
-    actorJourney: input.actorJourney
+    actorJourney: input.actorJourney,
+    systemBrainSnapshot: input.systemBrainSnapshot
   });
   const protectedSecrets = Object.fromEntries(
     [input.authProfile, ...(input.actorJourney ?? []).map((actor) => actor.authProfile)]
@@ -413,6 +431,13 @@ export async function runChain(input: RunChainInput) {
         return { exitCode: 1, stdout: "", stderr: instrumentationCheck.reason };
       }
     }
+    if (input.requiredPageObjectBindings?.length) {
+      const source = await readFile(testPath, "utf8");
+      const pageObjectCheck = validatePageObjectUsage(source, input.requiredPageObjectBindings);
+      if (!pageObjectCheck.valid) {
+        return { exitCode: 1, stdout: "", stderr: pageObjectCheck.reason };
+      }
+    }
     const args = playwrightTestArgs(testRunPath, {
       browserMode: input.browserMode,
       structuredReporter: structuredReporterEnabled,
@@ -423,17 +448,40 @@ export async function runChain(input: RunChainInput) {
         ? join(layout.evidenceDir, `${input.testCase.id}-actor-journey.jsonl`)
         : undefined;
     if (actorRoleEvidencePath) await mkdir(dirname(actorRoleEvidencePath), { recursive: true });
-    const rawResult = await runner("npx", args, {
-      cwd: input.workDir,
-      ...(actorRoleEvidencePath
-        ? { env: { ...process.env, BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } }
-        : {})
-    });
+    const reporterOutputPath = structuredReporterEnabled && !input.runner
+      ? join(layout.evidenceDir, `${input.testCase.id}-playwright-json-report.json`)
+      : undefined;
+    if (reporterOutputPath) {
+      await mkdir(dirname(reporterOutputPath), { recursive: true });
+      await rm(reporterOutputPath, { force: true });
+    }
+    let rawResult: CommandResult;
+    try {
+      rawResult = await runner("npx", args, {
+        cwd: input.workDir,
+        ...(actorRoleEvidencePath || reporterOutputPath
+          ? {
+              env: {
+                ...process.env,
+                ...(actorRoleEvidencePath ? { BRAIN_CREATOR_ACTOR_EVIDENCE_PATH: actorRoleEvidencePath } : {}),
+                ...(reporterOutputPath ? { PLAYWRIGHT_JSON_OUTPUT_FILE: reporterOutputPath } : {})
+              }
+            }
+          : {})
+      });
+    } catch (error) {
+      if (reporterOutputPath) await rm(reporterOutputPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
     const result = {
       ...rawResult,
       stdout: redactSensitiveText(rawResult.stdout, protectedSecrets),
       stderr: redactSensitiveText(rawResult.stderr, protectedSecrets)
     };
+    const reporterFromFile = reporterOutputPath
+      ? await parseReporterFile(reporterOutputPath)
+      : undefined;
+    if (reporterOutputPath) await rm(reporterOutputPath, { force: true });
     if (actorRoleEvidencePath && input.actorJourney) {
       const roleCheck = await verifyActorRoleEvidence(actorRoleEvidencePath, input.actorJourney);
       if (!roleCheck.valid) {
@@ -448,7 +496,9 @@ export async function runChain(input: RunChainInput) {
     if (!structuredReporterEnabled) {
       return { ...result, ...(actorRoleEvidencePath ? { actorRoleEvidencePath } : {}) };
     }
-    const reporter = parseReporterOutput(result.stdout);
+    const reporter = reporterOutputPath
+      ? reporterFromFile
+      : parseReporterOutput(result.stdout);
     if (!reporter) {
       return {
         ...result,
@@ -508,7 +558,12 @@ export async function runChain(input: RunChainInput) {
     });
     const afterHealSource = await readGeneratedSource(testPath);
     const mutationCheck = beforeHealSource && afterHealSource
-      ? validateHealerMutation(beforeHealSource, afterHealSource, input.requiredStepIds ?? [])
+      ? validateHealerMutation(
+          beforeHealSource,
+          afterHealSource,
+          input.requiredStepIds ?? [],
+          input.requiredPageObjectBindings ?? []
+        )
       : beforeHealSource && !afterHealSource
         ? { valid: false as const, reason: "Healer removed the generated test file." }
         : { valid: true as const };
@@ -663,7 +718,8 @@ export function validateStepInstrumentation(source: string, stepIds: string[]) {
 export function validateHealerMutation(
   beforeSource: string,
   afterSource: string,
-  requiredStepIds: string[]
+  requiredStepIds: string[],
+  requiredPageObjectBindings: RequiredSystemPageObjectBinding[] = []
 ) {
   const before = removeSourceComments(beforeSource);
   const after = removeSourceComments(afterSource);
@@ -675,6 +731,8 @@ export function validateHealerMutation(
   }
   const instrumentation = validateStepInstrumentation(after, requiredStepIds);
   if (!instrumentation.valid) return instrumentation;
+  const pageObjectUsage = validatePageObjectUsage(after, requiredPageObjectBindings);
+  if (!pageObjectUsage.valid) return pageObjectUsage;
   const beforeAssertions = countAssertions(before);
   const afterAssertions = countAssertions(after);
   if (afterAssertions < beforeAssertions) {
@@ -796,6 +854,14 @@ async function verifyActorRoleEvidence(
 function parseReporterOutput(output: string): StructuredReporterResult | undefined {
   try {
     return parsePlaywrightJsonReport(JSON.parse(output));
+  } catch {
+    return undefined;
+  }
+}
+
+async function parseReporterFile(path: string): Promise<StructuredReporterResult | undefined> {
+  try {
+    return parsePlaywrightJsonReport(JSON.parse(await readFile(path, "utf8")));
   } catch {
     return undefined;
   }

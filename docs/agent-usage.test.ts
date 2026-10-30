@@ -2,41 +2,30 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("Agent-native usage documentation", () => {
-  it("keeps a concise bilingual requirement-first README", async () => {
+  it("keeps a concise Chinese-first requirement-first README", async () => {
     const content = await readFile("README.md", "utf8");
 
     for (const marker of [
       "Brain Creator",
-      "## 中文",
-      "## English",
-      "Claude Code or Codex",
-      "Use Brain Creator to analyze this requirement",
+      "面向中文团队",
+      "## 产品形态",
+      "Agent 对话",
       "MCP",
       "brain-creator init",
       "brain-creator doctor",
-      "brain-creator config",
       "brain-creator plugin install",
-      "brain-creator help legacy",
       "五分钟开始",
-      "Get started in five minutes",
-      "npm run verify:package-install",
-      "npm run verify:package-contents",
-      "npm run release:check",
-      "MIT license",
-      "docs/release-checklist.md",
-      "No Web UI",
-      "无 Web UI",
-      "docs/getting-started.md",
-      "docs/core-concepts.md",
-      "docs/cli-reference.md",
-      "docs/troubleshooting.md",
-      "docs/agent-usage.md",
-      "高阶 Facade 工具"
+      "没有独立 Web UI",
+      "工程文件结构与代码分层",
+      "System Brain 保存的页面知识",
+      "docs/zh-CN/agent-usage.md",
+      "真实 Trial",
+      "MIT License"
     ]) {
       expect(content).toContain(marker);
     }
 
-    expect(content.split("\n").length).toBeLessThan(250);
+    expect(content.split("\n").length).toBeLessThan(300);
   });
 
   it("documents the requirement-first Agent flow and legacy compatibility", async () => {

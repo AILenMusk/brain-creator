@@ -562,6 +562,8 @@ export type EvaluationProvider =
 
 export type EvaluationExecutionScope = {
   businessScenarioIds: string[];
+  /** Complete approved outcome roster derived from TestIntent.businessOutcomeId. */
+  businessOutcomeIds?: string[];
   baselineHash?: string;
   scopeHash?: string;
   approvalScopeRef?: string;

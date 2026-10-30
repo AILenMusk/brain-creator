@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BusinessScenario, EvaluationTrial } from "../brain/types.js";
-import type { ExecutableCase, ExecutionEvidence, ExecutionPlan, RequirementSuiteRun } from "../domain/types.js";
+import type { ExecutableCase, ExecutionEvidence, ExecutionPlan, RequirementSuiteRun, TestIntent } from "../domain/types.js";
 import { readRuntimeIdentity } from "../shared/runtimeIdentity.js";
 import { createBrainCreatorMcpContext, handleBrainCreatorTool } from "./handlers.js";
 
@@ -17,6 +17,94 @@ afterEach(async () => {
 });
 
 describe("evaluation integrity facade", () => {
+  it("returns the fixed outcome denominator through the Brain Creator review facade", async () => {
+    const workDir = await mkdtemp(join(tmpdir(), "brain-creator-outcome-review-"));
+    tempDirs.push(workDir);
+    const context = createBrainCreatorMcpContext({ workDir, dataFilePath: join(workDir, "assets.json") });
+    const project = await context.knowledgeService.createProject({
+      name: "Outcome review", key: "outcome-review", defaultLocale: "en-US"
+    });
+    const ingested = await context.knowledgeService.ingestRequirement({
+      projectId: project.id,
+      contentPackage: {
+        title: "Demand outcome", content: "A demand can be submitted.",
+        blocks: [{ type: "paragraph", text: "A demand can be submitted." }],
+        attachments: [], source: "requirements/demand.md", sourceType: "local-file",
+        contentHash: "demand-v1", warnings: []
+      }
+    });
+    const now = new Date().toISOString();
+    const set = context.repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)!;
+    set.status = "approved";
+    context.repository.systemProfiles.push({
+      id: "system-outcome", name: "Outcome target", environment: "test", baseUrl: "https://example.test",
+      urlAllowlist: ["https://example.test"], defaultLocale: "en-US", status: "succeeded", createdAt: now, updatedAt: now
+    });
+    project.systemIds.push("system-outcome");
+    context.repository.systemBrainSnapshots.push({
+      id: "snapshot-outcome", knowledgeProjectId: project.id, systemId: "system-outcome", revision: 1,
+      explorationIds: ["exploration-outcome"], status: "confirmed", assets: [], contentHash: "snapshot-hash",
+      createdAt: now, confirmedAt: now, confirmedBy: "reviewer"
+    });
+    const intent: TestIntent = {
+      id: "intent-outcome", knowledgeProjectId: project.id, requirementSetId: set.id,
+      businessOutcomeId: "GHR-REQ-01", title: "Demand submission", module: "Demand", priority: "P1",
+      objective: "Verify one fixed business outcome", preconditions: ["An isolated demand is ready"],
+      expectedResults: ["The same demand becomes independently readable"], requirementRefs: ["requirement:demand"],
+      knowledgeNodeRefs: [], techniques: [], scenarioIds: ["scenario-outcome"], status: "approved",
+      createdAt: now, updatedAt: now
+    };
+    const scenario: BusinessScenario = {
+      id: "scenario-outcome", knowledgeProjectId: project.id, requirementSetId: set.id,
+      title: "Demand outcome", objective: "Review one demand transition", family: "state-transition",
+      actors: ["Authorized test actor"], preconditions: ["The demand is in the expected initial state"],
+      workflowRefs: [], stateTransitionRefs: [], decisionRuleRefs: [], testDataNeeds: ["One isolated demand"],
+      expectedBusinessOutcomes: ["The same demand has the target state"], sourceRefs: ["requirement:demand"],
+      testIntentIds: [intent.id], risk: "high", status: "approved"
+    };
+    context.repository.testIntents.push(intent);
+    context.repository.businessScenarios.push(scenario);
+    context.repository.scenarioAssuranceContracts.push({
+      scenarioId: scenario.id, systemId: "system-outcome", systemBrainSnapshotId: "snapshot-outcome",
+      requirementRefs: ["requirement:demand"], workflowRefs: [], stateTransitionRefs: ["demand:draft-submitted"],
+      decisionRuleRefs: [], systemBinding: "unique", testDataReadiness: "ready", oracleStrength: "strong",
+      unsupportedInferences: [], risk: "high", independence: "deterministic", verdict: "pass",
+      evidenceRefs: ["system-brain:snapshot-outcome"]
+    });
+    const challenge = context.requirementGate.issueApprovalChallenge(set.id);
+    const receipt = context.requirementGate.createApprovalReceipt({
+      requirementSetId: set.id, assetHash: challenge.assetHash, method: "challenge-response",
+      approvedBy: "reviewer", challengeId: challenge.challengeId, approvalCode: challenge.code
+    });
+    const runtimeIdentity = readRuntimeIdentity({
+      workspace: workDir, schemaVersion: context.repository.schemaVersion, provider: "disabled", processKind: "mcp"
+    });
+    const codeRevision = runtimeIdentity.commit === "unknown" ? runtimeIdentity.buildId : runtimeIdentity.commit;
+    const started = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "start-evaluation-trial", knowledgeProjectId: project.id, systemId: "system-outcome",
+      requirementSourceId: ingested.source.id, comparisonGroupId: "outcome-review",
+      evaluationProvider: "builtin", evaluationWorkspacePath: join(workDir, "trial"),
+      evaluationStorePath: join(workDir, "trial", ".brain-creator", "store"), codeRevision,
+      runtimeVersions: { node: "22.0.0" }, businessScenarioIds: [scenario.id],
+      businessOutcomeIds: ["GHR-REQ-01"], approvalReceiptId: receipt.id
+    })) as { trial: { id: string } };
+    const review = dataOf(await handleBrainCreatorTool(context, "bc_review", {
+      target: "evaluation-trial", knowledgeProjectId: project.id, id: started.trial.id
+    })) as { items: Array<{ metrics: {
+      businessOutcomeIds: string[];
+      businessOutcomeConformance: { status: string; denominator: number | null; notRun: number | null; rate: number | null };
+      autonomy: { businessOutcomes: { status: string; denominator: number | null; rate: number | null } };
+    } }> };
+
+    expect(review.items[0]!.metrics.businessOutcomeIds).toEqual(["GHR-REQ-01"]);
+    expect(review.items[0]!.metrics.businessOutcomeConformance).toMatchObject({
+      status: "not-measured", denominator: 1, notRun: 1, rate: null
+    });
+    expect(review.items[0]!.metrics.autonomy.businessOutcomes).toMatchObject({
+      status: "not-measured", denominator: 1, rate: null
+    });
+  });
+
   it("starts, reviews, validates, and completes an evaluation trial", async () => {
     const workDir = await mkdtemp(join(tmpdir(), "brain-creator-evaluation-"));
     tempDirs.push(workDir);

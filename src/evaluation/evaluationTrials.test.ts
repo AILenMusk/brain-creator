@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryBrainCreatorRepository } from "../domain/repository.js";
 import type { BusinessScenario } from "../brain/types.js";
-import type { ExecutableCase, ExecutionEvidence, RequirementSuiteRun, RunLedgerEntry, TestDataLease, TestDataTask } from "../domain/types.js";
+import type { ExecutableCase, ExecutionEvidence, RequirementSuiteRun, RunLedgerEntry, TestDataLease, TestDataTask, TestIntent } from "../domain/types.js";
 import { RequirementSuiteRunService } from "../knowledge/requirementSuiteRun.js";
 import type { IntegrityAuthenticator } from "../shared/crypto.js";
 import { createWorkspaceIntegrityAuthenticator } from "../shared/crypto.js";
@@ -12,7 +12,7 @@ import { RequirementGateService } from "./requirementGate.js";
 import { EvaluationIntegrityService } from "./evaluationIntegrity.js";
 import { calculateEvaluationTrialMetrics } from "./evaluationMetrics.js";
 
-export function trialFixture(authenticator?: IntegrityAuthenticator) {
+export function trialFixture(authenticator?: IntegrityAuthenticator, includeBusinessOutcomes = false) {
   const repository = new InMemoryBrainCreatorRepository();
   const now = "2026-09-11T00:00:00.000Z";
   repository.knowledgeProjects.push({ id: "p", name: "P", key: "p", status: "active", defaultLocale: "en", systemIds: ["s"], createdAt: now, updatedAt: now });
@@ -53,10 +53,65 @@ export function trialFixture(authenticator?: IntegrityAuthenticator) {
     });
     repository.executableCases.push({ id: `case${n}`, knowledgeProjectId: "p", requirementSetId: "set", testIntentId: `intent${n}`, systemId: "s", title: "Approve", status: "ready", preconditions: [], steps: [], dataProfileIds: [], gapIds: [], createdAt: now, updatedAt: now } satisfies ExecutableCase);
   }
+  let approvalReceiptId: string | undefined;
+  if (includeBusinessOutcomes) {
+    const scenario = repository.businessScenarios.find((item) => item.id === "scenario1")!;
+    scenario.testIntentIds = ["intent1", "intent1-outcome2"];
+    repository.testIntents.push(
+      testIntent({ id: "intent1", businessOutcomeId: "OUTCOME-01", scenarioId: "scenario1", now }),
+      testIntent({ id: "intent1-outcome2", businessOutcomeId: "OUTCOME-02", scenarioId: "scenario1", now })
+    );
+    repository.executableCases.push({
+      id: "case1-outcome2", knowledgeProjectId: "p", requirementSetId: "set", testIntentId: "intent1-outcome2",
+      systemId: "s", title: "Outcome 2", status: "ready", preconditions: [], steps: [], dataProfileIds: [], gapIds: [],
+      createdAt: now, updatedAt: now
+    } satisfies ExecutableCase);
+    const gate = new RequirementGateService(repository);
+    const challenge = gate.issueApprovalChallenge("set");
+    approvalReceiptId = gate.createApprovalReceipt({
+      requirementSetId: "set", assetHash: challenge.assetHash, method: "challenge-response", approvedBy: "reviewer",
+      challengeId: challenge.challengeId, approvalCode: challenge.code
+    }).id;
+  }
   const service = new EvaluationIntegrityService(repository, authenticator);
-  const input = { comparisonGroupId: "g", knowledgeProjectId: "p", systemId: "s", requirementSourceId: "source", provider: "builtin" as const, workspacePath: ".", storePath: "./isolated", codeRevision: "commit", runtimeVersions: {}, runtimeBuildIdentity: "test-build", businessScenarioIds: ["scenario1", "scenario2", "scenario3"] };
-  const start = () => service.startTrial(input).trial;
-  return { repository, service, input, start };
+  const input = {
+    comparisonGroupId: "g",
+    knowledgeProjectId: "p",
+    systemId: "s",
+    requirementSourceId: "source",
+    provider: "builtin" as const,
+    workspacePath: ".",
+    storePath: "./isolated",
+    codeRevision: "commit",
+    runtimeVersions: {},
+    runtimeBuildIdentity: "test-build",
+    businessScenarioIds: ["scenario1", "scenario2", "scenario3"],
+    ...(includeBusinessOutcomes ? { businessOutcomeIds: ["OUTCOME-01", "OUTCOME-02"] } : {})
+  };
+  const start = () => service.startTrial({ ...input, ...(approvalReceiptId ? { approvalReceiptId } : {}) }).trial;
+  return { repository, service, input, start, approvalReceiptId };
+}
+
+function testIntent(input: { id: string; businessOutcomeId: string; scenarioId: string; now: string }): TestIntent {
+  return {
+    id: input.id,
+    knowledgeProjectId: "p",
+    requirementSetId: "set",
+    businessOutcomeId: input.businessOutcomeId,
+    title: input.businessOutcomeId,
+    module: "Orders",
+    priority: "P1",
+    objective: "Verify one approved business outcome",
+    preconditions: [],
+    expectedResults: ["The matching business state is independently readable"],
+    requirementRefs: ["req:1"],
+    knowledgeNodeRefs: [],
+    techniques: [],
+    scenarioIds: [input.scenarioId],
+    status: "approved",
+    createdAt: input.now,
+    updatedAt: input.now
+  };
 }
 
 describe("frozen evaluation execution scope", () => {
@@ -204,10 +259,64 @@ describe("frozen evaluation execution scope", () => {
     f.repository.requirementSets[0].version++;
     expect(f.service.validateExecutionBinding({ trialId: trial.id, knowledgeProjectId: "p", systemId: "s" }).valid).toBe(false);
   });
+  it("freezes the complete unique approved business-outcome roster", () => {
+    const f = trialFixture(undefined, true);
+    const malformed = trialFixture(undefined, true);
+    malformed.repository.testIntents[0]!.businessOutcomeId = " OUTCOME-01 ";
+    expect(() => malformed.service.startTrial({
+      ...malformed.input,
+      approvalReceiptId: malformed.approvalReceiptId
+    })).toThrow("empty or non-normalized");
+
+    expect(() => f.service.startTrial({ ...f.input })).toThrow("approved RequirementSet and its approval receipt");
+    expect(() => f.service.startTrial({
+      ...f.input,
+      approvalReceiptId: f.approvalReceiptId,
+      businessOutcomeIds: undefined
+    })).toThrow("explicit approved business-outcome roster");
+    expect(() => f.service.startTrial({
+      ...f.input,
+      approvalReceiptId: f.approvalReceiptId,
+      businessOutcomeIds: ["OUTCOME-01"]
+    })).toThrow("complete approved business-outcome roster");
+    expect(() => f.service.startTrial({
+      ...f.input,
+      approvalReceiptId: f.approvalReceiptId,
+      businessOutcomeIds: ["OUTCOME-01", "OUTCOME-01", "OUTCOME-02"]
+    })).toThrow("duplicate outcome IDs");
+
+    const trial = f.service.startTrial({
+      ...f.input,
+      approvalReceiptId: f.approvalReceiptId,
+      businessOutcomeIds: ["OUTCOME-01", "OUTCOME-02"]
+    }).trial;
+    expect(trial.executionScope?.businessOutcomeIds).toEqual(["OUTCOME-01", "OUTCOME-02"]);
+  });
+  it("invalidates a Trial when its approved outcome mapping changes after the snapshot", () => {
+    const f = trialFixture(undefined, true);
+    const trial = f.start();
+    f.repository.testIntents[0]!.businessOutcomeId = "OUTCOME-CHANGED";
+    f.service.checkpointTrial({
+      trialId: trial.id,
+      previousProjectionManifestId: trial.latestProjectionManifestId,
+      operation: "test changed approved outcome mapping",
+      evidenceRefs: ["review:mapping-change"]
+    });
+
+    const validation = f.service.validateExecutionBinding({
+      trialId: trial.id,
+      knowledgeProjectId: "p",
+      systemId: "s",
+      executableCaseIds: ["case1"]
+    });
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons).toContain("Frozen requirement baseline or scope version changed");
+    expect(trial.status).toBe("invalidated");
+  });
 });
 
-function measuredFixture() {
-  const f = trialFixture(); const trial = f.start();
+function measuredFixture(includeBusinessOutcomes = false) {
+  const f = trialFixture(undefined, includeBusinessOutcomes); const trial = f.start();
   const runs = new RequirementSuiteRunService(f.repository, undefined, "test-build");
   const run = runs.create({ knowledgeProjectId: "p", systemId: "s", evaluationTrialId: trial.id, cases: [{ executableCaseId: "case1", title: "Approve" }, { executableCaseId: "case2", title: "Blocked" }], continueOnBlocked: true });
   const at = new Date(Date.parse(run.createdAt) + 1000).toISOString();
@@ -226,11 +335,34 @@ function measuredFixture() {
   const metrics = (actionEvidenceArtifactsValidByEntryId = new Map(
     f.repository.runLedgerEntries.filter((entry) => entry.event === "action-reconciled" && entry.actionEvidenceArtifacts?.length)
       .map((entry) => [entry.id, true])
-  )) => calculateEvaluationTrialMetrics({ trial, runs: f.repository.requirementSuiteRuns, evidence: f.repository.executionEvidence, conformanceResults: f.repository.conformanceResults, scenarios: f.repository.businessScenarios, executableCases: f.repository.executableCases, interventions: f.repository.interventionRecords, runLedgerEntries: f.repository.runLedgerEntries, testDataTasks: f.repository.testDataTasks, testDataLeases: f.repository.testDataLeases, actionEvidenceArtifactsValidByEntryId });
+  ), includeTestIntents = true) => calculateEvaluationTrialMetrics({ trial, runs: f.repository.requirementSuiteRuns, evidence: f.repository.executionEvidence, conformanceResults: f.repository.conformanceResults, scenarios: f.repository.businessScenarios, ...(includeTestIntents ? { testIntents: f.repository.testIntents } : {}), executableCases: f.repository.executableCases, interventions: f.repository.interventionRecords, runLedgerEntries: f.repository.runLedgerEntries, testDataTasks: f.repository.testDataTasks, testDataLeases: f.repository.testDataLeases, actionEvidenceArtifactsValidByEntryId });
   return { ...f, trial, run, runs, evidence, at, metrics };
 }
 
 describe("evaluation trial metrics", () => {
+  it("counts outcome-level conformance and autonomy independently of grouped scenarios", () => {
+    const f = measuredFixture(true);
+    const metrics = f.metrics();
+    expect(metrics.businessConformance.denominator).toBe(3);
+    expect(metrics.businessOutcomeIds).toEqual(["OUTCOME-01", "OUTCOME-02"]);
+    expect(metrics.businessOutcomeConformance).toMatchObject({
+      denominator: 2, measured: 1, passed: 1, blocked: 0, notRun: 1, rate: 0.5
+    });
+    expect(f.metrics(undefined, false).businessOutcomeConformance).toMatchObject({
+      status: "not-comparable", denominator: 2, rate: null
+    });
+
+    f.service.completeTrial(f.trial.id, "commit", {}, "test-build");
+    f.service.completeInterventionCapture({
+      trialId: f.trial.id,
+      actor: "reviewer",
+      scenarioIds: ["scenario1", "scenario2", "scenario3"],
+      evidenceRefs: ["review:session"]
+    });
+    expect(f.metrics().autonomy.businessOutcomes).toMatchObject({
+      status: "measured", autonomous: 1, denominator: 2, rate: 0.5, manualIds: []
+    });
+  });
   it("keeps blocked and unexecuted selected scenarios in the denominator", () => {
     const f = measuredFixture();
     expect(f.metrics().businessConformance).toMatchObject({ denominator: 3, measured: 1, passed: 1, blocked: 1, notRun: 1, rate: 1 / 3 });

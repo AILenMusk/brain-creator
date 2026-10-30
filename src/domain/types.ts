@@ -468,6 +468,7 @@ export type AgentTask = {
     contextPackPath?: string;
     requirementSuiteRunId?: string;
     requiredStepIds?: string[];
+    requiredPageObjectBindings?: Array<{ pageModelId: string; locatorPointId: string }>;
     actorJourneyRoles?: string[];
     browserMode?: BrowserExecutionMode;
   };
@@ -1008,6 +1009,8 @@ export type TestIntent = {
   id: string;
   knowledgeProjectId: string;
   requirementSetId: string;
+  /** Stable, reviewable business-outcome key used to preserve an explicit Trial denominator. */
+  businessOutcomeId?: string;
   title: string;
   module: string;
   priority: "P0" | "P1" | "P2" | "P3";

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -343,6 +343,233 @@ describe("RequirementAnalysisHostHarness", () => {
     }));
     expect(mapper.task.contextPack!.content).toContain("attachment-analysis-5");
     expect(mapper.task.contextPack!.content).toMatch(/Source line labels L<n> map to source:req-source#line:<n>|source:req-source#line:211/);
+  });
+
+  it("uses a verified complete source file when thousands of line anchors cannot fit inline", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) =>
+      `Requirement line ${index + 1}: ${"business rule ".repeat(2)}`
+    ).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1100);
+    const sourceFile = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id, "source.md");
+    await mkdir(join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id), { recursive: true });
+    await writeFile(sourceFile, `---\nsource_id: req-source\n---\n\n# Order approval\n\n${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+
+    expect(mapper.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(mapper.task.contextPack!.truncated).toBe(true);
+    expect(mapper.task.contextPack!.content).toContain(JSON.stringify(sourceFile));
+    expect(mapper.task.contextPack!.content).toContain("Source body SHA-256:");
+    expect(mapper.task.contextPack!.content).toContain("contains 2331 lines");
+    expect(mapper.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:2331"
+    }));
+  });
+
+  it("uses the same verified source file for cited lines in later analysis stages", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) =>
+      `Requirement line ${index + 1}: ${"business rule ".repeat(35)}`
+    ).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1100);
+    const sourceDirectory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(join(sourceDirectory, "source.md"), `---\nsource_id: req-source\n---\n\n# Order approval\n\n${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    const analyst = await coordinator.submit({ taskId: mapper.task.id, output: documentMap() });
+    const output: ClauseAnalystOutput = {
+      module: "Orders",
+      clauses: Array.from({ length: 60 }, (_, index) => ({
+        id: `clause-${index + 1}`,
+        index: index + 1,
+        text: `Requirement line ${index + 1} must be verified`,
+        sourceRefs: [`source:req-source#line:${index + 1}`],
+        module: "Orders",
+        kind: "rule",
+        origin: "explicit",
+        confidence: 0.9,
+        status: "draft",
+        nodeTypes: ["rule"]
+      })),
+      openQuestions: []
+    };
+
+    const modeler = await coordinator.submit({ taskId: analyst.task.id, output });
+
+    expect(modeler.stage).toBe("business-modeler");
+    expect(modeler.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(modeler.task.contextPack!.content).toContain("Complete frozen requirement source is in the verified local file");
+    expect(modeler.task.contextPack!.references).toContainEqual(expect.objectContaining({
+      ref: "source:req-source#line:2331"
+    }));
+  });
+
+  it("rejects host output if a referenced source file changes after the task starts", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) => `Rule ${index + 1}: ${"x".repeat(40)}`).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1100);
+    const directory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "source.md");
+    await writeFile(path, `---\nsource_id: req-source\n---\n\n# Order approval\n\n${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    expect(mapper.task.contextPack!.references.some((item) => item.ref.startsWith("source-snapshot:req-source:sha256:"))).toBe(true);
+    await writeFile(path, "---\nsource_id: req-source\n---\n\n# Order approval\n\nChanged", "utf8");
+
+    await expect(coordinator.submit({ taskId: mapper.task.id, output: documentMap() })).rejects.toThrow(
+      "Frozen requirement source file differs from the current RequirementSet content"
+    );
+    source.content = "Changed together with the source file";
+    await writeFile(path, `---\nsource_id: req-source\n---\n\n# Order approval\n\n${source.content}`, "utf8");
+    await expect(coordinator.submit({ taskId: mapper.task.id, output: documentMap() })).rejects.toThrow(
+      "Frozen requirement source snapshot changed or is unavailable"
+    );
+    expect(fixture.repository.brainTasks).toHaveLength(1);
+    expect(fixture.repository.brainTasks[0].state).toBe("waiting-provider");
+  });
+
+  it("rejects host output if the frozen source body shifts to a different file line offset", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) => `Rule ${index + 1}: ${"x".repeat(40)}`).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1100);
+    const directory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "source.md");
+    const prefix = "---\nsource_id: req-source\n---\n\n# Order approval\n\n";
+    await writeFile(path, `${prefix}${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    expect(mapper.task.contextPack!.references.some((item) => item.ref.includes(":line-offset:"))).toBe(true);
+
+    await writeFile(path, `---\nsource_id: req-source\n---\n\n# Added metadata line\n\n# Order approval\n\n${source.content}`, "utf8");
+
+    await expect(coordinator.submit({ taskId: mapper.task.id, output: documentMap() })).rejects.toThrow(
+      "Frozen requirement source snapshot changed or is unavailable"
+    );
+    expect(fixture.repository.brainTasks).toHaveLength(1);
+    expect(fixture.repository.brainTasks[0].state).toBe("waiting-provider");
+  });
+
+  it("pins complete structured stage outputs when they cannot fit with confirmed attachments", async () => {
+    const fixture = await createFixture();
+    const source = fixture.repository.requirementSources[0];
+    source.content = Array.from({ length: 2331 }, (_, index) => `Rule ${index + 1}: ${"x".repeat(40)}`).join("\n");
+    fixture.repository.attachmentAnalyses[0]!.markdown = "Confirmed attachment facts. ".repeat(1600);
+    const directory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "source.md"), `---\nsource_id: req-source\n---\n\n# Order approval\n\n${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    const analyst = await coordinator.submit({ taskId: mapper.task.id, output: documentMap() });
+    const output: ClauseAnalystOutput = {
+      module: "Orders",
+      clauses: Array.from({ length: 60 }, (_, index) => ({
+        id: `clause-${index + 1}`,
+        index: index + 1,
+        text: `Rule ${index + 1} must be verified ${"detail ".repeat(10)}`,
+        sourceRefs: [`source:req-source#line:${index + 1}`],
+        module: "Orders",
+        kind: "rule",
+        origin: "explicit",
+        confidence: 0.9,
+        status: "draft",
+        nodeTypes: ["rule"]
+      })),
+      openQuestions: []
+    };
+    const modeler = await coordinator.submit({ taskId: analyst.task.id, output });
+    expect(modeler.task.contextPack!.estimatedChars).toBeLessThanOrEqual(50_000);
+    expect(modeler.task.contextPack!.content).toContain("Complete structured stage outputs are in the verified local file");
+    const ref = modeler.task.contextPack!.references.find((item) => item.ref.startsWith("structured-output-snapshot:sha256:"))!.ref;
+    const sha256 = ref.slice("structured-output-snapshot:sha256:".length);
+    const snapshotPath = join(directory, "host-harness", modeler.task.sessionId!, `structured-${sha256}.json`);
+    const original = await readFile(snapshotPath, "utf8");
+    await writeFile(snapshotPath, "{}", "utf8");
+    await expect(coordinator.submit({ taskId: modeler.task.id, output: businessModels() })).rejects.toThrow(
+      "Structured requirement output snapshot changed or is unavailable"
+    );
+    await writeFile(snapshotPath, original, "utf8");
+    await writeFile(analyst.task.outputRefs[0], JSON.stringify({ ...output, openQuestions: ["changed after snapshot"] }), "utf8");
+    await expect(coordinator.submit({ taskId: modeler.task.id, output: businessModels() })).rejects.toThrow(
+      "Structured requirement output snapshot changed or is unavailable"
+    );
+    expect(modeler.task.state).toBe("waiting-provider");
+  });
+
+  it("pins earlier stage output even when it fits inline", async () => {
+    const fixture = await createFixture();
+    const coordinator = new RequirementAnalysisHostHarness(fixture.repository, new HarnessRuntime(fixture.repository), fixture.knowledgeDir);
+    const mapper = await coordinator.start(fixture.requirementSet.id);
+    const analyst = await coordinator.submit({ taskId: mapper.task.id, output: documentMap() });
+    expect(analyst.task.contextPack!.content).toContain('"documentMap"');
+    expect(analyst.task.contextPack!.references.some((item) => item.ref.startsWith("structured-output-snapshot:sha256:"))).toBe(true);
+    await writeFile(mapper.task.outputRefs[0], JSON.stringify({ ...documentMap(), modules: ["Changed"] }), "utf8");
+    await expect(coordinator.submit({ taskId: analyst.task.id, output: clauses() })).rejects.toThrow(
+      "Structured requirement output snapshot changed or is unavailable"
+    );
+  });
+
+  it("refuses a source file that differs from the frozen RequirementSet content", async () => {
+    const fixture = await createFixture();
+    const sourceFile = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id, "source.md");
+    await mkdir(join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id), { recursive: true });
+    await writeFile(sourceFile, "---\nsource_id: req-source\n---\n\n# Order approval\n\nTampered content", "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(
+      fixture.repository,
+      new HarnessRuntime(fixture.repository),
+      fixture.knowledgeDir
+    );
+
+    await expect(coordinator.start(fixture.requirementSet.id)).rejects.toThrow(
+      "Frozen requirement source file differs from the current RequirementSet content"
+    );
+    expect(fixture.repository.brainTasks).toHaveLength(0);
+  });
+
+  it("pins the source even when its text fits inline", async () => {
+    const fixture = await createFixture();
+    const directory = join(fixture.knowledgeDir, "orders", "requirements", fixture.requirementSet.id);
+    const source = fixture.repository.requirementSources[0];
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "source.md");
+    await writeFile(path, `# Order approval\n\n${source.content}`, "utf8");
+    const coordinator = new RequirementAnalysisHostHarness(fixture.repository, new HarnessRuntime(fixture.repository), fixture.knowledgeDir);
+    const task = await coordinator.start(fixture.requirementSet.id);
+    expect(task.task.contextPack!.content).toContain("A requester creates an order");
+    expect(task.task.contextPack!.references.some((item) => item.ref.startsWith("source-snapshot:req-source:sha256:"))).toBe(true);
+    await writeFile(path, "# Order approval\n\nChanged", "utf8");
+    await expect(coordinator.submit({ taskId: task.task.id, output: documentMap() })).rejects.toThrow(
+      "Frozen requirement source file differs from the current RequirementSet content"
+    );
   });
 
   it("fits the independent Critic context while retaining full source references", async () => {

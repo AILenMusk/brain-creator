@@ -1248,6 +1248,63 @@ describe("Brain Creator requirement-first facade", () => {
     expect(approved.status).toBe("approved");
   });
 
+  it("refreshes the current draft projection through the prepare facade without changing Store data", async () => {
+    const workDir = await tempDir();
+    const dataFilePath = join(workDir, ".brain-creator", "local-assets.json");
+    const context = createBrainCreatorMcpContext({ workDir, dataFilePath });
+    const project = dataOf(await handleBrainCreatorTool(context, "bc_configure", {
+      target: "knowledge-project",
+      name: "Draft Projection",
+      key: "draft-projection",
+      defaultLocale: "en-US"
+    }));
+    const source = join(workDir, "requirement.md");
+    await writeFile(source, "# Order\n\nAn order can be submitted and approved.", "utf8");
+    const ingested = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "ingest-requirement",
+      knowledgeProjectId: project.id,
+      source
+    }));
+    await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "generate-test-design",
+      requirementSetId: ingested.requirementSet.id
+    });
+    const storeBefore = await readFile(dataFilePath);
+    const assetsBefore = structuredClone({
+      intents: context.repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: context.repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: context.repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    });
+
+    const refreshed = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "refresh-test-design-projection",
+      knowledgeProjectId: project.id,
+      requirementSetId: ingested.requirementSet.id
+    }));
+    const projectionPath = join(
+      workDir,
+      ".brain-creator",
+      "knowledge",
+      project.key,
+      "requirements",
+      ingested.requirementSet.id,
+      "draft-test-design-current.md"
+    );
+
+    expect(refreshed).toEqual(expect.objectContaining({
+      status: "refreshed",
+      counts: { testIntents: 1, businessScenarios: 1 },
+      storeChanged: false
+    }));
+    expect(await readFile(projectionPath, "utf8")).toContain("projection: current-draft-test-design");
+    expect(await readFile(dataFilePath)).toEqual(storeBefore);
+    expect({
+      intents: context.repository.testIntents.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      scenarios: context.repository.businessScenarios.filter((item) => item.requirementSetId === ingested.requirementSet.id),
+      requirementSet: context.repository.requirementSets.find((item) => item.id === ingested.requirementSet.id)
+    }).toEqual(assetsBefore);
+  });
+
   it("keeps a clarification Gap open until its separate evidence-referenced Facade transition", async () => {
     const workDir = await tempDir();
     const context = createBrainCreatorMcpContext({
@@ -2149,6 +2206,8 @@ describe("Brain Creator requirement-first facade", () => {
     });
 
     const primaryCase = context.repository.executableCases[0];
+    primaryCase.systemId = system.id;
+    addConfirmedPageKnowledge(context, primaryCase, "orders-page");
     const blockedCase = {
       ...JSON.parse(JSON.stringify(primaryCase)),
       id: "executable-orders-blocked",
@@ -2259,13 +2318,25 @@ describe("Brain Creator requirement-first facade", () => {
     await writeFile(
       result.testPath,
       [
-        `import { test, expect } from "../${basename(result.seedPath)}";`,
-        ...result.executionPlan.steps
-          .filter((step: { action: string }) => step.action !== "api")
-          .map(
-            (step: { id: string }) =>
-              `await bc.step(${JSON.stringify(step.id)}, page, action);`
-          ),
+        `import { test, expect, bc } from "../${basename(result.seedPath)}";`,
+        ...result.executionPlan.steps.map((step: {
+          id: string;
+          action: string;
+          pageModelId?: string;
+          locatorPointId?: string;
+          value?: string;
+        }) => {
+          const operation = step.action === "api" || step.action === "navigate"
+            ? "await Promise.resolve();"
+            : `await bc.pageObject(page, ${JSON.stringify(step.pageModelId)}).control(${JSON.stringify(step.locatorPointId)}).${step.action === "fill"
+              ? `fill(${JSON.stringify(step.value ?? "")})`
+              : step.action === "click"
+                ? "click()"
+                : step.action === "select"
+                  ? `selectOption(${JSON.stringify(step.value ?? "")})`
+                  : "isVisible()"};`;
+          return `await bc.step(${JSON.stringify(step.id)}, page, async () => { ${operation} });`;
+        }),
         'test("requirement mismatch", async () => { expect("draft").toBe("approved"); });'
       ].join("\n"),
       "utf8"
@@ -2393,10 +2464,21 @@ describe("Brain Creator requirement-first facade", () => {
     await writeFile(
       completed.testPath,
       [
-        `import { test, expect } from "../${basename(completed.seedPath)}";`,
-        ...(completed.task.chainContext?.requiredStepIds ?? []).map(
-          (stepId: string) => `await bc.step(${JSON.stringify(stepId)}, page, action);`
-        ),
+        `import { test, expect, bc } from "../${basename(completed.seedPath)}";`,
+        ...completed.executionPlan.steps
+          .filter((step: { id: string }) => completed.task.chainContext?.requiredStepIds?.includes(step.id))
+          .map((step: { id: string; action: string; pageModelId?: string; locatorPointId?: string; value?: string }) => {
+            const operation = step.action === "api" || step.action === "navigate"
+              ? "await Promise.resolve();"
+              : `await bc.pageObject(page, ${JSON.stringify(step.pageModelId)}).control(${JSON.stringify(step.locatorPointId)}).${step.action === "fill"
+                ? `fill(${JSON.stringify(step.value ?? "")})`
+                : step.action === "click"
+                  ? "click()"
+                  : step.action === "select"
+                    ? `selectOption(${JSON.stringify(step.value ?? "")})`
+                    : "isVisible()"};`;
+            return `await bc.step(${JSON.stringify(step.id)}, page, async () => { ${operation} });`;
+          }),
         'test("sibling scenario", async () => { expect("approved").toBe("approved"); });'
       ].join("\n"),
       "utf8"
@@ -2587,6 +2669,11 @@ describe("Brain Creator requirement-first facade", () => {
       createdAt: now,
       updatedAt: now
     });
+    addConfirmedPageKnowledge(
+      context,
+      context.repository.executableCases.find((item) => item.id === "executable-data-suite")!,
+      "orders-page"
+    );
     context.repository.gaps.push({
       id: "gap-data-suite",
       projectId: "knowledge-data-suite",
@@ -2734,12 +2821,12 @@ describe("Brain Creator requirement-first facade", () => {
     await writeFile(
       generated.testPath,
       [
-        `import { test, expect } from "../${basename(generated.seedPath)}";`,
+        `import { test, expect, bc } from "../${basename(generated.seedPath)}";`,
         ...generated.executionPlan.steps
-          .filter((step: { action: string }) => step.action !== "api")
+          .filter((step: { action: string }) => step.action !== "api" && step.action !== "navigate")
           .map(
-            (step: { id: string }) =>
-              `await bc.step(${JSON.stringify(step.id)}, page, action);`
+            (step: { id: string; pageModelId: string; locatorPointId: string; value?: string }) =>
+              `await bc.step(${JSON.stringify(step.id)}, page, async () => { await bc.pageObject(page, ${JSON.stringify(step.pageModelId)}).control(${JSON.stringify(step.locatorPointId)}).fill(${JSON.stringify(step.value ?? "New order")}); });`
           ),
         'test("created data", async () => { expect(true).toBe(true); });'
       ].join("\n"),
@@ -3717,6 +3804,57 @@ describe("Brain Creator requirement-first facade", () => {
     });
   });
 });
+
+function addConfirmedPageKnowledge(
+  context: ReturnType<typeof createBrainCreatorMcpContext>,
+  executableCase: ExecutableCase,
+  pageModelId: string
+) {
+  const systemId = executableCase.systemId;
+  if (!systemId) throw new Error(`Executable case ${executableCase.id} has no system binding`);
+  const now = new Date().toISOString();
+  const uiSteps = executableCase.steps.filter((step) => step.action !== "api" && step.action !== "navigate");
+  const snapshotId = `snapshot-${executableCase.id}`;
+  const locatorIds = uiSteps.map((step) => `locator-${step.id}`);
+  context.repository.systemBrainSnapshots.push({
+    id: snapshotId,
+    knowledgeProjectId: executableCase.knowledgeProjectId,
+    systemId,
+    revision: 1,
+    explorationIds: [`fixture-exploration-${executableCase.id}`],
+    status: "confirmed",
+    assets: [
+      {
+        semanticId: `page:${pageModelId}`,
+        kind: "page",
+        label: "Orders",
+        content: "{}",
+        contentHash: "page-hash",
+        sourceRefs: ["fixture:confirmed-page"],
+        metadata: { pageModelId, route: "https://orders.example.test/orders" }
+      },
+      ...locatorIds.map((locatorPointId) => ({
+        semanticId: `locator:${pageModelId}:${locatorPointId}`,
+        kind: "locator" as const,
+        label: locatorPointId,
+        content: "{}",
+        contentHash: `${locatorPointId}-hash`,
+        sourceRefs: ["fixture:confirmed-locator"],
+        metadata: { pageModelId, locatorPointId, selector: `[data-testid="${locatorPointId}"]` }
+      }))
+    ],
+    contentHash: `${snapshotId}-hash`,
+    createdAt: now,
+    confirmedAt: now,
+    confirmedBy: "fixture"
+  });
+  executableCase.systemBrainSnapshotId = snapshotId;
+  executableCase.steps = executableCase.steps.map((step) =>
+    step.action === "api" || step.action === "navigate"
+      ? step
+      : { ...step, pageModelId, locatorPointId: `locator-${step.id}` }
+  );
+}
 
 function dataOf(result: { content: Array<{ type: string; text?: string }> }) {
   const text = result.content.find((item) => item.type === "text")?.text;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { generateSeedFile } from "./seedGenerator.js";
 import { encryptSecrets } from "../shared/crypto.js";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
+import type { SystemBrainSnapshot } from "../brain/types.js";
 
 const tempDirs: string[] = [];
 
@@ -144,6 +145,87 @@ describe("generateSeedFile", () => {
     expect(content).toContain('"recruiter"');
     expect(content).toContain('"approver"');
     expect(content).not.toContain("secret-token");
+  });
+
+  it("exposes confirmed System Brain bindings through the seed POM and returns safe snapshot metadata", async () => {
+    const outputDir = await tempDir();
+    const snapshot: SystemBrainSnapshot = {
+      id: "snapshot-orders-1",
+      knowledgeProjectId: "knowledge-orders",
+      systemId: "system_1",
+      revision: 3,
+      explorationIds: ["exploration-orders"],
+      status: "confirmed",
+      assets: [
+        {
+          semanticId: "page:/orders",
+          kind: "page",
+          label: "Orders",
+          content: "{}",
+          contentHash: "page-hash",
+          sourceRefs: ["exploration:orders"],
+          metadata: { pageModelId: "orders-page", route: "/orders" }
+        },
+        {
+          semanticId: "locator:/orders:create",
+          kind: "locator",
+          label: "Create order",
+          content: "{}",
+          contentHash: "locator-hash",
+          sourceRefs: ["locator-point:create-order"],
+          metadata: {
+            pageModelId: "orders-page",
+            locatorPointId: "create-order",
+            selector: "button[data-action=create]"
+          }
+        },
+        {
+          semanticId: "state:/orders:sensitive",
+          kind: "state",
+          label: "Sensitive state",
+          content: "private business value",
+          contentHash: "sensitive-hash",
+          sourceRefs: ["private:evidence"],
+          metadata: { url: "/orders", value: "private business value" }
+        }
+      ],
+      contentHash: "snapshot-hash",
+      createdAt: "2026-10-29T00:00:00.000Z",
+      confirmedAt: "2026-10-29T00:01:00.000Z",
+      confirmedBy: "reviewer"
+    };
+
+    const result = await generateSeedFile({
+      outputDir,
+      system: systemProfile(),
+      authProfile: {
+        id: "auth_1",
+        projectId: "system_1",
+        env: "staging",
+        role: "qa-admin",
+        loginMethod: "token",
+        encryptedSecrets: encryptSecrets({ token: "seed-token" }),
+        status: "succeeded",
+        createdAt: "2026-05-29T00:00:00.000Z",
+        updatedAt: "2026-05-29T00:00:00.000Z"
+      },
+      systemBrainSnapshot: snapshot
+    });
+
+    const content = await readFile(result.seedPath, "utf8");
+    expect(content).toContain("createSystemPageObject");
+    expect(content).toContain("pageObject(page: import(\"@playwright/test\").Page, pageModelId: string, extensions:");
+    expect(content).toContain('"locatorPointId":"create-order"');
+    expect(content).not.toContain("private business value");
+    expect(content).not.toContain("private:evidence");
+    expect(result).toMatchObject({
+      pageObjectSnapshot: {
+        id: "snapshot-orders-1",
+        revision: 3,
+        pageModelIds: ["orders-page"]
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("button[data-action=create]");
   });
 });
 

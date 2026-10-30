@@ -176,6 +176,49 @@ describe("requirement process models", () => {
     expect(profile.status).toBe("blocked");
     expect(profile.reasons).toContain("A confirmed state-machine model lacks states or transitions");
   });
+
+  it("does not describe an incomplete draft process model as confirmed", () => {
+    const analysis = analyzeRequirement({
+      requirementSetId: "req-1",
+      title: "Order process",
+      content: "Orders are processed.",
+      sourceRef: "source-1"
+    });
+    const incompleteWorkflow = workflowAnalysis("confirmed");
+    incompleteWorkflow.edges = [];
+    const incompleteStateMachine = stateMachineAnalysis("confirmed");
+    incompleteStateMachine.edges = [];
+    const confirmedModels = buildProcessModels({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "req-1",
+      analyses: [incompleteWorkflow, incompleteStateMachine]
+    });
+    const draftWorkflow = {
+      ...confirmedModels.workflowModels[0],
+      status: "draft" as const,
+      transitions: []
+    };
+    const draftStateMachine = {
+      ...confirmedModels.stateMachineModels[0],
+      status: "draft" as const,
+      transitions: []
+    };
+    const profile = buildRequirementCoverageProfile({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "req-1",
+      inputHash: "hash",
+      analysis,
+      intents: [],
+      workflowModels: [draftWorkflow],
+      stateMachineModels: [draftStateMachine]
+    });
+
+    expect(profile.status).toBe("blocked");
+    expect(profile.reasons).toContain("A draft workflow model has no transitions");
+    expect(profile.reasons).toContain("A draft state-machine model lacks states or transitions");
+    expect(profile.reasons).not.toContain("A confirmed workflow model has no transitions");
+    expect(profile.reasons).not.toContain("A confirmed state-machine model lacks states or transitions");
+  });
 });
 
 function stateMachineAnalysis(status: AttachmentAnalysis["status"]): AttachmentAnalysis {

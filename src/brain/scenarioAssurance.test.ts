@@ -179,6 +179,20 @@ describe("scenario assurance", () => {
     }));
   });
 
+  it("names decision-table scenarios with their condition values", () => {
+    const scenarios = buildBusinessScenarios({
+      knowledgeProjectId: "project-1",
+      requirementSetId: "requirement-1",
+      workflows: [],
+      stateMachines: [],
+      decisionTables: [decisionTable()],
+      testIntents: [intent("intent-relevant", ["req:decision"])]
+    });
+
+    expect(scenarios.find((scenario) => scenario.family === "branch")?.title)
+      .toBe("Approval routing: amount=within-limit");
+  });
+
   it("keeps positive workflow scenarios separate from negative intents and unrelated transitions", () => {
     const matching = intent("intent-matching", ["req:approve"]);
     matching.processModelRefs = ["workflow-order"];

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AuthProfile, SystemProfile } from "../domain/types.js";
+import type { SystemBrainSnapshot, SystemBrainSnapshotAsset } from "../brain/types.js";
 import { decryptSecrets } from "../shared/crypto.js";
 import { resolveProtectedStorageStatePath } from "../shared/authStorage.js";
 import { readEncryptedAuthStorageState } from "../shared/authStorageState.js";
@@ -11,6 +12,7 @@ type GenerateSeedFileInput = {
   system: SystemProfile;
   authProfile: AuthProfile;
   actorJourney?: Array<{ role: string; authProfile: AuthProfile }>;
+  systemBrainSnapshot?: SystemBrainSnapshot;
 };
 
 export async function generateSeedFile(input: GenerateSeedFileInput) {
@@ -34,9 +36,24 @@ export async function generateSeedFile(input: GenerateSeedFileInput) {
       };
     })
   );
+  const confirmedSnapshot = input.systemBrainSnapshot?.status === "confirmed"
+    ? input.systemBrainSnapshot
+    : undefined;
+  if (confirmedSnapshot && confirmedSnapshot.systemId !== input.system.id) {
+    throw new Error("System Brain snapshot must belong to the selected system");
+  }
+  const pageObjectSnapshot = confirmedSnapshot
+    ? createPageObjectSnapshot(confirmedSnapshot)
+    : undefined;
   const content = [
     `import { test as base } from "@playwright/test";`,
     `import { readEncryptedAuthStorageState } from "brain-creator/dist/shared/authStorageState.js";`,
+    ...(pageObjectSnapshot
+      ? [
+          `import { createSystemPageObject } from "brain-creator/dist/execution/systemPageObject.js";`,
+          `const confirmedSystemBrainSnapshot = ${JSON.stringify(pageObjectSnapshot)};`
+        ]
+      : []),
     ``,
     `export const test = base.extend({`,
     ...formatPageFixture(input.system.baseUrl, input.authProfile.loginMethod, secrets, storageStatePath),
@@ -62,6 +79,17 @@ export async function generateSeedFile(input: GenerateSeedFileInput) {
     `      }`,
     `    });`,
     `  },`,
+    ...(pageObjectSnapshot
+      ? [
+          `  pageObject(page: import("@playwright/test").Page, pageModelId: string, extensions: Record<string, (input: { page: import("@playwright/test").Page; target: import("@playwright/test").Locator }) => Promise<unknown>> = {}) {`,
+          `    let actionIndex = 0;`,
+          `    return createSystemPageObject(page, confirmedSystemBrainSnapshot, pageModelId, {`,
+          `      extensions,`,
+          `      onAction: async (evidence) => base.info().attach(\`brain-creator-page-action-\${++actionIndex}\`, { body: JSON.stringify(evidence), contentType: "application/json" })`,
+          `    });`,
+          `  },`
+        ]
+      : []),
     ...(actorRoles.length ? formatActorRoleHelper(input.system.baseUrl, actorRoles) : []),
     `};`
   ].join("\n");
@@ -71,7 +99,66 @@ export async function generateSeedFile(input: GenerateSeedFileInput) {
     seedPath,
     loginMethod: input.authProfile.loginMethod,
     secretKeys: Object.keys(secrets),
+    ...(pageObjectSnapshot
+      ? {
+          pageObjectSnapshot: {
+            id: pageObjectSnapshot.id,
+            revision: pageObjectSnapshot.revision,
+            pageModelIds: pageObjectSnapshot.assets
+              .filter((asset) => asset.kind === "page")
+              .map((asset) => String(asset.metadata.pageModelId ?? ""))
+              .filter(Boolean)
+          }
+        }
+      : {}),
     ...(storageStatePath ? { authState: "storage-state" as const } : {})
+  };
+}
+
+function createPageObjectSnapshot(snapshot: SystemBrainSnapshot) {
+  const assets: SystemBrainSnapshotAsset[] = [];
+  for (const asset of snapshot.assets) {
+    if (asset.kind === "page") {
+      const pageModelId = asset.metadata.pageModelId;
+      const route = asset.metadata.route;
+      if (typeof pageModelId !== "string" || typeof route !== "string") continue;
+      assets.push({
+        semanticId: `page:${pageModelId}`,
+        kind: "page",
+        label: `Page ${pageModelId}`,
+        content: "",
+        contentHash: asset.contentHash,
+        sourceRefs: [],
+        metadata: { pageModelId, route }
+      });
+      continue;
+    }
+    if (asset.kind === "locator") {
+      const pageModelId = asset.metadata.pageModelId;
+      const locatorPointId = asset.metadata.locatorPointId;
+      const selector = asset.metadata.selector;
+      if (
+        typeof pageModelId !== "string" ||
+        typeof locatorPointId !== "string" ||
+        typeof selector !== "string"
+      ) continue;
+      assets.push({
+        semanticId: `locator:${pageModelId}:${locatorPointId}`,
+        kind: "locator",
+        label: `Locator ${locatorPointId}`,
+        content: "",
+        contentHash: asset.contentHash,
+        sourceRefs: [],
+        metadata: { pageModelId, locatorPointId, selector }
+      });
+    }
+  }
+  return {
+    id: snapshot.id,
+    systemId: snapshot.systemId,
+    revision: snapshot.revision,
+    status: snapshot.status,
+    assets
   };
 }
 

@@ -298,7 +298,7 @@ describe("Requirement Host Harness facade", () => {
     expect(designed.workflowModels).toHaveLength(1);
   });
 
-  it("does not persist requirement assets when the isolated Critic blocks the analysis", async () => {
+  it("creates a draft design from blocked analysis without opening the baseline gate", async () => {
     const workDir = await mkdtemp(join(tmpdir(), "brain-creator-blocked-host-analysis-"));
     const context = createBrainCreatorMcpContext({
       workDir,
@@ -332,9 +332,36 @@ describe("Requirement Host Harness facade", () => {
       requirementSetId: fixture.requirementSet.id,
       provider: "host-agent"
     }));
-    expect(blockedDesign).toEqual(expect.objectContaining({ status: "blocked" }));
-    expect(context.repository.knowledgeNodes).toHaveLength(0);
-    expect(context.repository.workflowModels).toHaveLength(0);
+    expect(blockedDesign).toEqual(expect.objectContaining({
+      status: "blocked",
+      draftDesignCreated: true,
+      draftOnly: true,
+      draftTestIntentCount: expect.any(Number),
+      draftScenarioCount: expect.any(Number),
+      nextAction: expect.stringContaining("before baseline approval, compilation, or execution")
+    }));
+    expect(blockedDesign.evaluation.verdict).toBe("blocked");
+    expect(context.repository.knowledgeNodes.length).toBeGreaterThan(0);
+    expect(context.repository.workflowModels.length).toBeGreaterThan(0);
+    expect(context.repository.testIntents.length).toBeGreaterThan(0);
+    expect(context.repository.businessScenarios.length).toBeGreaterThan(0);
+    expect(fixture.requirementSet.status).toBe("draft");
+    expect(context.repository.approvalReceipts).toHaveLength(0);
+    expect(context.repository.evaluationTrials).toHaveLength(0);
+    const approvalPreview = dataOf(await handleBrainCreatorTool(context, "bc_prepare", {
+      action: "approve-baseline",
+      requirementSetId: fixture.requirementSet.id,
+      confirm: false
+    }));
+    expect(approvalPreview).toEqual(expect.objectContaining({
+      status: "blocked",
+      approvalRequired: true,
+      requiresConfirmation: false,
+      reasons: expect.arrayContaining([expect.stringMatching(/approval|blocked/i)]),
+      nextAction: expect.stringContaining("before requesting an approval challenge")
+    }));
+    expect(approvalPreview.approvalChallenge).toBeUndefined();
+    expect(context.repository.approvalReceipts).toHaveLength(0);
     expect(context.repository.gaps).toEqual([
       expect.objectContaining({
         sourceType: "requirement-host-harness",

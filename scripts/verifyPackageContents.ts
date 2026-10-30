@@ -8,6 +8,8 @@ const requiredPaths = [
   "dist/cli/installAssets.js",
   "dist/cli/installCodexPlugin.js",
   "dist/cli/writeMcpConfig.js",
+  "dist/execution/systemPageObject.js",
+  "dist/execution/hostPlaywrightRunner.js",
   "skills/brain-creator/SKILL.md",
   ".claude/agents/playwright-test-planner.md",
   ".claude/agents/playwright-test-generator.md",
@@ -55,7 +57,8 @@ const forbiddenPrefixes = [
   "test-results/",
   "node_modules/",
   "src/",
-  "scripts/"
+  "scripts/",
+  "docs/quality/"
 ];
 
 const result = await run("npm", ["pack", "--dry-run", "--json"]);

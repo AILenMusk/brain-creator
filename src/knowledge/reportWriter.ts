@@ -57,6 +57,19 @@ export type TestIntentReportInput = {
   evidenceCatalog?: EvidenceCatalog;
 };
 
+export type DraftTestDesignProjectionInput = {
+  title: string;
+  requirementSetId: string;
+  requirementSetStatus: RequirementSet["status"];
+  sourceId: string;
+  sourceContentHash: string;
+  draftHash: string;
+  generatedAt: string;
+  lastRevisionEvent?: { id: string; createdAt: string; message: string };
+  intents: TestIntent[];
+  scenarios: BusinessScenario[];
+};
+
 const nodeLabels: Record<string, string> = {
   module: "业务模块", actor: "参与角色", object: "业务对象", field: "字段", rule: "业务规则",
   workflow: "业务流程", state: "状态", permission: "权限", integration: "系统集成",
@@ -183,6 +196,87 @@ export function renderTestIntentReport(input: TestIntentReportInput) {
     "- 需要跨角色协作时，角色顺序和身份切换是否正确。",
     "- 来源证据不足、系统入口不唯一或数据无法准备的意图，应保持待确认，不应直接执行。", "",
     ...(input.intents.length > 0 ? input.intents.flatMap((intent, index) => renderIntent(intent, index + 1, input.evidenceCatalog)) : ["## 当前没有测试意图", "", "- 请先完成需求分析和测试设计。"])
+  ];
+  return renderReport(lines);
+}
+
+export function renderDraftTestDesignProjection(input: DraftTestDesignProjectionInput) {
+  const intentFields = input.intents.map((intent) => ({
+    id: intent.id,
+    status: intent.status,
+    businessOutcomeId: intent.businessOutcomeId ?? null,
+    title: intent.title,
+    objective: intent.objective,
+    preconditions: intent.preconditions,
+    expectedResults: intent.expectedResults,
+    requirementRefs: intent.requirementRefs,
+    knowledgeNodeRefs: intent.knowledgeNodeRefs,
+    processModelRefs: intent.processModelRefs ?? [],
+    scenarioIds: intent.scenarioIds ?? [],
+    producesEntityRefs: intent.producesEntityRefs ?? [],
+    consumesEntityRefs: intent.consumesEntityRefs ?? [],
+    actorJourney: intent.actorJourney ?? []
+  }));
+  const scenarioFields = input.scenarios.map((scenario) => ({
+    id: scenario.id,
+    status: scenario.status,
+    title: scenario.title,
+    objective: scenario.objective,
+    family: scenario.family,
+    actors: scenario.actors,
+    preconditions: scenario.preconditions,
+    testDataNeeds: scenario.testDataNeeds,
+    expectedBusinessOutcomes: scenario.expectedBusinessOutcomes,
+    sourceRefs: scenario.sourceRefs,
+    testIntentIds: scenario.testIntentIds,
+    risk: scenario.risk
+  }));
+  const lines = [
+    "---",
+    "projection: current-draft-test-design",
+    `requirement_set_id: ${JSON.stringify(input.requirementSetId)}`,
+    `requirement_set_status: ${input.requirementSetStatus}`,
+    `source_id: ${JSON.stringify(input.sourceId)}`,
+    `source_content_hash: ${JSON.stringify(input.sourceContentHash)}`,
+    `draft_hash: ${JSON.stringify(input.draftHash)}`,
+    `generated_at: ${JSON.stringify(input.generatedAt)}`,
+    `last_revision_event_id: ${JSON.stringify(input.lastRevisionEvent?.id ?? "")}`,
+    "---",
+    "",
+    `# ${plainText(input.title)}：当前草稿投影`,
+    "",
+    "> 此文件只读呈现 Store 中当前的 TestIntent 与 BusinessScenario 字段。它不批准基线、不映射未审核的 outcome，也不证明目标系统已执行。",
+    "",
+    `- RequirementSet 状态：${statusLabel(input.requirementSetStatus)}`,
+    `- TestIntent：${input.intents.length} 条；BusinessScenario：${input.scenarios.length} 个`,
+    `- Store 草稿哈希：\`${input.draftHash}\``,
+    `- RequirementSource：\`${input.sourceId}\`；内容 SHA-256：\`${input.sourceContentHash}\``,
+    ...(input.lastRevisionEvent
+      ? [
+        `- 最近草稿修订事件：\`${input.lastRevisionEvent.id}\`（${input.lastRevisionEvent.createdAt}）`,
+        "- 修订记录原文：",
+        "",
+        "<pre><code>",
+        escapeProjectionHtml(input.lastRevisionEvent.message),
+        "</code></pre>"
+      ]
+      : ["- 最近草稿修订事件：未记录"]),
+    "",
+    "## TestIntents",
+    "",
+    "以下 JSON 字段由当前 Store 草稿生成；`businessOutcomeId: null` 表示尚未映射。",
+    "",
+    "<pre><code>",
+    escapeProjectionHtml(JSON.stringify(intentFields, null, 2)),
+    "</code></pre>",
+    "",
+    "## BusinessScenarios",
+    "",
+    "以下 JSON 字段由当前 Store 草稿生成；Blocked 和未执行的范围仍需保留在后续固定分母中。",
+    "",
+    "<pre><code>",
+    escapeProjectionHtml(JSON.stringify(scenarioFields, null, 2)),
+    "</code></pre>"
   ];
   return renderReport(lines);
 }
@@ -352,6 +446,9 @@ function knowledgeName(title: string) {
 }
 function plainText(value: string) { return humanizeText(value).replace(/\s+/g, " ").trim(); }
 function mdCell(value: string) { return plainText(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " "); }
+function escapeProjectionHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 function reportTitle(title: string, analysis: { module?: string }) {
   const readable = plainText(title);
   return /[�\u0000-\u001F]/.test(title) || readable.length < 2

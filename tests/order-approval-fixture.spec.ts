@@ -18,6 +18,9 @@ import { RunLedgerService } from "../src/knowledge/runLedger.js";
 import { TestDataProviderService } from "../src/knowledge/testDataProvider.js";
 import { handleBrainCreatorTool, type BrainCreatorMcpContext } from "../src/mcp/handlers.js";
 import { orderFixtureBrowserExecutablePath } from "./order-fixture-browser.js";
+import { createSystemPageObject } from "../src/execution/systemPageObject.js";
+import type { SystemPageObjectEvidence } from "../src/execution/systemPageObject.js";
+import type { SystemBrainSnapshot } from "../src/brain/types.js";
 
 const fixtureUrl = new URL("./fixtures/order-approval/index.html", import.meta.url);
 
@@ -43,6 +46,74 @@ test("completes a low-value order through role handoff and reuses its entity", a
   await page.getByRole("button", { name: "Close order" }).click();
   await expect(page.locator("#order-status")).toHaveText("closed");
   await expect(page.locator("#order-id")).toHaveText(orderId!);
+});
+
+test("executes the approved order fixture path through confirmed System Brain POM bindings", async ({ page }) => {
+  const actions: SystemPageObjectEvidence[] = [];
+  const pageModelId = "order-approval-page";
+  const locatorSpecs: Array<[string, string]> = [
+    ["amount", "#amount"],
+    ["create-order", "#create-order button[type=submit]"],
+    ["order-id", "#order-id"],
+    ["submit", "#submit-order"],
+    ["role", "#role"],
+    ["approve", "#approve-order"],
+    ["status", "#order-status"],
+    ["close", "#close-order"]
+  ];
+  const snapshot: SystemBrainSnapshot = {
+    id: "order-fixture-snapshot-1",
+    knowledgeProjectId: "order-fixture-project",
+    systemId: "order-fixture-system",
+    revision: 1,
+    explorationIds: ["order-fixture-exploration"],
+    status: "confirmed",
+    assets: [
+      { semanticId: "page:/order-approval", kind: "page", label: "Order Approval", content: "{}", contentHash: "page", sourceRefs: ["fixture"], metadata: { pageModelId, route: fixtureUrl.href } },
+      ...locatorSpecs.map(([locatorPointId, selector]) => ({
+        semanticId: `locator:${locatorPointId}`,
+        kind: "locator" as const,
+        label: locatorPointId,
+        content: "{}",
+        contentHash: locatorPointId,
+        sourceRefs: [`locator-point:${locatorPointId}`],
+        metadata: { pageModelId, locatorPointId, selector }
+      }))
+    ],
+    contentHash: "snapshot-content-hash",
+    createdAt: new Date(0).toISOString(),
+    confirmedAt: new Date(0).toISOString(),
+    confirmedBy: "fixture-review"
+  };
+  await page.goto(fixtureUrl.href);
+  const object = createSystemPageObject(page, snapshot, pageModelId, {
+    onAction: (event) => { actions.push(event); }
+  });
+
+  await object.control("amount").fill("500");
+  await object.control("create-order").click();
+  const orderId = await object.control("order-id").textContent();
+  expect(orderId).toMatch(/^ORD-/);
+  await object.control("submit").click();
+  await expect.poll(() => object.control("status").textContent()).toBe("manager-review");
+  await object.control("role").selectOption("manager");
+  await object.control("approve").click();
+  await expect.poll(() => object.control("status").textContent()).toBe("approved");
+  expect(await object.control("order-id").textContent()).toBe(orderId);
+  await page.reload();
+  const resumed = createSystemPageObject(page, snapshot, pageModelId, {
+    onAction: (event) => { actions.push(event); }
+  });
+  expect(await resumed.control("order-id").textContent()).toBe(orderId);
+  await resumed.control("role").selectOption("finance");
+  await resumed.control("close").click();
+  await expect.poll(() => resumed.control("status").textContent()).toBe("closed");
+  expect(actions.length).toBeGreaterThan(10);
+  expect(actions.every((event) =>
+    event.status === "succeeded" &&
+    event.pageModelId === pageModelId &&
+    event.snapshotId === "order-fixture-snapshot-1"
+  )).toBe(true);
 });
 
 test("reuses one browser-created order across dependent cases and defers cleanup", async ({ page }) => {

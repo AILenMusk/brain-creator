@@ -748,7 +748,7 @@ export class BrainCreatorService {
     return this.setAuthCheckpointStatus(checkpointId, "cancelled");
   }
 
-  getCaptureAuth(idValue?: string): PageCaptureAuth | undefined {
+  getCaptureAuth(idValue?: string, workspace?: string): PageCaptureAuth | undefined {
     if (!idValue) {
       return undefined;
     }
@@ -756,7 +756,7 @@ export class BrainCreatorService {
     if (!profile) {
       throw new Error("Auth profile not found");
     }
-    const migrated = migrateEncryptedSecrets(profile.encryptedSecrets);
+    const migrated = migrateEncryptedSecrets(profile.encryptedSecrets, workspace);
     if (migrated.changed) {
       profile.encryptedSecrets = migrated.encryptedSecrets;
       profile.updatedAt = timestamp();
@@ -764,15 +764,15 @@ export class BrainCreatorService {
     }
     return {
       loginMethod: profile.loginMethod,
-      secrets: decryptSecrets(migrated.encryptedSecrets)
+      secrets: decryptSecrets(migrated.encryptedSecrets, workspace)
     };
   }
 
-  setAuthStorageStatePath(idValue: string, storageStatePath: string): AuthProfile {
+  setAuthStorageStatePath(idValue: string, storageStatePath: string, workspace?: string): AuthProfile {
     const profile = this.repository.authProfiles.find((item) => item.id === idValue);
     if (!profile) throw new Error("Auth profile not found");
-    const secrets = decryptSecrets(migrateEncryptedSecrets(profile.encryptedSecrets).encryptedSecrets);
-    profile.encryptedSecrets = encryptSecrets({ ...secrets, storageStatePath });
+    const secrets = decryptSecrets(migrateEncryptedSecrets(profile.encryptedSecrets, workspace).encryptedSecrets, workspace);
+    profile.encryptedSecrets = encryptSecrets({ ...secrets, storageStatePath }, workspace);
     profile.updatedAt = timestamp();
     this.repository.persist();
     return publicAuthProfile(profile);
