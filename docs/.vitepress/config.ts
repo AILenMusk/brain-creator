@@ -79,6 +79,7 @@ const chineseTheme = {
       text: "指南",
       items: [
         { text: "从需求到测试", link: "/zh-CN/guides/requirement-to-test" },
+        { text: "AI 需求文档编写标准", link: "/zh-CN/guides/ai-requirement-authoring-standard" },
         { text: "可信控制面", link: "/zh-CN/guides/trusted-control-plane" },
         { text: "存储与证据", link: "/zh-CN/guides/storage-and-evidence" },
         { text: "测试用例脑与测试数据脑", link: "/zh-CN/guides/testcase-testdata-brain" },

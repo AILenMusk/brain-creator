@@ -4,13 +4,19 @@ This register tracks the six-package business-closure plan. Implementation, real
 
 ## 当前实施状态（2026-10-30，基于新计划）
 
-- 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)。基线为 `origin/main` `d1d11a1d931b57aed3177ff7dfee3446e116b241`；PR #189 已按用户批准的 head `880871094ed7a5eb0f58f01a039155ffbbfb6448` squash 合并，远端合并树与批准 head 完全一致。本地 `main` 和 `fixture` 均已同步至该提交。
+- 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)。基线为 `origin/main` `1a964fc8acb27a564d2381818ca4da019b6b6fc4`；PR #190 已合并，远端 `main`、本地 `main` 与 `fixture` 均指向该提交。
 - 合并后实现完成度为 **4/6**（A–D 工程交付包通过；E/F 未通过验收）。`npm test` 143 个文件/1,233 项、`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（177 项）、隔离的全新目录安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke 均通过。文档构建有既有 chunk-size 提示。工程与 synthetic（合成）结果不计真实业务结果。
 - 知识驱动 POM 的反例测试覆盖未确认快照、路由变化、缺失/歧义控件和未登记扩展；订单夹具覆盖角色交接、创建/提交/审批/关闭、实体复用及重启后不重复提交。MCP 入口已从约 14,000 行拆至 5,759 行，并形成需求工作流、状态/审核投影、参数解析与浏览器运行模块；Handler 仍过大，不称为薄适配层。
 - PR #187/#188 已留结案说明并关闭，均未合并；PR #189 已合并。通用修复已选择性移植，Test5 专属资料未进入本轮。npm 包内容检查确认排除 `docs/quality/`。
 - 历史工作树已归档至 `E:\Projects\BrainCreator_Acceptance\2026-10-29`，含四个旧运行状态副本、补丁/未跟踪文件和三个通过 `git bundle verify` 的 bundle；3,098 项 SHA-256 逐项复核无不匹配。仍有 Node 进程，不能可靠证明其是否使用旧 Store，因此保留四个旧工作树及关联分支。已删除 PR #189 合并后的临时远端 `fixture`，本地 `fixture` 重建并跟踪 `origin/main`。
-- E（真实业务评估）和 F（结果复核与交付）等待新的正式需求文档与目标系统。旧 Test5 内容只作历史审计，不作为新需求、Oracle、Trial 输入或通过证据。未建立新 EvaluationTrial；真实业务完成度、自主完成度、恢复率和清理率均为**未测量**。
-- 用户已批准 PR #189 的 head SHA；GitHub 已合并，远端 `main` 已包含合并提交。本地 `main` 与 `fixture` 均同步到最新 `origin/main`。今后每次变更仍须开新 PR 并在批准其具体 SHA 后更新远端 `main`。不自动发布 npm。
+- PR #190 的合并提交已进入远端 `main`。后续改动遵循本地 `fixture` → 本地 `main` → 远端 `main` 的审批流程；不自动发布 npm。
+- E（真实业务评估）与 F（结果复核与交付）已恢复为当前目标，但尚未启动 Trial（试验轮次）或目标系统业务写入。最新正式源为 Lark 主文档 revision `2045`；本轮完整输入包哈希为 `0b7d8ba20202213f411a636e27f34238485a5ff32cdeca10e3a4487e61c0b06c`，CLI 返回的主文档 Markdown 正文哈希为 `52cf01eeefe90afd9e62f24fc7d8cddb07bf23721dfe5f741fbc3358ae43004c`。目标为 Test5 集团/GHR；用户已冻结 28 个本地 GHR outcome，Beisen 仍是第二真实系统外部依赖。2026-10-30 确认“用工形式选择实习生时，前端带出是否占编”；字段值、控件类型、可编辑性和落库位置仍未观察/确认。
+- 新建 `knowledgeProject_1e1v7nza` 与 `requirementSet_teo6nqbx`，来源为 `requirementSource_sn4srxv9`。RequirementSet 仍为 Draft（草稿）；本次自动生成 **191 个 TestIntent（测试意图）和 155 个 BusinessScenario（业务场景）**，均为草稿；与先前已审阅的 37/11 草稿及 28 个 outcome 映射不一致。当前 28 个 outcome 到新草稿的映射为 0；191 个意图中有 162 个归入宽泛的“招聘需求与 Offer 管理”模块，这 162 个意图共有 103 种不同 objective（测试目标）。23 条 Stage Eval 中 10 条为当前结果、13 条已过期，评估仍有 blocked/needs-review 项；项目有 10 条未解决高严重度 Gap。尚无需求基线批准、系统绑定、确认的 System Brain 快照或可执行用例，不能启动 Trial。
+- 新系统元数据 `system_dyf07zf5` 与鉴权配置 `auth_q6faci0x` 已创建。Brain Creator CLI 报告该鉴权配置在新浏览器上下文验证成功；但 MCP 当前内存仍报告 0 个已验证 AuthProfile。CLI 写入后，`reload-store` 因另一条旧活动任务而被拒绝：旧 Test5 系统 `system_jmqdbo4i` 的 document-suite `suite_lv6tmgi6` 自 2026-08-25 起停在 `waiting-for-agent`（61 条用例，34 条已尝试，20 通过、14 blocked、1 等待、26 未执行）。最近 Run Ledger 条目是生成器等待宿主输出；它含旧执行记录，不能作为新 Trial 证据。该旧任务尚未恢复或取消，因此新 AuthProfile 的 MCP 侧复核、System Brain 探索仍被阻塞。
+- Codex 宿主按用户指示保持关闭。Facade 返回的运行身份为包 `2.1.1`、commit `1a964fc8acb27a564d2381818ca4da019b6b6fc4`、build ID `841a1c6ee2f604a9a0994fc3d0fc7ff29e7f05218cc127c63a51258b2c49fcf5`、MCP PID `17676`、Store schema `21`；该 MCP 进程仍在响应，未尝试终止或重启。真实业务完成度、自主完成度、恢复率、清理率及错误判定率均为**未测量**；没有发生本轮业务写入、清理或 Trial。
+- 新增的 [AI 需求文档编写标准](../zh-CN/guides/ai-requirement-authoring-standard.md) 作为中文文档入口与导航项已写入当前工作区；文档构建与提交前检查仍待执行。
+- PR #190 的合并提交已进入远端 `main`。后续改动遵循本地 `fixture` → 本地 `main` → 远端 `main` 的审批流程；不自动发布 npm。
+- PR #190 的合并提交已进入远端 `main`。后续改动遵循本地 `fixture` → 本地 `main` → 远端 `main` 的审批流程；不自动发布 npm。
 
 ## 历史复核记录（2026-10-29；基于旧基线，已被上方状态取代）
 
