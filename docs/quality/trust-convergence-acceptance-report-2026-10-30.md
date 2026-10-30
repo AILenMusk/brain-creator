@@ -9,8 +9,8 @@
 | 项目 | 本轮记录 |
 |---|---|
 | 已合并基线 | `main` / `origin/main`：`1a964fc8acb27a564d2381818ca4da019b6b6fc4`，包含 PR #190 |
-| 验收候选 | `fixture` / `origin/fixture`：`a9cacd6dcbb8f989925b0eecc8b827b463698cb9`，对应 PR #191；未获该 head SHA 的合并批准 |
-| 工作区状态 | 三份文档有未提交改动；代码验收在该 fixture 候选上执行，不能声称已在最新 `main` 复验 |
+| 验收候选 | PR #191 中的代码改动基于 `a9cacd6dcbb8f989925b0eecc8b827b463698cb9`；PR 当前审查 head 以 GitHub 元数据为准，未获该 head SHA 的合并批准 |
+| 验收状态 | 全量代码检查在上述代码候选上执行；之后只追加验收文档，单独重跑文档、身份及包验收。不能声称已在最新 `main` 复验 |
 | Trial | 尚未创建；本轮未执行目标系统业务写入或测试数据清理 |
 | 用户冻结范围 | 28 个本地 GHR outcome；Beisen 作为第二真实系统外部依赖，不计为已通过 |
 
@@ -53,12 +53,12 @@
 | `npx tsc --noEmit` | 通过 |
 | `npm run build` | 通过 |
 | `npm run docs:build` | 通过；保留既有大 chunk 警告 |
-| `npm run verify:package-contents` | 通过：178 项，1,557,909 bytes |
+| `npm run verify:package-contents` | 通过：178 项，1,557,910 bytes |
 | `npm run verify:package-install` | 通过：本地 tarball 安装、CLI/MCP 启动及恢复 smoke；临时目录已移除 |
 | `npm run verify:order-fixture` | 通过：7/7，覆盖创建/提交、角色交接、拒绝与金额分支、跨用例实体复用、浏览器重启后先核状态且不重复提交、通用性反例 |
 | `npm run verify:host-agent-document-suite` | 通过：本地合成服务器上的 TC-001、TC-002，使用 Playwright Chromium |
 | `npm run verify:codex-native-entry` | 通过：Host Agent handoff、`/bc` 命令兼容、仓库内 plugin 安装 |
-| `npm run verify:source-mcp-identity` | 通过：候选源码启动的身份返回 commit `a9cacd6`、build ID、dirty 标志、PID 与隔离 workspace；不是对现有宿主 MCP 进程升级的证明 |
+| `npm run verify:source-mcp-identity` | 提交后复验通过：源码启动返回 commit `5c387241badbf55f3a88793b6ea9cb26448210cb`、对应 build ID、`dirty=false`、PID 与隔离 workspace；不是对现有宿主 MCP 进程升级的证明 |
 | `npm run verify:source-workspace-isolation` | 通过：安装 MCP 的 Store 位于隔离业务 workspace；测试临时目录已移除 |
 | `npm run verify:repository-hygiene` | 通过：380 个 tracked files。首次检查发现验收文档含目标环境主机 URL；已从仓库文档移除该主机，仅保留流程名称和 ID，复跑通过 |
 | `git diff --check` | 通过 |
