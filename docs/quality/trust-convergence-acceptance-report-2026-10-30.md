@@ -32,14 +32,14 @@
 - 通过 `lark-cli` 复核的正式需求主文档 revision 为 `2045`，流程子文档 revision 为 `5`；需求、字段表和附件版本记录见 [trust-convergence.md](./trust-convergence.md)。
 - 用户冻结了 28 个 Test5 集团/GHR 本地 outcome；Beisen 仍需第二真实系统与单独执行范围。
 - 使用重新验证的 AuthProfile 完成了 Test5 首页、招聘需求列表和 Offer 列表的只读探索；未执行创建、提交、审批、关闭或清理。
-- 用户提供的 `hc招聘需求流程`（流程 ID `db88e8d8-7c40-11f1-9dfa-fefcfe44737d`）和 `(zt-hc)offer流程`（流程 ID `f497a3f1-6fb8-11f1-bc9d-00ff39f9b15c`）在 Brain Creator 的已验证上下文中均未显示流程画布：招聘需求路径曾跳转到应用的资源不存在页；Offer 路径对应的应用页也显示资源不存在。用户确认其当前账号从 Test5 页面可以正常查询到流程记录；点击记录后是否能打开画布尚未确认，因此不能据自动化错误页认定流程不存在，也不能据列表查询通过来确认审批路线。
-- 用户补充两条详情链接后，于 2026-10-30 08:13–08:15 UTC 通过已验证 AuthProfile 再次分别只读打开（探索记录 `exploration_n7w5wpxc`、`exploration_uccj1guk`）。重试仍未取得可审核的流程画布或 workflow；System Brain 当前仍有 0 条 workflow。08:20 UTC 再次验证 AuthProfile 时，只确认当前登录账号能访问 Test5 首页，未验证流程详情权限。相关 outcome 继续 blocked，不以错误页模型作为 Oracle。没有因此确认快照或启动业务操作。
+- 用户确认可以点开两条流程画布，并提供 `hc招聘需求流程` 的局部截图。截图已保存在本工作区忽略目录 `.brain-creator/evidence/manual-system-observations/test5-ghr/2026-10-30-hc-recruitment-flow-top.png`，SHA-256 为 `725111814163B913AA8EFDD82F04B117FC37641FA6F6621D31C0ACEDB27CB476`。可见起点分为 `海外`（优先级 1，画面显示条件 `${overseaEstablishment = = 1}`）和 `国内`（默认、优先级 2）；截图内海外分支进入 HRBP，国内分支绕过 HRBP，两路汇合至 HRBP_TA 对接人。截图只覆盖画布上半段，且未显示流程 ID/版本号；它是部分系统配置观察，不能确认完整路线、版本绑定或业务 Oracle。
+- 此截图与正式附件中的两张路线图需要分层比较：业务提供图按海外/国内分支；附件“流程配置”图按工作地区区分；Test5 截图又显示 `overseaEstablishment` 条件。前半段拓扑部分相似，但判定字段并不相同。用户先前确认 Proc000019 v9 是当前生效版本；本截图没有显示其 ID/版本，仍需完整画布导出或可核对的版本页来绑定。旧的自动化探索仍只获得错误页，System Brain 目前为 0 条 workflow；不以手工截图自动晋升其候选快照。
 
 ### Trial 准入阻塞
 
 - `requirementSet_teo6nqbx` 仍为 draft/blocked：135 条款中覆盖 130 条，7 项待处理、1 项阻塞；11 个高严重度 Gap 中当前 7 个 open、4 个 resolved。已记录的四项处置分别为旧鉴权失败经新上下文验证关闭、正式需求版次标签仍待来源补足、职级分支留在分母并标未执行、HSSC 管理员支线排除执行但保留 outcome 在分母。Coverage Critic 与 Adjudicator 仍为 `needs-review`。
 - 当前 draft 有 191 个 TestIntent、155 个 BusinessScenario，但 191 条意图全为 draft，显式映射到固定 28 个 outcome 的数量为 0。188/191 条只有通用前置条件；135/191 条的预期结果与 objective 相同；162/191 条集中在宽泛模块。来源可追踪和草稿数量不能代替业务覆盖。
-- System Brain revision 8 仍是 candidate，最新 ChangeSet 为 needs-review，`workflowEvidence=false`；没有确认的流程画布或足以运行的页面绑定。
+- System Brain revision 8 仍是 candidate，最新 ChangeSet 为 needs-review，`workflowEvidence=false`；目前有一张用户提供的局部流程截图，尚未写入或确认 System Brain，页面/流程唯一绑定也未完成。
 - 未配置独立业务后置状态校验器和 TestData Provider。项目的 EvaluationTrial 数量为 0。
 - 当前已连接的宿主 MCP 报告 package `2.1.1`、commit `1a964fc8acb27a564d2381818ca4da019b6b6fc4`、`dirty=true`，即运行的是合并后的 `main` 基线而非 PR #191 候选；候选 workspace 的来源身份 smoke 不能证明宿主 MCP 已更新。
 
