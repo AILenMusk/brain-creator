@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("sanitized execution quality problem register", () => {
-  it("tracks all 42 numbered problems with accurate category totals", async () => {
+  it("tracks all 43 numbered problems with accurate category totals", async () => {
     const content = await readFile(
       join(process.cwd(), "docs", "quality", "problem-register.md"),
       "utf8"
@@ -18,9 +18,9 @@ describe("sanitized execution quality problem register", () => {
       ])
     );
 
-    expect(new Set(ids).size).toBe(42);
-    expect(counts).toEqual({ A: 8, B: 6, C: 4, D: 8, E: 7, F: 5, G: 4 });
-    expect(content).toContain("| total | 42 |");
+    expect(new Set(ids).size).toBe(43);
+    expect(counts).toEqual({ A: 9, B: 6, C: 4, D: 8, E: 7, F: 5, G: 4 });
+    expect(content).toContain("| total | 43 |");
   });
 
   it("does not copy real environment identifiers or credentials", async () => {

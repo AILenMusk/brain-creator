@@ -413,6 +413,7 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
   private readonly legacyFilePath: string;
   private readonly lockDir: string;
   private readonly transactionJournalPath: string;
+  private lastSyncedSnapshot?: RepositorySnapshot;
 
   constructor(
     private readonly storeDir: string,
@@ -431,8 +432,33 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
   override persist() {
     if (this.transactionDepth > 0) return;
     this.withLock(() => {
-      const snapshot = snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION);
-      this.writeSnapshot(snapshot);
+      const local = snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION);
+      const remote = this.readLatestSnapshot();
+      const merged = mergeRepositorySnapshots(
+        this.lastSyncedSnapshot ?? remote,
+        local,
+        remote
+      );
+      writeAtomicJson(this.transactionJournalPath, {
+        schemaVersion: SHARDED_REPOSITORY_SCHEMA_VERSION,
+        snapshot: remote
+      });
+      try {
+        applyRepositorySnapshotPreservingReferences(this, merged);
+        this.writeSnapshot(merged);
+        rmSync(this.transactionJournalPath, { force: true });
+        this.lastSyncedSnapshot = structuredClone(merged);
+      } catch (error) {
+        try {
+          applyRepositorySnapshotPreservingReferences(this, remote);
+          this.writeSnapshot(remote);
+          rmSync(this.transactionJournalPath, { force: true });
+          this.lastSyncedSnapshot = structuredClone(remote);
+        } catch {
+          // Keep the journal so a later process can restore the last committed snapshot.
+        }
+        throw error;
+      }
     });
   }
 
@@ -443,18 +469,28 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
       const result = action();
       if (this.transactionDepth > 1) return result;
       this.withLock(() => {
+        const local = snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION);
+        const remote = this.readLatestSnapshot();
+        const merged = mergeRepositorySnapshots(
+          this.lastSyncedSnapshot ?? remote,
+          local,
+          remote
+        );
         writeAtomicJson(this.transactionJournalPath, {
           schemaVersion: SHARDED_REPOSITORY_SCHEMA_VERSION,
-          snapshot: before
+          snapshot: remote
         });
         try {
-          this.writeSnapshot(snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION));
+          applyRepositorySnapshotPreservingReferences(this, merged);
+          this.writeSnapshot(merged);
           rmSync(this.transactionJournalPath, { force: true });
+          this.lastSyncedSnapshot = structuredClone(merged);
         } catch (error) {
-          applyRepositorySnapshot(this, before);
           try {
-            this.writeSnapshot(before);
+            applyRepositorySnapshotPreservingReferences(this, remote);
+            this.writeSnapshot(remote);
             rmSync(this.transactionJournalPath, { force: true });
+            this.lastSyncedSnapshot = structuredClone(remote);
           } catch {
             // Keep the journal so the next process can finish the rollback.
           }
@@ -471,8 +507,43 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
   }
 
   override reload() {
+    this.recoverInterruptedTransaction();
     this.restoreShardedOrMigrate();
     return repositoryCounts(this);
+  }
+
+  private readLatestSnapshot(): RepositorySnapshot {
+    if (existsSync(this.manifestPath)) {
+      const manifest = JSON.parse(readFileSync(this.manifestPath, "utf8")) as {
+        format?: string;
+        schemaVersion?: number;
+      };
+      const schemaVersion = manifest.schemaVersion;
+      if (
+        manifest.format !== "sharded" ||
+        typeof schemaVersion !== "number" ||
+        ![
+          ...LEGACY_SHARDED_REPOSITORY_SCHEMA_VERSIONS,
+          SHARDED_REPOSITORY_SCHEMA_VERSION
+        ].includes(schemaVersion)
+      ) {
+        throw new Error("Brain Creator sharded store manifest is invalid");
+      }
+      const snapshot = readShardedSnapshot(this.collectionsDir, schemaVersion);
+      const latest = new InMemoryBrainCreatorRepository();
+      applyRepositorySnapshot(latest, snapshot);
+      return snapshotRepository(latest, SHARDED_REPOSITORY_SCHEMA_VERSION);
+    }
+    if (existsSync(this.legacyFilePath)) {
+      const snapshot = readRepositorySnapshot(this.legacyFilePath);
+      const latest = new InMemoryBrainCreatorRepository();
+      applyRepositorySnapshot(latest, snapshot);
+      return snapshotRepository(latest, SHARDED_REPOSITORY_SCHEMA_VERSION);
+    }
+    return snapshotRepository(
+      new InMemoryBrainCreatorRepository(),
+      SHARDED_REPOSITORY_SCHEMA_VERSION
+    );
   }
 
   rebuildIndexes() {
@@ -485,7 +556,8 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
 
   private restoreShardedOrMigrate() {
     if (existsSync(this.manifestPath)) {
-      const manifest = JSON.parse(readFileSync(this.manifestPath, "utf8")) as Record<string, unknown>;
+      const manifestText = readFileSync(this.manifestPath, "utf8");
+      const manifest = JSON.parse(manifestText) as Record<string, unknown>;
       if (
         manifest.format !== "sharded" ||
         ![
@@ -502,6 +574,11 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
       const requiredCollections = manifestSchemaVersion === SHARDED_REPOSITORY_SCHEMA_VERSION
         ? expectedCollections
         : expectedCollections.filter((key) => !OPTIONAL_LEGACY_COLLECTIONS.has(key));
+      if (manifestSchemaVersion === SHARDED_REPOSITORY_SCHEMA_VERSION) {
+        this.assertNoActiveWriter();
+      } else {
+        this.assertNoLiveWriterForLegacyStore();
+      }
       if (
         !Array.isArray(rawCollections) ||
         requiredCollections.some((key) => !collections.includes(key)) ||
@@ -514,8 +591,15 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
         throw new Error("Brain Creator sharded store manifest collections are invalid");
       }
       const snapshot = readShardedSnapshot(this.collectionsDir, manifestSchemaVersion);
+      this.assertStableManifest(
+        manifestText,
+        manifestSchemaVersion !== SHARDED_REPOSITORY_SCHEMA_VERSION
+      );
       applyRepositorySnapshot(this, snapshot);
       this.schemaVersion = SHARDED_REPOSITORY_SCHEMA_VERSION;
+      this.lastSyncedSnapshot = structuredClone(
+        snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION)
+      );
       if (manifestSchemaVersion !== SHARDED_REPOSITORY_SCHEMA_VERSION) {
         writeAtomicJson(
           join(this.storeDir, "backups", `schema-${manifestSchemaVersion}-${backupStamp()}.json`),
@@ -526,21 +610,58 @@ export class ShardedFileBrainCreatorRepository extends InMemoryBrainCreatorRepos
         } catch {
           applyRepositorySnapshot(this, snapshot);
           this.schemaVersion = manifestSchemaVersion;
+          this.lastSyncedSnapshot = structuredClone(
+            snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION)
+          );
         }
       }
       return;
     }
     if (existsSync(this.legacyFilePath)) {
+      this.assertNoActiveWriter();
       const snapshot = readRepositorySnapshot(this.legacyFilePath);
+      if (existsSync(this.manifestPath) || existsSync(this.lockDir)) {
+        throw new Error("Brain Creator sharded store changed during reload; retry after the writer finishes");
+      }
       applyRepositorySnapshot(this, snapshot);
       this.schemaVersion = SHARDED_REPOSITORY_SCHEMA_VERSION;
+      this.lastSyncedSnapshot = structuredClone(
+        snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION)
+      );
       const backupPath = `${this.legacyFilePath}.backup-${backupStamp()}`;
       writeAtomicJson(backupPath, snapshot);
       this.persist();
       return;
     }
     this.schemaVersion = SHARDED_REPOSITORY_SCHEMA_VERSION;
+    this.lastSyncedSnapshot = structuredClone(
+      snapshotRepository(this, SHARDED_REPOSITORY_SCHEMA_VERSION)
+    );
     this.persist();
+  }
+
+  private assertNoActiveWriter() {
+    if (existsSync(this.lockDir)) {
+      throw new Error("Brain Creator sharded store is locked by another writer");
+    }
+  }
+
+  private assertNoLiveWriterForLegacyStore() {
+    if (!existsSync(this.lockDir)) return;
+    const ownerPath = join(this.lockDir, "owner.json");
+    if (!existsSync(ownerPath)) return;
+    const owner = JSON.parse(readFileSync(ownerPath, "utf8")) as { pid?: number };
+    if (owner.pid && isProcessRunning(owner.pid)) {
+      throw new Error("Brain Creator sharded store is locked by another writer");
+    }
+  }
+
+  private assertStableManifest(manifestText: string, allowLegacyWriterLock = false) {
+    if (allowLegacyWriterLock) this.assertNoLiveWriterForLegacyStore();
+    else this.assertNoActiveWriter();
+    if (!existsSync(this.manifestPath) || readFileSync(this.manifestPath, "utf8") !== manifestText) {
+      throw new Error("Brain Creator sharded store changed during reload; retry after the writer finishes");
+    }
   }
 
   private writeSnapshot(snapshot: RepositorySnapshot) {
@@ -713,6 +834,99 @@ function snapshotRepository(
     conformanceResults: repository.conformanceResults,
     systemPageIdentities: repository.systemPageIdentities
   };
+}
+
+function mergeRepositorySnapshots(
+  base: RepositorySnapshot,
+  local: RepositorySnapshot,
+  remote: RepositorySnapshot
+): RepositorySnapshot {
+  const merged = { ...remote } as RepositorySnapshot;
+  for (const key of collectionKeys()) {
+    const baseItems = base[key] as unknown as Array<Record<string, unknown>>;
+    const localItems = local[key] as unknown as Array<Record<string, unknown>>;
+    const remoteItems = remote[key] as unknown as Array<Record<string, unknown>>;
+    const baseRows = rowsById(baseItems, key);
+    const localRows = rowsById(localItems, key);
+    const remoteRows = rowsById(remoteItems, key);
+    const ids = new Set([
+      ...remoteRows.keys(),
+      ...localRows.keys(),
+      ...baseRows.keys()
+    ]);
+    const rows: Array<Record<string, unknown>> = [];
+    for (const id of ids) {
+      const before = baseRows.get(id);
+      const localRow = localRows.get(id);
+      const remoteRow = remoteRows.get(id);
+      const localChanged = !sameRepositoryValue(localRow, before);
+      const remoteChanged = !sameRepositoryValue(remoteRow, before);
+      if (localChanged && remoteChanged && !sameRepositoryValue(localRow, remoteRow)) {
+        throw new Error(`Brain Creator sharded store write conflict in ${key}: ${id}`);
+      }
+      const chosen = localChanged ? localRow : remoteRow;
+      if (chosen) rows.push(chosen);
+    }
+    (merged as unknown as Record<string, unknown>)[key] = rows;
+  }
+  merged.schemaVersion = SHARDED_REPOSITORY_SCHEMA_VERSION;
+  return merged;
+}
+
+function rowsById(
+  rows: Array<Record<string, unknown>>,
+  collection: string
+) {
+  const result = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const id = repositoryRecordKey(row);
+    if (!id) {
+      throw new Error(`Brain Creator sharded store collection ${collection} contains a record without an id`);
+    }
+    if (result.has(id)) {
+      throw new Error(`Brain Creator sharded store collection ${collection} contains duplicate id ${id}`);
+    }
+    result.set(id, row);
+  }
+  return result;
+}
+
+function repositoryRecordKey(record: Record<string, unknown>) {
+  if (typeof record.id === "string" && record.id.length > 0) return record.id;
+  if (typeof record.scenarioId === "string" && record.scenarioId.length > 0) {
+    return record.scenarioId;
+  }
+  return undefined;
+}
+
+function sameRepositoryValue(left: unknown, right: unknown) {
+  if (left === undefined || right === undefined) return left === right;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function applyRepositorySnapshotPreservingReferences(
+  repository: InMemoryBrainCreatorRepository,
+  snapshot: RepositorySnapshot
+) {
+  for (const key of collectionKeys()) {
+    const current = repository[key] as unknown as Array<Record<string, unknown>>;
+    const incomingRows = snapshot[key] as unknown as Array<Record<string, unknown>>;
+    const existingById = new Map(current.map((item) => [repositoryRecordKey(item), item]));
+    const rows = incomingRows.map((incoming) => {
+      const id = repositoryRecordKey(incoming);
+      const existing = id ? existingById.get(id) : undefined;
+      if (!existing) return incoming;
+      if (sameRepositoryValue(existing, incoming)) return existing;
+      const target = incoming;
+      for (const field of Object.keys(existing)) {
+        if (!(field in target)) delete existing[field];
+      }
+      Object.assign(existing, target);
+      return existing;
+    });
+    current.splice(0, current.length, ...rows);
+  }
+  repository.schemaVersion = snapshot.schemaVersion;
 }
 
 function applyRepositorySnapshot(

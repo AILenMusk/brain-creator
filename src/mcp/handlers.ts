@@ -1189,13 +1189,20 @@ async function cancelCaseSourceSuite(
   ensureDocumentSuiteLedger(context, suite);
   const cancelledSuite = context.service.cancelCaseSuite(suite.id);
   completeDocumentSuiteLedger(context, cancelledSuite, "cancelled");
-  const reportPath = await writeDocumentSuiteReport(context, cancelledSuite);
+  let reportPath: string | undefined;
+  let reportWarning: string | undefined;
+  try {
+    reportPath = await writeDocumentSuiteReport(context, cancelledSuite);
+  } catch (error) {
+    reportWarning = error instanceof Error ? error.message : String(error);
+  }
   return {
     mode: "case-source-suite",
     status: "cancelled",
     suite: cancelledSuite,
     progress: caseSuiteProgress(context, cancelledSuite),
-    reportPath,
+    ...(reportPath ? { reportPath } : {}),
+    ...(reportWarning ? { reportWarning } : {}),
     nextAction: "Run a new preview and confirm the document suite again."
   };
 }
@@ -4910,13 +4917,27 @@ async function writeDocumentSuiteReport(
   const runs = context.service
     .listCaseSuiteRuns(suite.systemId)
     .filter((run) => run.suiteId === suite.id);
-  const bugIds = new Set(runs.flatMap((run) => run.bugReportIds));
-  const gapIds = new Set(runs.flatMap((run) => run.gapIds));
   const progressEntries = context.runLedger.list({
     runType: "document-suite",
     systemId: suite.systemId,
     caseSuiteId: suite.id
   });
+  const historicalArtifactPaths = runs.flatMap((run) => run.artifactPaths);
+  const actionArtifactPaths = progressEntries.flatMap((entry) =>
+    (entry.actionEvidenceArtifacts ?? []).map((artifact) =>
+      join(context.workDir, ".brain-creator", artifact.path)
+    )
+  );
+  const ignoredExternalArtifactCount = [
+    ...historicalArtifactPaths,
+    ...actionArtifactPaths
+  ].filter((path) => !isWorkspacePath(context.workDir, path)).length;
+  if (ignoredExternalArtifactCount > 0) {
+    const warning = `${ignoredExternalArtifactCount} historical artifact path(s) outside the current workspace were omitted from this report manifest.`;
+    sourceWarning = [sourceWarning, warning].filter(Boolean).join(" ");
+  }
+  const bugIds = new Set(runs.flatMap((run) => run.bugReportIds));
+  const gapIds = new Set(runs.flatMap((run) => run.gapIds));
   const progress = progressEntries.length > 0
     ? context.runLedger.progress(suite.id)
     : undefined;
@@ -4940,10 +4961,12 @@ async function writeDocumentSuiteReport(
       ...(entry.entityReference ? { entityReference: entry.entityReference } : {}),
       ...(entry.actionPostcondition ? { postcondition: entry.actionPostcondition } : {}),
       evidenceRefs: entry.actionEvidenceRefs ?? [],
-      evidenceArtifacts: (entry.actionEvidenceArtifacts ?? []).map((artifact) => ({
-        path: join(context.workDir, ".brain-creator", artifact.path),
-        sha256: artifact.sha256
-      }))
+      evidenceArtifacts: (entry.actionEvidenceArtifacts ?? [])
+        .map((artifact) => ({
+          path: join(context.workDir, ".brain-creator", artifact.path),
+          sha256: artifact.sha256
+        }))
+        .filter((artifact) => isWorkspacePath(context.workDir, artifact.path))
     })),
     sourceWarning,
     bugs: context.repository.bugReports
@@ -4978,10 +5001,8 @@ async function writeDocumentSuiteReport(
     suiteRunId: suite.id,
     artifactPaths: [
       reportPath,
-      ...runs.flatMap((run) => run.artifactPaths),
-      ...progressEntries.flatMap((entry) => (entry.actionEvidenceArtifacts ?? []).map((artifact) =>
-        join(context.workDir, ".brain-creator", artifact.path)
-      ))
+      ...historicalArtifactPaths.filter((path) => isWorkspacePath(context.workDir, path)),
+      ...actionArtifactPaths.filter((path) => isWorkspacePath(context.workDir, path))
     ],
     sourceRefs: [suite.sourceId, suite.id],
     ownershipDirectory: layout.root,
@@ -4992,6 +5013,12 @@ async function writeDocumentSuiteReport(
     context.repository.persist();
   }
   return reportPath;
+}
+
+function isWorkspacePath(workDir: string, path: string) {
+  const absolute = resolve(workDir, path);
+  const offset = relative(resolve(workDir), absolute);
+  return !offset.startsWith("..") && !isAbsolute(offset);
 }
 
 function ensureDocumentSuiteLedger(

@@ -135,22 +135,115 @@ describe("ShardedFileBrainCreatorRepository", () => {
     expect(() => repository.reload()).toThrow(/shard gaps is missing/);
   });
 
+  it("does not reload a sharded snapshot while another writer holds the Store lock", async () => {
+    const root = await tempDir();
+    const storeDir = join(root, "store");
+    const repository = new ShardedFileBrainCreatorRepository(storeDir, join(root, "legacy.json"));
+    repository.systemProfiles.push({
+      id: "in-memory-system",
+      name: "In memory",
+      environment: "test",
+      baseUrl: "https://memory.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: [],
+      status: "succeeded",
+      createdAt: "2026-10-30T00:00:00.000Z",
+      updatedAt: "2026-10-30T00:00:00.000Z"
+    });
+    await mkdir(join(storeDir, ".write.lock"));
+
+    expect(() => repository.reload()).toThrow(/locked by another writer/);
+    expect(repository.systemProfiles).toEqual([
+      expect.objectContaining({ id: "in-memory-system" })
+    ]);
+  });
+
+  it("merges independent writes from stale repository instances", async () => {
+    const root = await tempDir();
+    const storeDir = join(root, "store");
+    const legacyPath = join(root, "legacy.json");
+    const first = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    const second = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+
+    second.authProfiles.push({ id: "auth-from-second-writer" } as never);
+    second.persist();
+    first.caseSuites.push({
+      id: "suite-from-first-writer",
+      systemId: "system-1",
+      sourceId: "source-1",
+      status: "waiting-for-agent",
+      totalCases: 1,
+      selectedCaseNos: ["TC-001"],
+      createdAt: "2026-10-30T00:00:00.000Z",
+      updatedAt: "2026-10-30T00:00:00.000Z"
+    });
+    first.persist();
+
+    const restored = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    expect(restored.authProfiles).toEqual([
+      expect.objectContaining({ id: "auth-from-second-writer" })
+    ]);
+    expect(restored.caseSuites).toEqual([
+      expect.objectContaining({ id: "suite-from-first-writer" })
+    ]);
+  });
+
+  it("rejects conflicting stale updates to the same record", async () => {
+    const root = await tempDir();
+    const storeDir = join(root, "store");
+    const legacyPath = join(root, "legacy.json");
+    const seed = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    new BrainCreatorService(seed).createSystemProfile({
+      name: "Original",
+      environment: "test",
+      baseUrl: "https://orders.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://orders.example.test"]
+    });
+    const first = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    const second = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    first.systemProfiles[0]!.name = "First writer";
+    first.persist();
+    second.systemProfiles[0]!.name = "Second writer";
+
+    expect(() => second.persist()).toThrow(/write conflict in systemProfiles/);
+    const restored = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
+    expect(restored.systemProfiles[0]!.name).toBe("First writer");
+  });
+
+  it("keeps created record references attached after a merged persist", async () => {
+    const root = await tempDir();
+    const storeDir = join(root, "store");
+    const repository = new ShardedFileBrainCreatorRepository(storeDir, join(root, "legacy.json"));
+    const service = new BrainCreatorService(repository);
+
+    const created = service.createSystemProfile({
+      name: "Reference",
+      environment: "test",
+      baseUrl: "https://reference.example.test",
+      defaultLocale: "en-US",
+      urlAllowlist: ["https://reference.example.test"]
+    });
+
+    expect(repository.systemProfiles).toContain(created);
+  });
+
   it("recovers the complete pre-transaction snapshot after a shard write fails", async () => {
     const root = await tempDir();
     const storeDir = join(root, "store");
     const legacyPath = join(root, "legacy.json");
     const repository = new ShardedFileBrainCreatorRepository(storeDir, legacyPath);
     const service = new BrainCreatorService(repository);
-    service.createSystemProfile({
+    const system = service.createSystemProfile({
       name: "Stable",
       environment: "test",
       baseUrl: "https://stable.example.test",
       defaultLocale: "en-US",
       urlAllowlist: ["https://stable.example.test"]
     });
-    const blockedShard = join(storeDir, "collections", "onboardingPlans.json");
-    await rm(blockedShard);
-    await mkdir(blockedShard);
+    const blockedProjection = join(storeDir, "systems", system.id, "system.json");
+    await rm(blockedProjection);
+    await mkdir(blockedProjection);
 
     expect(() => repository.transaction(() => {
       repository.systemProfiles[0].name = "Partially changed";
@@ -159,7 +252,7 @@ describe("ShardedFileBrainCreatorRepository", () => {
     expect(repository.systemProfiles[0].name).toBe("Stable");
     expect(repository.onboardingPlans).toEqual([]);
 
-    await rm(blockedShard, { recursive: true });
+    await rm(blockedProjection, { recursive: true });
     await mkdir(join(storeDir, ".write.lock"));
     await writeFile(
       join(storeDir, ".write.lock", "owner.json"),

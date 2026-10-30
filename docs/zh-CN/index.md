@@ -33,6 +33,7 @@ features:
 |---|---|
 | 理解产品定位与 CLI、MCP、Skill 的边界 | [产品方向](/zh-CN/product-direction) |
 | 安装并分析第一份需求 | [快速开始](/zh-CN/getting-started) |
+| 编写适用于 Brain Creator 的需求文档 | [AI 需求文档编写标准](/zh-CN/guides/ai-requirement-authoring-standard) |
 | 理解产品模型 | [核心概念](/zh-CN/core-concepts) |
 | 执行已批准需求 | [从需求到测试](/zh-CN/guides/requirement-to-test) |
 | 理解用例与测试数据依赖 | [测试用例脑与测试数据脑](/zh-CN/guides/testcase-testdata-brain) |
