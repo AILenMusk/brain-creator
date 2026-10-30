@@ -37,13 +37,15 @@
 
 - 2026-10-30 路由复核补充：在用户已登录浏览器当前活动标签中，招聘流程设计器画布可见，活动链接的 `title` 参数为双重 URL 编码；同一完整链接由已验证 AuthProfile 在新隔离上下文直达，仍跳转到 `/dw/doesNotExist`（`exploration_mvd22tjs`、候选 PageModel `page_7zva18rt`）。此前单重编码链接也失败，因此编码差异不足以解释全部问题；当前只能推测页面依赖已建立的应用内 SPA/会话状态，具体机制未证实。当前页可见完整节点/条件标签，但视口截图仅覆盖上部、页面未显示流程 ID/版本；用户另行确认 Proc000019 v9 为当前生效版本。通过 Facade 记录了两条系统观察 `knowledgeNode_n4ke4npq`、`knowledgeNode_i75p35hl`；不据此确认 System Brain 快照、结构化 WorkflowModel、执行期 POM 或业务 Oracle。
 
+- 2026-10-30 Ego Browser 应用内路径复核（较新观察）：按用户提供的菜单路径，在已登录 Ego Lite 会话进入“流程管理 → 流程配置 → 招聘 → 招聘需求”，列表行显示 `hc招聘需求流程 / Proc000019 / 发布 / v9`；点击该行操作列的设计入口后，设计画布实际成功加载。纵向滚动核查了起点至“流程结束”的整张画布：海外条件分支进入 HRBP，国内默认支路绕过 HRBP，两路汇入 HRBP_TA对接人；后续可见部门层级、职级和实习生条件，以及 HRBP经理、HRBP负责人、CHO、CEO 等节点。使用同一流程配置列表选择“招聘 → offer”时，显示 `(zt-hc)offer流程 / Proc000017 / 发布 / v11`，其画布可见招聘渠道 16 至 HSSC_人事专员、海外/国内 HRBP 分流、HSSC_薪酬对接人，以及用工类型、职级、年龄、薪酬特批和部门层级条件。列表与画布截图、文件大小及 SHA-256 存于本机忽略目录 `.brain-creator/evidence/manual-system-observations/test5-ghr/2026-10-30-ego-in-app/manifest.json`。这证明已登录应用内设计入口可用；隔离上下文直开链接仍曾报错，底层原因未证实。此观察未写入 Brain Creator Store，没有保存/发布流程配置，也不证明任一业务分支真实执行、满足 Oracle 或形成执行期 POM。
+
 ### Trial 准入阻塞
 
 - `requirementSet_teo6nqbx` 仍为 draft/blocked：135 条款中覆盖 130 条，7 项待处理、1 项阻塞；11 个高严重度 Gap 中当前 7 个 open、4 个 resolved。已记录的四项处置分别为旧鉴权失败经新上下文验证关闭、正式需求版次标签仍待来源补足、职级分支留在分母并标未执行、HSSC 管理员支线排除执行但保留 outcome 在分母。Coverage Critic 与 Adjudicator 仍为 `needs-review`。
-- 当前 draft 有 191 个 TestIntent、155 个 BusinessScenario，但 191 条意图全为 draft，显式映射到固定 28 个 outcome 的数量为 0。188/191 条只有通用前置条件；135/191 条的预期结果与 objective 相同；162/191 条集中在宽泛模块。来源可追踪和草稿数量不能代替业务覆盖。
+- 当前 draft 有 191 个 TestIntent、155 个 BusinessScenario，但 191 条意图全为 draft，显式映射到固定 28 个 outcome 的数量为 0。另将先前经用户审阅的 v5 草稿中的 37 个 TestIntent ID 与当前列表逐一比对，匹配数为 0/37；旧 ID 不能直接写入此新 RequirementSet，也不据语义相似自动改绑。188/191 条只有通用前置条件；135/191 条的预期结果与 objective 相同；162/191 条集中在宽泛模块。来源可追踪和草稿数量不能代替业务覆盖。
 - 对 155 个当前 BusinessScenario 的复核显示全部仍为 draft；177 条 `expectedBusinessOutcomes` 只有 115 个不同字符串，没有观察到与冻结 28 个 outcome ID 的显式一对一绑定。候选页面定位点方面，首页 11 个中 9 个、招聘需求列表 51 个中 25 个、Offer 列表 21 个中 17 个使用序号定位；即使定位置信度均高于 0.8，也不能把序号定位当作稳定 POM（页面对象模型）知识。
 - 本轮通过 Facade 执行 `bc_prepare action=assess-scenarios`，覆盖当前全部 155 个 BusinessScenario：155 blocked、0 pass、0 needs-review（trace `50f000a4-a68b-4a7e-a021-35e9e5277869`）。逐条原因显示 155/155 缺已确认 System Brain 快照和系统绑定，155/155 的自由文本结果不足以构成结构化 Oracle，140/155 没有场景级 TestDataProfile，37/155 缺已确认的流程、状态或决策模型。该结果是生成设计的准入评估，不是运行或 Trial 结果。
-- System Brain revision 8 仍是 candidate，最新 ChangeSet 为 needs-review，`workflowEvidence=false` 且没有结构化 `WorkflowModel`。局部截图观察已写入为 `knowledgeNode_e7758okl`，但这不确认完整流程、页面/流程唯一绑定或候选快照；仍需完整画布和版本证据。
+- 最新 Facade 只读复核显示 System Brain snapshot `systemBrainSnapshot_cceqv46e` revision 12 仍是 `candidate`，ChangeSet `systemBrainChangeSet_s5zayre0` 为 `needs-review`；当前有 6 个 PageModel、0 个结构化 WorkflowModel，`workflowEvidence=false`。既有流程设计器 PageModel 仍混有“访问的资源不存在”观察、泛化控件名和序号定位；本轮 Ego 画布观察尚未经 Facade 写入，不能确认页面模型、流程唯一绑定或 POM。已存在的局部截图观察 `knowledgeNode_e7758okl` 也不会因后来浏览器打开成功而自动升级。
 - 未配置独立业务后置状态校验器和 TestData Provider。项目的 EvaluationTrial 数量为 0。
 - 当前已连接的宿主 MCP 报告 package `2.1.1`、commit `1a964fc8acb27a564d2381818ca4da019b6b6fc4`、`dirty=true`，即运行的是合并后的 `main` 基线而非 PR #191 候选；候选 workspace 的来源身份 smoke 不能证明宿主 MCP 已更新。
 

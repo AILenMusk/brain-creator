@@ -4,6 +4,14 @@ This register tracks the six-package business-closure plan. Implementation, real
 
 ## 当前实施状态（2026-10-30，基于新计划）
 
+### 当日后续系统路线复核（Ego Browser）
+
+- 用户提供了明确菜单路线后，在已登录的 Ego Lite 会话中只读进入“流程管理 → 流程配置 → 招聘 → 招聘需求”，列表显示 `hc招聘需求流程 / Proc000019 / 发布 / v9`；从该行操作列打开“设计”后，招聘流程画布实际加载，并通过分段截图核查起点至流程结束。该流程画布不再属于“当前无法查看”的系统证据缺口；此前隔离上下文直达 `/dw/doesNotExist` 的现象仍存在，根因未查明。
+- 同一列表的“招聘 → offer”显示 `(zt-hc)offer流程 / Proc000017 / 发布 / v11`，操作列设计入口也能加载画布。两条流程的截图、文件大小与 SHA-256 清单在本机忽略目录 `.brain-creator/evidence/manual-system-observations/test5-ghr/2026-10-30-ego-in-app/manifest.json`；浏览器操作未暂存、发布或写业务数据。
+- 该轮观察未通过 Facade 登记到 Store。独立只读复核的最新 System Brain snapshot 是 `systemBrainSnapshot_cceqv46e` revision 12 / `candidate`，ChangeSet `systemBrainChangeSet_s5zayre0` / `needs-review`，6 个 PageModel、0 个结构化 WorkflowModel、`workflowEvidence=false`。当前 MCP 运行身份仍是 commit `1a964fc8acb27a564d2381818ca4da019b6b6fc4` 且 `dirty=true`，与本地 `fixture` `66576cdfc99885ab7354ceba1b24125b08b87f7d` 不一致，因此本轮未经该进程写入 Store。
+- 流程画布观察补足了系统配置的可见性和版本列表证据，但不构成需求 Oracle、实际分支执行、执行期 POM 或业务后置状态证据；此前业务流程/路径差异仍须分层保存和审核。
+- 将先前用户审阅的 v5 修订稿中的 37 个 TestIntent ID 与当前 RequirementSet 的 191 个意图进行只读精确匹配，结果为 0/37。此前确认的 28 outcome 映射是绑定旧对象 ID 的，不能直接应用到 `requirementSet_teo6nqbx`；本轮没有按标题或语义相似度静默重映射，也没有改写 Store。
+
 - 当前计划及准入/准出口径见[工程收敛与重新验收实施计划](./engineering-convergence-implementation-plan.md)；本轮结论和逐项证据见[2026-10-30 验收报告](./trust-convergence-acceptance-report-2026-10-30.md)。PR #190 的已合并基线 `origin/main` 为 `1a964fc8acb27a564d2381818ca4da019b6b6fc4`，本地 `main` 与 `origin/main` 一致。PR #191 在 `fixture` 上包含 Store 修复候选 `a9cacd6` 及本轮验收文档更新；确切审查 head 以 PR 当前元数据为准，未批准合入 `main`。本轮补充检查针对该候选代码和随后仅文档的变更执行，不等同于 `main` 的新验收，也未推送 `main`。
 - 已验收实现完成度仍为 **4/6**（A–D 工程交付包；E/F 未通过最终验收）。2026-10-30 在 fixture 候选上复跑 `npm test` 为 143 个文件/1,237 项通过，`npx tsc --noEmit`、`npm run build`、`npm run docs:build`、包内容检查（178 项）、全新临时目录包安装 smoke、订单审批浏览器夹具（7/7）、Host Agent chain/document suite、Codex native/plugin install smoke、MCP 来源身份/工作区隔离及仓库卫生（381 个 tracked files）均通过。文档构建保留既有 chunk-size 提示；工程与 synthetic（合成）结果不计真实业务结果。
 - 知识驱动 POM 的反例测试覆盖未确认快照、路由变化、缺失/歧义控件和未登记扩展；订单夹具覆盖角色交接、创建/提交/审批/关闭、实体复用及重启后不重复提交。MCP 入口已从约 14,000 行拆至 5,759 行，并形成需求工作流、状态/审核投影、参数解析与浏览器运行模块；Handler 仍过大，不称为薄适配层。
